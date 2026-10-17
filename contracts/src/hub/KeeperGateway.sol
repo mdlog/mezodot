@@ -26,7 +26,14 @@ contract KeeperGateway is ReentrancyGuard {
     mapping(address keeper => bool) public isKeeper;
     uint256 public keeperCount;
 
-    event LiquidationTriggered(address indexed keeper, address indexed account, uint256 marketId, uint256 collateralId, uint256 repaid, uint256 seized);
+    event LiquidationTriggered(
+        address indexed keeper,
+        address indexed account,
+        uint256 marketId,
+        uint256 collateralId,
+        uint256 repaid,
+        uint256 seized
+    );
     event MessageRelayed(address indexed keeper, bytes32 indexed vaaHash);
     event KeeperRegistered(address indexed keeper);
 

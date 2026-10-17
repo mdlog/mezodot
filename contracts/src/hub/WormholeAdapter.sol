@@ -27,7 +27,9 @@ contract WormholeAdapter is Ownable2Step, ReentrancyGuard {
     event DepositReceived(
         bytes32 indexed vaaHash, uint16 indexed chainId, address indexed account, bytes32 token, uint256 amount
     );
-    event ReleaseSent(uint64 indexed sequence, uint16 indexed chainId, bytes32 recipient, bytes32 token, uint256 amount);
+    event ReleaseSent(
+        uint64 indexed sequence, uint16 indexed chainId, bytes32 recipient, bytes32 token, uint256 amount
+    );
 
     error InvalidVaa(string reason);
     error UnknownEmitter();
@@ -81,7 +83,8 @@ contract WormholeAdapter is Ownable2Step, ReentrancyGuard {
     {
         if (msg.sender != address(vaultManager)) revert NotVaultManager();
         if (spokeEmitter[chainId] == bytes32(0)) revert UnknownEmitter();
-        bytes memory payload = Payload.encode(Payload.Message(Payload.RELEASE, ++outboundNonce, recipient, token, amount));
+        bytes memory payload =
+            Payload.encode(Payload.Message(Payload.RELEASE, ++outboundNonce, recipient, token, amount));
         sequence = wormhole.publishMessage{value: msg.value}(0, payload, consistencyLevel);
         emit ReleaseSent(sequence, chainId, recipient, token, amount);
     }

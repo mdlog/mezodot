@@ -30,8 +30,14 @@ abstract contract CrossChainFixture is HubFixture {
         spokeWormhole = new DevWormhole(BASE_SEPOLIA, vm.addr(GUARDIAN_PK), 0);
 
         // Spoke tokens live at the addresses the hub collateral registry expects.
-        deployCodeTo("MockERC20.sol:MockERC20", abi.encode("Wrapped Ether", "WETH", uint8(18)), address(uint160(uint256(SPOKE_WETH))));
-        deployCodeTo("MockERC20.sol:MockERC20", abi.encode("USD Coin", "USDC", uint8(6)), address(uint160(uint256(SPOKE_USDC))));
+        deployCodeTo(
+            "MockERC20.sol:MockERC20",
+            abi.encode("Wrapped Ether", "WETH", uint8(18)),
+            address(uint160(uint256(SPOKE_WETH)))
+        );
+        deployCodeTo(
+            "MockERC20.sol:MockERC20", abi.encode("USD Coin", "USDC", uint8(6)), address(uint160(uint256(SPOKE_USDC)))
+        );
         weth = MockERC20(address(uint160(uint256(SPOKE_WETH))));
         usdc = MockERC20(address(uint160(uint256(SPOKE_USDC))));
 

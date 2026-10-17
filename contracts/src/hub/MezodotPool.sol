@@ -151,9 +151,8 @@ abstract contract MezodotPool is Ownable2Step, Pausable, ReentrancyGuard, IERC31
     }
 
     function supplyRatePerSecond() external view returns (uint256) {
-        return interestRateModel.supplyRatePerSecond(
-            cash() + flashOutstanding, totalBorrows, totalReserves, reserveFactor
-        );
+        return
+            interestRateModel.supplyRatePerSecond(cash() + flashOutstanding, totalBorrows, totalReserves, reserveFactor);
     }
 
     // --- Debt ----------------------------------------------------------------
@@ -200,7 +199,12 @@ abstract contract MezodotPool is Ownable2Step, Pausable, ReentrancyGuard, IERC31
 
     /// @notice Records a repayment whose tokens the VaultManager has already transferred in.
     /// @return applied The amount applied, capped at the outstanding debt.
-    function notifyRepay(address account, uint256 amount) external onlyVaultManager nonReentrant returns (uint256 applied) {
+    function notifyRepay(address account, uint256 amount)
+        external
+        onlyVaultManager
+        nonReentrant
+        returns (uint256 applied)
+    {
         accrueInterest();
         uint256 owed = borrowBalanceStored(account);
         applied = amount > owed ? owed : amount;

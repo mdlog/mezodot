@@ -58,10 +58,20 @@ abstract contract HubFixture is Test {
         musd = new MockERC20("Mezo USD", "MUSD", 18);
         mezo = new MockERC20("Mezo", "MEZO", 18);
         pMUSD = new PToken(
-            IERC20(address(musd)), "Mezodot MUSD", "pMUSD", new InterestRateModel(0, 0.06e18, 0.8e18, 0.8e18), 0.1e18, address(this)
+            IERC20(address(musd)),
+            "Mezodot MUSD",
+            "pMUSD",
+            new InterestRateModel(0, 0.06e18, 0.8e18, 0.8e18),
+            0.1e18,
+            address(this)
         );
         pMEZO = new PToken(
-            IERC20(address(mezo)), "Mezodot MEZO", "pMEZO", new InterestRateModel(0.02e18, 0.08e18, 0.7e18, 1e18), 0.1e18, address(this)
+            IERC20(address(mezo)),
+            "Mezodot MEZO",
+            "pMEZO",
+            new InterestRateModel(0.02e18, 0.08e18, 0.7e18, 1e18),
+            0.1e18,
+            address(this)
         );
         pyth = new MockPyth(60, 1);
         oracle = new OracleRouter(pyth, 120, 200, address(this));
@@ -107,11 +117,15 @@ abstract contract HubFixture is Test {
         });
     }
 
-    function _remote(uint16 chainId, bytes32 token, uint8 decimals, bytes32 priceKey, uint16 ltv, uint16 lt, uint16 bonus)
-        internal
-        pure
-        returns (VaultManager.CollateralConfig memory)
-    {
+    function _remote(
+        uint16 chainId,
+        bytes32 token,
+        uint8 decimals,
+        bytes32 priceKey,
+        uint16 ltv,
+        uint16 lt,
+        uint16 bonus
+    ) internal pure returns (VaultManager.CollateralConfig memory) {
         return VaultManager.CollateralConfig({
             enabled: true,
             isRemote: true,
@@ -158,7 +172,10 @@ abstract contract HubFixture is Test {
     }
 
     /// Supplies `amount` into `pool` and posts the resulting shares as collateral.
-    function postLocal(address who, PToken pool, uint256 collateralId, uint256 amount) internal returns (uint256 shares) {
+    function postLocal(address who, PToken pool, uint256 collateralId, uint256 amount)
+        internal
+        returns (uint256 shares)
+    {
         shares = supplyFor(who, pool, amount);
         vm.startPrank(who);
         pool.approve(address(vaultManager), shares);

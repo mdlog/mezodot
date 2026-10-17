@@ -47,14 +47,16 @@ contract CrossChainTest is CrossChainFixture {
     }
 
     function test_unregisteredEmitterReverts() public {
-        bytes memory payload = Payload.encode(Payload.Message(Payload.DEPOSIT, 1, Payload.toBytes32(alice), SPOKE_WETH, 100e18));
+        bytes memory payload =
+            Payload.encode(Payload.Message(Payload.DEPOSIT, 1, Payload.toBytes32(alice), SPOKE_WETH, 100e18));
         bytes memory forged = signRaw(BASE_SEPOLIA, makeAddr("fakeSpoke"), 0, payload);
         vm.expectRevert(WormholeAdapter.UnknownEmitter.selector);
         adapter.receiveMessage(forged);
     }
 
     function test_wrongSourceChainReverts() public {
-        bytes memory payload = Payload.encode(Payload.Message(Payload.DEPOSIT, 1, Payload.toBytes32(alice), SPOKE_WETH, 100e18));
+        bytes memory payload =
+            Payload.encode(Payload.Message(Payload.DEPOSIT, 1, Payload.toBytes32(alice), SPOKE_WETH, 100e18));
         // Right emitter address, but claimed to come from Ethereum Sepolia where it is not registered.
         bytes memory forged = signRaw(ETH_SEPOLIA, address(spoke), 0, payload);
         vm.expectRevert(WormholeAdapter.UnknownEmitter.selector);
@@ -69,15 +71,17 @@ contract CrossChainTest is CrossChainFixture {
     }
 
     function test_releaseTypeRejectedOnHub() public {
-        bytes memory payload = Payload.encode(Payload.Message(Payload.RELEASE, 1, Payload.toBytes32(alice), SPOKE_WETH, 1e18));
+        bytes memory payload =
+            Payload.encode(Payload.Message(Payload.RELEASE, 1, Payload.toBytes32(alice), SPOKE_WETH, 1e18));
         bytes memory vaa = signRaw(BASE_SEPOLIA, address(spoke), 99, payload);
         vm.expectRevert(WormholeAdapter.WrongMessageType.selector);
         adapter.receiveMessage(vaa);
     }
 
     function test_unknownTokenRejected() public {
-        bytes memory payload =
-            Payload.encode(Payload.Message(Payload.DEPOSIT, 1, Payload.toBytes32(alice), bytes32(uint256(0xBAD)), 1e18));
+        bytes memory payload = Payload.encode(
+            Payload.Message(Payload.DEPOSIT, 1, Payload.toBytes32(alice), bytes32(uint256(0xBAD)), 1e18)
+        );
         vm.expectRevert(WormholeAdapter.UnknownCollateral.selector);
         adapter.receiveMessage(signRaw(BASE_SEPOLIA, address(spoke), 7, payload));
     }
@@ -142,13 +146,15 @@ contract CrossChainTest is CrossChainFixture {
     }
 
     function test_spokeRejectsReleaseFromNonHubEmitter() public {
-        bytes memory payload = Payload.encode(Payload.Message(Payload.RELEASE, 1, Payload.toBytes32(alice), SPOKE_WETH, 1e18));
+        bytes memory payload =
+            Payload.encode(Payload.Message(Payload.RELEASE, 1, Payload.toBytes32(alice), SPOKE_WETH, 1e18));
         vm.expectRevert(SpokeGateway.UnknownEmitter.selector);
         spoke.receiveMessage(signRaw(MEZO_CHAIN, makeAddr("evilHub"), 0, payload));
     }
 
     function test_spokeRejectsDepositTypeMessages() public {
-        bytes memory payload = Payload.encode(Payload.Message(Payload.DEPOSIT, 1, Payload.toBytes32(alice), SPOKE_WETH, 1e18));
+        bytes memory payload =
+            Payload.encode(Payload.Message(Payload.DEPOSIT, 1, Payload.toBytes32(alice), SPOKE_WETH, 1e18));
         vm.expectRevert(SpokeGateway.WrongMessageType.selector);
         spoke.receiveMessage(signRaw(MEZO_CHAIN, address(adapter), 0, payload));
     }

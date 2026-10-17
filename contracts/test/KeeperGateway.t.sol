@@ -28,7 +28,8 @@ contract KeeperGatewayTest is CrossChainFixture {
     function test_liquidationPaysKeeperAndRefundsUnusedRepay() public {
         _underwaterLocal();
         vm.prank(keeper);
-        uint256 seized = gateway.triggerLiquidation(alice, musdMarket, 10_000e18, pMezoCollateral, 0, bytes32(0), noUpdates());
+        uint256 seized =
+            gateway.triggerLiquidation(alice, musdMarket, 10_000e18, pMezoCollateral, 0, bytes32(0), noUpdates());
         assertGt(seized, 0);
         assertEq(pMEZO.balanceOf(keeper), seized);
         // Close factor used ~1,950; the rest of the 10,000 pulled is returned.

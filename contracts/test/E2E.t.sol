@@ -32,7 +32,9 @@ contract E2ETest is CrossChainFixture {
         ethSpoke.setToken(address(ethWeth), true, type(uint256).max);
         ethSpoke.setHubEmitter(Payload.toBytes32(address(adapter)));
         adapter.setSpoke(ETH_SEPOLIA, Payload.toBytes32(address(ethSpoke)));
-        wethEth = vaultManager.addCollateral(_remote(ETH_SEPOLIA, Payload.toBytes32(address(ethWeth)), 18, ETH_KEY, 7500, 8000, 700));
+        wethEth = vaultManager.addCollateral(
+            _remote(ETH_SEPOLIA, Payload.toBytes32(address(ethWeth)), 18, ETH_KEY, 7500, 8000, 700)
+        );
 
         lev = new LeverageManager(vaultManager, pMUSD, musdMarket, pMusdCollateral);
         keepers = new KeeperGateway(vaultManager, adapter);
@@ -107,7 +109,8 @@ contract E2ETest is CrossChainFixture {
         vm.startPrank(keeper);
         musd.approve(address(keepers), type(uint256).max);
         vm.recordLogs();
-        uint256 seized = keepers.triggerLiquidation(borrower, musdMarket, 1_175e18, wethBase, 1, bytes32(0), noUpdates());
+        uint256 seized =
+            keepers.triggerLiquidation(borrower, musdMarket, 1_175e18, wethBase, 1, bytes32(0), noUpdates());
         vm.stopPrank();
         spoke.receiveMessage(signLast(MEZO_CHAIN, address(adapter)));
 

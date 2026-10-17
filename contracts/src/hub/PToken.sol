@@ -76,12 +76,7 @@ contract PToken is ERC4626, MezodotPool {
         return super.mint(shares, receiver);
     }
 
-    function withdraw(uint256 assets, address receiver, address owner_)
-        public
-        override
-        nonReentrant
-        returns (uint256)
-    {
+    function withdraw(uint256 assets, address receiver, address owner_) public override nonReentrant returns (uint256) {
         accrueInterest();
         return super.withdraw(assets, receiver, owner_);
     }

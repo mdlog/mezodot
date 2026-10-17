@@ -84,14 +84,18 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
     mapping(address token => bool) internal _localListed;
 
     event CollateralAdded(uint256 indexed id, CollateralConfig config);
-    event CollateralParamsSet(uint256 indexed id, uint16 ltvBps, uint16 ltBps, uint16 bonusBps, uint256 cap, bool enabled);
+    event CollateralParamsSet(
+        uint256 indexed id, uint16 ltvBps, uint16 ltBps, uint16 bonusBps, uint256 cap, bool enabled
+    );
     event MarketAdded(uint256 indexed marketId, address pool, bytes32 priceKey);
     event AdapterSet(address adapter);
     event OperatorSet(address indexed account, address indexed operator, bool approved);
     event CollateralDeposited(address indexed account, uint256 indexed id, uint256 amount, address from);
     event CollateralWithdrawn(address indexed account, uint256 indexed id, uint256 amount, address to);
     event RemoteCredited(address indexed account, uint256 indexed id, uint256 amount);
-    event RemoteWithdrawRequested(address indexed account, uint256 indexed id, uint256 amount, bytes32 recipient, uint64 sequence);
+    event RemoteWithdrawRequested(
+        address indexed account, uint256 indexed id, uint256 amount, bytes32 recipient, uint64 sequence
+    );
     event Borrowed(address indexed account, uint256 indexed marketId, uint256 amount, address receiver);
     event Repaid(address indexed account, uint256 indexed marketId, uint256 amount, address payer);
     event Liquidated(
@@ -226,12 +230,13 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         _refund(spent);
     }
 
-    function withdrawCollateralFor(address account, uint256 id, uint256 shares, address to, bytes[] calldata priceUpdate)
-        external
-        payable
-        nonReentrant
-        onlyOperatorOf(account)
-    {
+    function withdrawCollateralFor(
+        address account,
+        uint256 id,
+        uint256 shares,
+        address to,
+        bytes[] calldata priceUpdate
+    ) external payable nonReentrant onlyOperatorOf(account) {
         uint256 spent = _pushPrices(priceUpdate);
         _withdrawLocal(account, id, shares, to);
         _refund(spent);
@@ -252,8 +257,7 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         _debit(msg.sender, id, amount);
         _requireWithinLimit(msg.sender, 0, 0);
         uint256 fee = IReleaseSender(adapter).messageFee();
-        uint64 sequence =
-            IReleaseSender(adapter).sendRelease{value: fee}(c.chainId, c.remoteToken, recipient, amount);
+        uint64 sequence = IReleaseSender(adapter).sendRelease{value: fee}(c.chainId, c.remoteToken, recipient, amount);
         emit RemoteWithdrawRequested(msg.sender, id, amount, recipient, sequence);
         _refund(spent + fee);
     }
@@ -269,13 +273,13 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         _refund(spent);
     }
 
-    function borrowFor(address account, uint256 marketId, uint256 amount, address receiver, bytes[] calldata priceUpdate)
-        external
-        payable
-        nonReentrant
-        whenNotPaused
-        onlyOperatorOf(account)
-    {
+    function borrowFor(
+        address account,
+        uint256 marketId,
+        uint256 amount,
+        address receiver,
+        bytes[] calldata priceUpdate
+    ) external payable nonReentrant whenNotPaused onlyOperatorOf(account) {
         uint256 spent = _pushPrices(priceUpdate);
         _borrow(account, marketId, amount, receiver);
         _refund(spent);
@@ -353,7 +357,8 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
     // =========================================================================
 
     function getRiskSnapshot(address account) external view returns (RiskSnapshot memory s) {
-        (s.collateralValue, s.adjustedCollateral, s.borrowLimit, s.debtValue, s.healthFactor) = _position(account, false);
+        (s.collateralValue, s.adjustedCollateral, s.borrowLimit, s.debtValue, s.healthFactor) =
+            _position(account, false);
     }
 
     function collaterals(uint256 id) external view returns (CollateralConfig memory) {
@@ -429,7 +434,10 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         emit Borrowed(account, marketId, amount, receiver);
     }
 
-    function _repay(address account, uint256 marketId, uint256 amount, address payer) internal returns (uint256 applied) {
+    function _repay(address account, uint256 marketId, uint256 amount, address payer)
+        internal
+        returns (uint256 applied)
+    {
         Market storage m = _market(marketId);
         m.pool.accrueInterest();
         uint256 owed = m.pool.borrowBalanceStored(account);
@@ -488,11 +496,13 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         return _usd(units, _price(c.priceKey, strict), c.decimals);
     }
 
-    function _seizeAmount(address account, Market storage m, CollateralConfig storage c, uint256 collateralId, uint256 repaid)
-        internal
-        view
-        returns (uint256 seized, uint256 actualRepaid)
-    {
+    function _seizeAmount(
+        address account,
+        Market storage m,
+        CollateralConfig storage c,
+        uint256 collateralId,
+        uint256 repaid
+    ) internal view returns (uint256 seized, uint256 actualRepaid) {
         uint256 repayValue = _usd(repaid, oracle.getPrice(m.priceKey), m.decimals);
         uint256 seizeValue = repayValue * (BPS + c.bonusBps) / BPS;
         uint256 price = oracle.getPrice(c.priceKey);

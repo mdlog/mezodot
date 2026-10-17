@@ -178,7 +178,8 @@ contract VaultManagerTest is HubFixture {
         musd.mint(liquidator, 10_000e18);
         vm.startPrank(liquidator);
         musd.approve(address(vaultManager), type(uint256).max);
-        uint256 seized = vaultManager.liquidate(alice, musdMarket, 10_000e18, pMezoCollateral, 0, liquidator, 0, noUpdates());
+        uint256 seized =
+            vaultManager.liquidate(alice, musdMarket, 10_000e18, pMezoCollateral, 0, liquidator, 0, noUpdates());
         vm.stopPrank();
         // Close factor caps repayment at 50% of the 3,900 debt.
         // (debt grew by a few seconds of interest while prices were pushed)
@@ -197,7 +198,9 @@ contract VaultManagerTest is HubFixture {
         vm.startPrank(liquidator);
         musd.approve(address(vaultManager), type(uint256).max);
         vm.expectRevert(VaultManager.SlippageExceeded.selector);
-        vaultManager.liquidate(alice, musdMarket, 1_000e18, pMezoCollateral, type(uint256).max, liquidator, 0, noUpdates());
+        vaultManager.liquidate(
+            alice, musdMarket, 1_000e18, pMezoCollateral, type(uint256).max, liquidator, 0, noUpdates()
+        );
         vm.stopPrank();
     }
 
@@ -208,7 +211,8 @@ contract VaultManagerTest is HubFixture {
         musd.mint(liquidator, 10_000e18);
         vm.startPrank(liquidator);
         musd.approve(address(vaultManager), type(uint256).max);
-        uint256 seized = vaultManager.liquidate(alice, musdMarket, 1_950e18, pMezoCollateral, 0, liquidator, 0, noUpdates());
+        uint256 seized =
+            vaultManager.liquidate(alice, musdMarket, 1_950e18, pMezoCollateral, 0, liquidator, 0, noUpdates());
         vm.stopPrank();
         assertEq(seized, shares);
         assertEq(vaultManager.collateralBalance(alice, pMezoCollateral), 0);

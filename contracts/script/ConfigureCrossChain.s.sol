@@ -24,8 +24,12 @@ contract ConfigureCrossChain is Script {
             uint16 spokeChain = uint16(vm.parseJsonUint(spokeJson, ".wormholeChainId"));
             VaultManager vaultManager = WormholeAdapter(adapter).vaultManager();
             WormholeAdapter(adapter).setSpoke(spokeChain, Payload.toBytes32(gateway));
-            _addRemote(vaultManager, spokeChain, vm.parseJsonAddress(spokeJson, ".tokens.WETH"), 18, "ETH", 7500, 8000, 700);
-            _addRemote(vaultManager, spokeChain, vm.parseJsonAddress(spokeJson, ".tokens.USDC"), 6, "USDC", 8000, 8500, 500);
+            _addRemote(
+                vaultManager, spokeChain, vm.parseJsonAddress(spokeJson, ".tokens.WETH"), 18, "ETH", 7500, 8000, 700
+            );
+            _addRemote(
+                vaultManager, spokeChain, vm.parseJsonAddress(spokeJson, ".tokens.USDC"), 6, "USDC", 8000, 8500, 500
+            );
             console2.log("hub linked to spoke chain", spokeChain);
         } else {
             SpokeGateway(gateway).setHubEmitter(Payload.toBytes32(adapter));

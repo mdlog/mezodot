@@ -18,7 +18,10 @@ contract PayloadHarness {
 contract PayloadTest is Test {
     PayloadHarness internal h = new PayloadHarness();
 
-    function testFuzz_roundTrip(uint8 msgType, uint64 nonce, bytes32 account, bytes32 token, uint256 amount) public view {
+    function testFuzz_roundTrip(uint8 msgType, uint64 nonce, bytes32 account, bytes32 token, uint256 amount)
+        public
+        view
+    {
         msgType = uint8(bound(msgType, 1, 2));
         Payload.Message memory m = Payload.Message(msgType, nonce, account, token, amount);
         bytes memory encoded = h.encode(m);
@@ -32,7 +35,8 @@ contract PayloadTest is Test {
     }
 
     function test_layoutIsPacked() public view {
-        bytes memory encoded = h.encode(Payload.Message(Payload.DEPOSIT, 7, bytes32(uint256(1)), bytes32(uint256(2)), 3));
+        bytes memory encoded =
+            h.encode(Payload.Message(Payload.DEPOSIT, 7, bytes32(uint256(1)), bytes32(uint256(2)), 3));
         assertEq(uint8(encoded[0]), Payload.VERSION);
         assertEq(uint8(encoded[1]), Payload.DEPOSIT);
         assertEq(uint8(encoded[9]), 7); // last byte of uint64 nonce

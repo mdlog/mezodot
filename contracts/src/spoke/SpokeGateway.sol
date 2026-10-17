@@ -78,7 +78,13 @@ contract SpokeGateway is Ownable2Step, Pausable, ReentrancyGuard {
 
     /// @notice Locks `amount` of `token` and publishes a DEPOSIT for the caller's hub account.
     /// @dev msg.value must equal the Wormhole message fee. Credits the amount actually received.
-    function deposit(address token, uint256 amount) external payable nonReentrant whenNotPaused returns (uint64 sequence) {
+    function deposit(address token, uint256 amount)
+        external
+        payable
+        nonReentrant
+        whenNotPaused
+        returns (uint64 sequence)
+    {
         TokenConfig memory cfg = tokens[token];
         if (!cfg.allowed) revert TokenNotAllowed();
         if (amount == 0) revert ZeroAmount();
@@ -92,7 +98,9 @@ contract SpokeGateway is Ownable2Step, Pausable, ReentrancyGuard {
         if (locked[token] > cfg.cap) revert CapExceeded();
 
         bytes memory payload = Payload.encode(
-            Payload.Message(Payload.DEPOSIT, ++outboundNonce, Payload.toBytes32(msg.sender), Payload.toBytes32(token), received)
+            Payload.Message(
+                Payload.DEPOSIT, ++outboundNonce, Payload.toBytes32(msg.sender), Payload.toBytes32(token), received
+            )
         );
         sequence = wormhole.publishMessage{value: msg.value}(0, payload, consistencyLevel);
         emit Deposited(sequence, msg.sender, token, received);
