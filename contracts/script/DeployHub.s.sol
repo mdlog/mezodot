@@ -8,16 +8,26 @@ import {IWormhole} from "../src/interfaces/IWormhole.sol";
 import {InterestRateModel} from "../src/hub/InterestRateModel.sol";
 import {PToken} from "../src/hub/PToken.sol";
 import {OracleRouter} from "../src/hub/OracleRouter.sol";
+import {PythSource} from "../src/oracle/PythSource.sol";
+import {SupraSource, ISupraOraclePull} from "../src/oracle/SupraSource.sol";
 import {VaultManager} from "../src/hub/VaultManager.sol";
 import {WormholeAdapter} from "../src/hub/WormholeAdapter.sol";
 import {LeverageManager} from "../src/hub/LeverageManager.sol";
 import {KeeperGateway} from "../src/hub/KeeperGateway.sol";
 
 /// @notice Deploys the Mezo hub. Remote (spoke) collateral is registered later by ConfigureCrossChain.
-/// Env: NETWORK, MUSD, MEZO, PYTH, WORMHOLE, MUSD_FEED, MEZO_FEED, ETH_FEED, USDC_FEED,
-///      CONSISTENCY_LEVEL (default 1), SEED_AMOUNT (default 1e18; 0 disables the seed deposit).
+/// Env: NETWORK, MUSD, MEZO, WORMHOLE, CONSISTENCY_LEVEL (default 1), SEED_AMOUNT (default 1e18; 0 = none).
+///      Oracle: PYTH (Pyth Core), SUPRA_PULL (optional Supra DORA pull contract), and per symbol
+///      (MUSD, MEZO, ETH, USDC): <SYM>_FEED (Pyth price id), <SYM>_MAX_AGE (Pyth leg, default 120 s),
+///      <SYM>_MAX_CONF_BPS (default 200), <SYM>_SUPRA_PAIR (optional secondary leg),
+///      SUPRA_MAX_AGE (default 120 s), DIVERGENCE_BPS (two-leg cross-check, default 150).
 /// Writes packages/sdk/src/deployments/<NETWORK>.json.
 contract DeployHub is Script {
+    /// OracleRouter source tags; mirrored by SOURCE_TAG in packages/sdk/src/oracle.ts.
+    uint8 internal constant PYTH_TAG = 1;
+    uint8 internal constant SUPRA_TAG = 2;
+    uint256 internal constant UNSET = type(uint256).max;
+
     struct Deployed {
         address oracle;
         address vaultManager;
@@ -37,11 +47,7 @@ contract DeployHub is Script {
         vm.startBroadcast();
         address owner = msg.sender;
 
-        OracleRouter oracle = new OracleRouter(IPyth(vm.envAddress("PYTH")), 120, 200, owner);
-        oracle.setFeed(keccak256("MUSD"), vm.envBytes32("MUSD_FEED"));
-        oracle.setFeed(keccak256("MEZO"), vm.envBytes32("MEZO_FEED"));
-        oracle.setFeed(keccak256("ETH"), vm.envBytes32("ETH_FEED"));
-        oracle.setFeed(keccak256("USDC"), vm.envBytes32("USDC_FEED"));
+        OracleRouter oracle = _deployOracle(owner);
 
         // Rates from the spec: MUSD 0/6%/80%/80%, MEZO 2%/8%/70%/100%, reserve factor 10%.
         PToken pMUSD = new PToken(
@@ -86,6 +92,39 @@ contract DeployHub is Script {
         _write(network, d, musd, mezo, startBlock);
     }
 
+    function _deployOracle(address owner) internal returns (OracleRouter oracle) {
+        oracle = new OracleRouter(owner);
+        oracle.setSource(PYTH_TAG, new PythSource(IPyth(vm.envAddress("PYTH"))));
+        address supraPull = vm.envOr("SUPRA_PULL", address(0));
+        if (supraPull != address(0)) oracle.setSource(SUPRA_TAG, new SupraSource(ISupraOraclePull(supraPull)));
+        _setFeed(oracle, "MUSD", supraPull != address(0));
+        _setFeed(oracle, "MEZO", supraPull != address(0));
+        _setFeed(oracle, "ETH", supraPull != address(0));
+        _setFeed(oracle, "USDC", supraPull != address(0));
+    }
+
+    /// Pyth primary leg per symbol, plus a Supra secondary leg when <SYM>_SUPRA_PAIR is set.
+    function _setFeed(OracleRouter oracle, string memory sym, bool supra) internal {
+        uint256 pair = supra ? vm.envOr(string.concat(sym, "_SUPRA_PAIR"), UNSET) : UNSET;
+        OracleRouter.Leg memory secondary;
+        if (pair != UNSET) {
+            secondary = OracleRouter.Leg(SUPRA_TAG, uint32(vm.envOr("SUPRA_MAX_AGE", uint256(120))), bytes32(pair));
+        }
+        oracle.setFeed(
+            keccak256(bytes(sym)),
+            OracleRouter.Feed({
+                primary: OracleRouter.Leg(
+                    PYTH_TAG,
+                    uint32(vm.envOr(string.concat(sym, "_MAX_AGE"), uint256(120))),
+                    vm.envBytes32(string.concat(sym, "_FEED"))
+                ),
+                secondary: secondary,
+                maxConfBps: uint16(vm.envOr(string.concat(sym, "_MAX_CONF_BPS"), uint256(200))),
+                maxDivergenceBps: pair == UNSET ? 0 : uint16(vm.envOr("DIVERGENCE_BPS", uint256(150)))
+            })
+        );
+    }
+
     function _local(address token, bytes32 priceKey, uint16 ltv, uint16 lt, uint16 bonus)
         internal
         pure
@@ -121,6 +160,7 @@ contract DeployHub is Script {
         vm.serializeAddress(c, "pMUSD", d.pMUSD);
         vm.serializeAddress(c, "pMEZO", d.pMEZO);
         vm.serializeAddress(c, "wormhole", vm.envAddress("WORMHOLE"));
+        vm.serializeAddress(c, "supraPull", vm.envOr("SUPRA_PULL", address(0)));
         string memory contracts = vm.serializeAddress(c, "pyth", vm.envAddress("PYTH"));
 
         string memory t = "tokens";

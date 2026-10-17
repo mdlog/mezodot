@@ -19,6 +19,9 @@ export MUSD_FEED=0x0617a9b725011a126a2b9fd53563f4236501f32cf76d877644b943394606c
 export MEZO_FEED=0x80beaaedbdd228e77c5d62dfcd74b0305674b7e27a5cc6a46e71bd3a696826df
 export ETH_FEED=0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace
 export USDC_FEED=0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a
+# Same oracle layout as testnet: ETH and USDC get a Supra secondary leg (MockSupraPull, served by the agent).
+export ETH_SUPRA_PAIR=19
+export USDC_SUPRA_PAIR=89
 
 mkdir -p "$STATE"
 "$ROOT/scripts/devnet/stop.sh" >/dev/null 2>&1 || true
@@ -31,7 +34,7 @@ done
 
 forge_script() { (cd "$CONTRACTS" && forge script "$@" --private-key "$DEPLOYER_KEY" --broadcast --slow 2>&1); }
 # Extracts KEY=0x... lines logged by DevnetMocks.
-read_mocks() { grep -Eo '[A-Z]+=0x[0-9a-fA-F]{40}' | sed 's/^/export /'; }
+read_mocks() { grep -Eo '[A-Z_]+=0x[0-9a-fA-F]{40}' | sed 's/^/export /'; }
 
 echo "› deploying hub mocks + hub"
 eval "$(ROLE=hub WORMHOLE_CHAIN_ID=50 GUARDIAN=$GUARDIAN forge_script script/DevnetMocks.s.sol --rpc-url "$HUB_RPC" | read_mocks)"

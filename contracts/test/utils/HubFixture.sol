@@ -7,6 +7,7 @@ import {MockPyth} from "@pythnetwork/pyth-sdk-solidity/MockPyth.sol";
 import {InterestRateModel} from "../../src/hub/InterestRateModel.sol";
 import {PToken} from "../../src/hub/PToken.sol";
 import {OracleRouter} from "../../src/hub/OracleRouter.sol";
+import {PythSource} from "../../src/oracle/PythSource.sol";
 import {VaultManager} from "../../src/hub/VaultManager.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 
@@ -24,6 +25,9 @@ abstract contract HubFixture is Test {
     bytes32 internal constant MEZO_ID = bytes32(uint256(2));
     bytes32 internal constant ETH_ID = bytes32(uint256(3));
     bytes32 internal constant USDC_ID = bytes32(uint256(4));
+
+    /// OracleRouter source tag of the Pyth leg (update bytes are `tag ‖ payload`).
+    uint8 internal constant PYTH_TAG = 1;
 
     // Spoke token addresses as seen from the hub (universal 32-byte form).
     bytes32 internal constant SPOKE_WETH = bytes32(uint256(uint160(0x4200000000000000000000000000000000000006)));
@@ -74,11 +78,12 @@ abstract contract HubFixture is Test {
             address(this)
         );
         pyth = new MockPyth(60, 1);
-        oracle = new OracleRouter(pyth, 120, 200, address(this));
-        oracle.setFeed(MUSD_KEY, MUSD_ID);
-        oracle.setFeed(MEZO_KEY, MEZO_ID);
-        oracle.setFeed(ETH_KEY, ETH_ID);
-        oracle.setFeed(USDC_KEY, USDC_ID);
+        oracle = new OracleRouter(address(this));
+        oracle.setSource(PYTH_TAG, new PythSource(pyth));
+        oracle.setFeed(MUSD_KEY, pythFeed(MUSD_ID));
+        oracle.setFeed(MEZO_KEY, pythFeed(MEZO_ID));
+        oracle.setFeed(ETH_KEY, pythFeed(ETH_ID));
+        oracle.setFeed(USDC_KEY, pythFeed(USDC_ID));
 
         vaultManager = new VaultManager(oracle, address(this));
         pMUSD.setVaultManager(address(vaultManager));
@@ -141,21 +146,40 @@ abstract contract HubFixture is Test {
         });
     }
 
+    /// Single Pyth leg, 120 s max age, 2% confidence cap (the spec's pull-oracle parameters).
+    function pythFeed(bytes32 id) internal pure returns (OracleRouter.Feed memory) {
+        return OracleRouter.Feed({
+            primary: OracleRouter.Leg({source: PYTH_TAG, maxAge: 120, id: id}),
+            secondary: OracleRouter.Leg({source: 0, maxAge: 0, id: bytes32(0)}),
+            maxConfBps: 200,
+            maxDivergenceBps: 0
+        });
+    }
+
     /// Writes all four prices with the current timestamp directly into MockPyth.
     /// MockPyth ignores updates that are not newer than the stored one, so advance one second first.
     function pushPrices() internal {
         skip(1);
-        bytes[] memory updates = priceUpdates();
+        bytes[] memory updates = rawPythUpdates();
         pyth.updatePriceFeeds{value: pyth.getUpdateFee(updates)}(updates);
     }
 
-    function priceUpdates() internal view returns (bytes[] memory updates) {
+    /// MockPyth payloads for all four feeds, stamped now (what Pyth's own contract accepts).
+    function rawPythUpdates() internal view returns (bytes[] memory updates) {
         uint64 t = uint64(block.timestamp);
         updates = new bytes[](4);
         updates[0] = pyth.createPriceFeedUpdateData(MUSD_ID, musdPrice, 0, -8, musdPrice, 0, t);
         updates[1] = pyth.createPriceFeedUpdateData(MEZO_ID, mezoPrice, 0, -8, mezoPrice, 0, t);
         updates[2] = pyth.createPriceFeedUpdateData(ETH_ID, ethPrice, 0, -8, ethPrice, 0, t);
         updates[3] = pyth.createPriceFeedUpdateData(USDC_ID, usdcPrice, 0, -8, usdcPrice, 0, t);
+    }
+
+    /// The same updates tagged for OracleRouter, as passed to risk-checked entrypoints.
+    function priceUpdates() internal view returns (bytes[] memory updates) {
+        updates = rawPythUpdates();
+        for (uint256 i = 0; i < updates.length; i++) {
+            updates[i] = abi.encodePacked(PYTH_TAG, updates[i]);
+        }
     }
 
     function noUpdates() internal pure returns (bytes[] memory) {

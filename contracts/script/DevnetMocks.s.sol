@@ -5,9 +5,10 @@ import {Script, console2} from "forge-std/Script.sol";
 import {MockPyth} from "@pythnetwork/pyth-sdk-solidity/MockPyth.sol";
 import {DevWormhole} from "../test/mocks/DevWormhole.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
+import {MockSupraPull} from "../test/mocks/MockSupraPull.sol";
 
 /// @notice Local devnet only: deploys the external dependencies that exist on real testnets
-///         (Wormhole core, Pyth, tokens) so the production deploy scripts can run unchanged.
+///         (Wormhole core, Pyth, Supra pull, tokens) so the production deploy scripts can run unchanged.
 /// Env: ROLE (hub|spoke), WORMHOLE_CHAIN_ID, GUARDIAN (dev guardian address).
 ///      Mock tokens are minted to the first five default anvil accounts.
 /// Prints KEY=value lines consumed by scripts/devnet/start.sh.
@@ -24,11 +25,13 @@ contract DevnetMocks is Script {
         console2.log(string.concat("WORMHOLE=", vm.toString(address(wormhole))));
         if (keccak256(bytes(role)) == keccak256("hub")) {
             MockPyth pyth = new MockPyth(60, 1);
+            MockSupraPull supra = new MockSupraPull();
             MockERC20 musd = new MockERC20("Mezo USD", "MUSD", 18);
             MockERC20 mezo = new MockERC20("Mezo", "MEZO", 18);
             _fund(musd, 1_000_000e18);
             _fund(mezo, 100_000_000e18);
             console2.log(string.concat("PYTH=", vm.toString(address(pyth))));
+            console2.log(string.concat("SUPRA_PULL=", vm.toString(address(supra))));
             console2.log(string.concat("MUSD=", vm.toString(address(musd))));
             console2.log(string.concat("MEZO=", vm.toString(address(mezo))));
         } else {

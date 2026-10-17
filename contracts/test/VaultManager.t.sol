@@ -252,7 +252,7 @@ contract VaultManagerTest is HubFixture {
 
     function test_snapshotSurvivesFeedNeverPushed() public {
         bytes32 newKey = keccak256("NEW");
-        oracle.setFeed(newKey, bytes32(uint256(0x9999)));
+        oracle.setFeed(newKey, pythFeed(bytes32(uint256(0x9999))));
         vaultManager.addCollateral(_remote(ETH_SEPOLIA, SPOKE_WETH, 18, newKey, 7500, 8000, 700));
         vaultManager.creditRemote(alice, vaultManager.collateralCount() - 1, 1e18);
         postLocal(alice, pMUSD, pMusdCollateral, 1_000e18);
