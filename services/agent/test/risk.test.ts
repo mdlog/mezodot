@@ -77,7 +77,7 @@ describe('walk-forward over leverage', () => {
 
   it('a pure-noise series is not called robust', () => {
     let seed = 7;
-    const rand = () => ((seed = (seed * 16_807) % 2_147_483_647) / 2_147_483_647) - 0.5;
+    const rand = () => (seed = (seed * 16_807) % 2_147_483_647) / 2_147_483_647 - 0.5;
     const r = Array.from({ length: 2_000 }, () => rand() * 0.02);
     const wf = walkForward(r, [1.5, 2, 2.5, 3, 3.5, 4], 500, 250, params);
     expect(wf.deflatedSharpe).toBeLessThan(0.95);

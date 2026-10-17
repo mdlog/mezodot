@@ -32,8 +32,7 @@ export const borrowRate = (m: RateModel, util: number): number =>
   util <= m.kink ? m.base + (m.slope1 * util) / m.kink : m.base + m.slope1 + (m.slope2 * (util - m.kink)) / (1 - m.kink);
 
 /** Supply rate = borrow rate × utilization × (1 − reserve factor). */
-export const supplyRate = (m: RateModel, util: number, reserveFactor = RESERVE_FACTOR): number =>
-  borrowRate(m, util) * util * (1 - reserveFactor);
+export const supplyRate = (m: RateModel, util: number, reserveFactor = RESERVE_FACTOR): number => borrowRate(m, util) * util * (1 - reserveFactor);
 
 /** Converts an on-chain per-second WAD rate to an annual fraction. */
 export const perSecondToAnnual = (ratePerSecondWad: bigint): number => (Number(ratePerSecondWad) / 1e18) * SECONDS_PER_YEAR;
@@ -103,11 +102,7 @@ export type LoopPlan = {
 };
 
 /** Mirrors LeverageManager.loop: flash = principal × (L − 1); debt = flash + 9 bps fee. */
-export function planLoop(
-  principal: number,
-  leverage: number,
-  p: { ltvBps: number; ltBps: number; supplyApy: number; borrowApy: number },
-): LoopPlan {
+export function planLoop(principal: number, leverage: number, p: { ltvBps: number; ltBps: number; supplyApy: number; borrowApy: number }): LoopPlan {
   const flashAmount = principal * (leverage - 1);
   const fee = flashFee(flashAmount);
   const gross = principal + flashAmount;

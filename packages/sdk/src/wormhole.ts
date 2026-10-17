@@ -26,7 +26,13 @@ export function parseLogMessagePublished(log: Pick<Log, 'topics' | 'data'>): Pub
  * Fetches a guardian-signed VAA from Wormholescan. Returns null while it is not yet available
  * (guardians still observing / finality not reached).
  */
-export async function fetchSignedVaa(apiBase: string, chainId: number, emitter: Address, sequence: bigint, fetchImpl: typeof fetch = fetch): Promise<Hex | null> {
+export async function fetchSignedVaa(
+  apiBase: string,
+  chainId: number,
+  emitter: Address,
+  sequence: bigint,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Hex | null> {
   const emitterHex = toBytes32(emitter).slice(2);
   const res = await fetchImpl(`${apiBase}/v1/signed_vaa/${chainId}/${emitterHex}/${sequence}`);
   if (res.status === 404) return null;
@@ -38,7 +44,15 @@ export async function fetchSignedVaa(apiBase: string, chainId: number, emitter: 
 }
 
 /** VAA v1 body: timestamp | nonce | emitterChain | emitter | sequence | consistency | payload. */
-export function vaaBody(m: { timestamp: number; nonce: number; emitterChain: number; emitter: Address; sequence: bigint; consistencyLevel: number; payload: Hex }): Hex {
+export function vaaBody(m: {
+  timestamp: number;
+  nonce: number;
+  emitterChain: number;
+  emitter: Address;
+  sequence: bigint;
+  consistencyLevel: number;
+  payload: Hex;
+}): Hex {
   return encodePacked(
     ['uint32', 'uint32', 'uint16', 'bytes32', 'uint64', 'uint8', 'bytes'],
     [m.timestamp, m.nonce, m.emitterChain, toBytes32(m.emitter), m.sequence, m.consistencyLevel, m.payload],

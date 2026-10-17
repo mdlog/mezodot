@@ -202,7 +202,12 @@ export class Relayer {
 
   private async isConsumed(m: RelayMessage, hash: Hex): Promise<boolean> {
     if (m.direction === 'deposit') {
-      return this.ctx.hub.client.readContract({ address: this.ctx.hub.deployment.contracts.wormholeAdapter, abi: wormholeAdapterAbi, functionName: 'isConsumed', args: [hash] });
+      return this.ctx.hub.client.readContract({
+        address: this.ctx.hub.deployment.contracts.wormholeAdapter,
+        abi: wormholeAdapterAbi,
+        functionName: 'isConsumed',
+        args: [hash],
+      });
     }
     const spoke = this.spoke(m.target);
     return spoke.client.readContract({ address: spoke.deployment.contracts.spokeGateway, abi: spokeGatewayAbi, functionName: 'isConsumed', args: [hash] });
@@ -210,9 +215,19 @@ export class Relayer {
 
   private async submit(m: RelayMessage, vaa: Hex, wallet: Wallet): Promise<Hex> {
     if (m.direction === 'deposit') {
-      return wallet.writeContract({ address: this.ctx.hub.deployment.contracts.keeperGateway, abi: keeperGatewayAbi, functionName: 'relayMessage', args: [vaa] });
+      return wallet.writeContract({
+        address: this.ctx.hub.deployment.contracts.keeperGateway,
+        abi: keeperGatewayAbi,
+        functionName: 'relayMessage',
+        args: [vaa],
+      });
     }
-    return wallet.writeContract({ address: this.spoke(m.target).deployment.contracts.spokeGateway, abi: spokeGatewayAbi, functionName: 'receiveMessage', args: [vaa] });
+    return wallet.writeContract({
+      address: this.spoke(m.target).deployment.contracts.spokeGateway,
+      abi: spokeGatewayAbi,
+      functionName: 'receiveMessage',
+      args: [vaa],
+    });
   }
 
   /** Manually relay one message (MCP tool). */

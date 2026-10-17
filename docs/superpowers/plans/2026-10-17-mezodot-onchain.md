@@ -144,72 +144,101 @@ TypeScript (`packages/sdk`): `deployments` (`getDeployment(network)`), ABIs (`va
 ---
 
 ### Task 1: Monorepo restructure
+
 **Files:** move `src/ index.html public/ vite.config.ts tsconfig.json app.config.ts eslint.config.js` → `apps/web/`; root `package.json` (workspace scripts), `pnpm-workspace.yaml` (`apps/*`, `packages/*`, `services/*`).
+
 - [ ] Move with `git mv`; `apps/web/package.json` keeps current deps/scripts.
 - [ ] Root scripts: `check` = `pnpm -r check && forge test --root contracts`.
 - [ ] Verify `pnpm --filter web check && pnpm --filter web build` pass; commit.
 
 ### Task 2: Contracts scaffold, Payload, dev Wormhole
+
 **Files:** `contracts/foundry.toml`, `remappings.txt`, `lib/` (OZ v5, pyth-sdk-solidity, forge-std), `src/libraries/Payload.sol`, `src/interfaces/IWormhole.sol`, `test/mocks/DevWormhole.sol`, `test/utils/VaaSigner.sol`, `test/Payload.t.sol`, `test/DevWormhole.t.sol`.
+
 - DevWormhole: real VAA v1 format, single guardian; `publishMessage` emits `LogMessagePublished(sender, sequence, nonce, payload, consistencyLevel)`; `parseAndVerifyVM` checks `ecrecover(keccak256(keccak256(body)))`.
 - Tests: encode/decode round-trip (fuzz), wrong length/version reverts; signed VAA verifies, tampered body/wrong signer invalid; sequence increments per emitter.
 
 ### Task 3: InterestRateModel + PToken
+
 **Files:** `src/hub/InterestRateModel.sol`, `src/hub/MezodotPool.sol`, `src/hub/PToken.sol`, `test/InterestRateModel.t.sol`, `test/PToken.t.sol`, `test/mocks/MockERC20.sol`.
+
 - Tests: kinked rate at 0/kink/100% util; supply rate ≤ borrow rate × util; deposit→borrow→warp 365d→exchange rate grows ≈ supply APY; reserves accrue RF share; debt rounds up; borrow/notifyRepay only VaultManager; withdraw capped by cash; caps; pause blocks deposit not withdraw; inflation attack (1 wei + donation) loses attacker money; **flash loan: fee to reserves, unpaid reverts, deposit during flash mints fair shares (Review Focus 1)**.
 
 ### Task 4: OracleRouter
+
 **Files:** `src/hub/OracleRouter.sol`, `test/OracleRouter.t.sol` (MockPyth).
+
 - Tests: negative/positive expo normalisation to WAD; stale > maxAge reverts (**RF 3**); conf > 2% reverts; `updatePrices` pays fee and refunds excess; unknown key reverts; `getPriceUnsafe` returns stale price with timestamp.
 
 ### Task 5: VaultManager (local collateral)
+
 **Files:** `src/hub/VaultManager.sol`, `test/VaultManager.t.sol`, `test/utils/HubFixture.sol` (deploys MUSD/MEZO mocks, pools, MockPyth, oracle, VM).
+
 - Tests: deposit/withdraw pToken collateral; borrow within LTV, over LTV reverts; HF formula vs hand calc; repay partial/all/onBehalfOf; withdraw breaking LTV reverts (**RF 4**); operator gating; liquidation only HF<1, close factor 50%, seize incl. bonus, `minSeize`; snapshot values; pause semantics.
 
 ### Task 6: WormholeAdapter + SpokeGateway (remote collateral)
+
 **Files:** `src/hub/WormholeAdapter.sol`, `src/spoke/SpokeGateway.sol`, `test/CrossChain.t.sol`.
+
 - Tests: spoke deposit locks + publishes DEPOSIT; hub receive credits; **replay and unregistered emitter/chain revert (RF 2)**; RELEASE-type to hub rejected; withdrawRemote checks HF then publishes RELEASE; spoke releases only from hub emitter, replay guarded; remote liquidation sends RELEASE to liquidator; cap enforcement; USDC 6-dec valuation.
 
 ### Task 7: LeverageManager
+
 **Files:** `src/hub/LeverageManager.sol`, `test/LeverageManager.t.sol`.
+
 - Tests: PRD flow C — 1,000 MUSD × 3 → collateral ≈ 3,000 MUSD of pMUSD, debt 2,000 + fee, HF ≈ 1.275 (LT 85%); leverage above LTV reverts; minShares guard; unwind returns equity ≈ principal − fees; **unwind leaving hub debt over LTV reverts (RF 5)**; requires operator approval.
 
 ### Task 8: KeeperGateway
+
 **Files:** `src/hub/KeeperGateway.sol`, `test/KeeperGateway.t.sol`.
+
 - Tests: liquidation through gateway pays keeper seized collateral; keeper count unique; relay counts; snapshot passthrough.
 
 ### Task 9: Invariants + PRD end-to-end
+
 **Files:** `test/invariant/PoolInvariant.t.sol`, `test/invariant/CrossChainInvariant.t.sol`, `test/E2E.t.sol`.
+
 - Invariants: `cash + totalBorrows ≥ totalReserves`; Σ user debt ≤ totalBorrows + dust; remote credit per (chain, token) ≤ spoke locked.
 - E2E: flows A, B (Base spoke), C, plus remote liquidation round-trip.
 
 ### Task 10: Deploy scripts + devnet
+
 **Files:** `contracts/script/DeployHub.s.sol`, `DeploySpoke.s.sol`, `ConfigureCrossChain.s.sol`, `DeployDevnet.s.sol`, `scripts/devnet/start.sh`, `contracts/.env.example`.
+
 - Scripts read env (`MUSD`, `MEZO`, `PYTH`, `WORMHOLE`, feed ids), write `packages/sdk/src/deployments/<network>.json`. Devnet: anvil `31337` (hub, Wormhole chain 50) + anvil `31338` (spoke, chain 10004), DevWormhole + MockPyth + mock tokens, seeded liquidity and test accounts.
 - Verify: `scripts/devnet/start.sh` brings up both chains and deployments JSON validates.
 
 ### Task 11: SDK package
+
 **Files:** `packages/sdk/{package.json,src/index.ts,src/abis/*.ts (generated),src/deployments/*.json,src/math.ts,src/pyth.ts,src/wormhole.ts,src/payload.ts}`, `packages/sdk/scripts/gen-abis.mjs`, tests.
+
 - Tests: math matches Solidity vectors (HF, capacity, loop plan); payload encode/decode equals Solidity bytes; `parseLogMessagePublished` on a real log fixture.
 
 ### Task 12–15: Agent service
+
 **Files:** `services/agent/src/{config.ts,chains.ts,relayer.ts,liquidator.ts,risk/{stats.ts,dsr.ts,walkforward.ts,report.ts,history.ts},mcp/server.ts,http.ts,index.ts}`, `Dockerfile`, `docker-compose.yml`, tests.
+
 - Task 12 Relayer: watch, fetch (wormholescan | devnet signer), submit, idempotent; tests with mocked fetch.
 - Task 13 Liquidator: index, evaluate, profit, simulate, send; unit tests on selection/profit.
 - Task 14 Risk engine: stats, DSR, walk-forward, LTV recommendation; reference-value tests; report from fixture history.
 - Task 15 MCP + HTTP + Docker: tools per spec, write tools dry-run by default; tests call tool handlers directly.
 
 ### Task 16–17: Web on-chain
+
 **Files:** `apps/web/src/{wagmi.ts,providers.tsx,hooks/*.ts,pages/*.tsx,components/*.tsx}`; remove `lib/engine.ts` simulation (keep pure math via sdk).
+
 - Task 16: providers (Mezo Passport `getConfig`, chains incl. devnet), `useProtocol` (markets, snapshot, balances), `useTx` (approve + write + toast), Pyth update helper; network/deployment guard.
 - Task 17: wire Markets (supply/withdraw), Borrow (borrow/repay), Cross-chain (spoke deposit + lifecycle + withdrawRemote), Loop (loop/unwind), Agents (risk report + keeper stats), Activity (events), Dashboard (KPIs from chain).
 - Verify: typecheck, lint, unit tests, build; Playwright smoke against devnet (connect devnet account, supply, borrow, loop).
 
 ### Task 18: Devnet E2E (agent + contracts)
+
 - Script `scripts/devnet/e2e.ts`: spoke deposit → relayer credits → borrow → MockPyth price drop → liquidator liquidates → RELEASE relayed → liquidator receives WETH on spoke. Assert each step.
 
 ### Task 19: Docs
+
 - `README.md` (what/why/how, architecture diagram, quickstart), `docs/DEPLOY.md`, `docs/SECURITY.md` (threat model, limitations), update `TODO.md`.
 
 ### Task 20: Final review
+
 - Fresh reviewer subagent over whole repo; fix findings; full `pnpm check`.

@@ -58,7 +58,7 @@ const COINGECKO_IDS: Record<PriceSymbol, string> = { ETH: 'ethereum', MEZO: 'mez
 /** Highest LTV whose buffer to the liquidation threshold survives a VaR99 move: LT × (1 − VaR). */
 export const recommendLtv = (lt: number, var99: number): number => Math.max(0, lt * (1 - var99));
 
-const lastN = <T,>(xs: T[], n: number) => xs.slice(Math.max(0, xs.length - n));
+const lastN = <T>(xs: T[], n: number) => xs.slice(Math.max(0, xs.length - n));
 
 export function buildReport(env: string, histories: PriceHistory[], protocol: ProtocolState | null, now = Date.now()): RiskReport {
   const notes: string[] = [];
@@ -118,7 +118,10 @@ export function buildReport(env: string, histories: PriceHistory[], protocol: Pr
   }
 
   const loopCarry = LEVERAGE_GRID.map((leverage) => ({ leverage, netApy: leverage * musdSupplyApy - (leverage - 1) * musdBorrowApy }));
-  if (musd && musdBorrowApy > musdSupplyApy) notes.push('MUSD loop carry is negative without external incentives: borrow APY exceeds supply APY by construction (supply = borrow × utilization × (1 − reserve factor)).');
+  if (musd && musdBorrowApy > musdSupplyApy)
+    notes.push(
+      'MUSD loop carry is negative without external incentives: borrow APY exceeds supply APY by construction (supply = borrow × utilization × (1 − reserve factor)).',
+    );
 
   return { generatedAt: now, env, dsrThreshold: DSR_THRESHOLD, assets, strategies, loopCarry, rates: { musdBorrowApy, musdSupplyApy }, notes };
 }

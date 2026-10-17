@@ -19,8 +19,23 @@ type AssetRisk = {
   recommendedLtv: number | null;
   verdict: 'ok' | 'tighten' | 'n/a';
 };
-type StrategyRisk = { collateral: string; description: string; windows: number; oosSharpeAnnual: number; deflatedSharpe: number; modalLeverage: number; robust: boolean };
-type RiskReport = { generatedAt: number; dsrThreshold: number; assets: AssetRisk[]; strategies: StrategyRisk[]; loopCarry: { leverage: number; netApy: number }[]; notes: string[] };
+type StrategyRisk = {
+  collateral: string;
+  description: string;
+  windows: number;
+  oosSharpeAnnual: number;
+  deflatedSharpe: number;
+  modalLeverage: number;
+  robust: boolean;
+};
+type RiskReport = {
+  generatedAt: number;
+  dsrThreshold: number;
+  assets: AssetRisk[];
+  strategies: StrategyRisk[];
+  loopCarry: { leverage: number; netApy: number }[];
+  notes: string[];
+};
 type Health = { ok: boolean; modules: string[]; keeper: string | null; liquidatorLastRun: number | null };
 type Evaluation = { account: string; healthFactor: number; debtUsd: number; plan: { profitUsd: number } | null };
 
@@ -83,7 +98,8 @@ export function Agents() {
           <span className="overline">KEEPER NETWORK</span>
           <h2>{protocol ? `${protocol.keeperCount} keeper${protocol.keeperCount === 1n ? '' : 's'} on KeeperGateway` : 'Reading KeeperGateway…'}</h2>
           <p>
-            Anyone can liquidate unhealthy positions (earning the liquidation bonus) or deliver Wormhole messages. {HUB.deployment && <AddressLink network={HUB} address={HUB.deployment.contracts.keeperGateway} />}
+            Anyone can liquidate unhealthy positions (earning the liquidation bonus) or deliver Wormhole messages.{' '}
+            {HUB.deployment && <AddressLink network={HUB} address={HUB.deployment.contracts.keeperGateway} />}
           </p>
         </div>
         <span className="monitor-pill">
@@ -111,7 +127,8 @@ export function Agents() {
                   1h VaR99 {pct(a.var99_1h, 2)} · 90d max DD {pct(a.maxDrawdown90d)}
                 </small>
                 <small className={a.verdict === 'tighten' ? 'tone-warn' : ''}>
-                  LTV {a.currentLtv === null ? '—' : pct(a.currentLtv, 0)} vs advised ≤ {a.recommendedLtv === null ? '—' : pct(a.recommendedLtv)} · {a.verdict.toUpperCase()}
+                  LTV {a.currentLtv === null ? '—' : pct(a.currentLtv, 0)} vs advised ≤ {a.recommendedLtv === null ? '—' : pct(a.recommendedLtv)} ·{' '}
+                  {a.verdict.toUpperCase()}
                 </small>
               </article>
             ))}
@@ -191,7 +208,9 @@ export function Agents() {
             </div>
           ))}
         </div>
-        <p className="endpoint-disclaimer">Write tools dry-run unless the agent runs with MCP_ALLOW_WRITE=true. Local stdio: pnpm --filter @mezodot/agent mcp.</p>
+        <p className="endpoint-disclaimer">
+          Write tools dry-run unless the agent runs with MCP_ALLOW_WRITE=true. Local stdio: pnpm --filter @mezodot/agent mcp.
+        </p>
       </section>
 
       <InfoBar title="Quantitative metrics are research tools, not investment advice." action="Architecture" onAction={() => go('architecture')}>

@@ -7,7 +7,20 @@ import { useActivity, type ActivityItem, type ActivityKind } from '../data/activ
 import { fmt, timeAgo, units } from '../lib/format';
 import { useUi } from '../state/UiContext';
 
-const KINDS: ('All activity' | ActivityKind)[] = ['All activity', 'Supply', 'Withdraw', 'Collateral in', 'Collateral out', 'Cross-chain', 'Release', 'Borrow', 'Repay', 'Loop', 'Unwind', 'Liquidation'];
+const KINDS: ('All activity' | ActivityKind)[] = [
+  'All activity',
+  'Supply',
+  'Withdraw',
+  'Collateral in',
+  'Collateral out',
+  'Cross-chain',
+  'Release',
+  'Borrow',
+  'Repay',
+  'Loop',
+  'Unwind',
+  'Liquidation',
+];
 const networkOf = (item: ActivityItem) => (item.network === HUB.name ? HUB : SPOKES.find((s) => s.name === item.network)!);
 
 export function Activity() {
@@ -20,7 +33,9 @@ export function Activity() {
   const exportCsv = () => {
     const header = ['time', 'kind', 'network', 'asset', 'amount', 'detail', 'tx'];
     const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
-    const rows = filtered.map((a) => [a.timestamp ? new Date(a.timestamp).toISOString() : '', a.kind, a.network, a.asset, units(a.amount, a.decimals), a.detail, a.txHash].map(esc).join(','));
+    const rows = filtered.map((a) =>
+      [a.timestamp ? new Date(a.timestamp).toISOString() : '', a.kind, a.network, a.asset, units(a.amount, a.decimals), a.detail, a.txHash].map(esc).join(','),
+    );
     const url = URL.createObjectURL(new Blob([[header.join(','), ...rows].join('\n')], { type: 'text/csv' }));
     const link = document.createElement('a');
     link.href = url;

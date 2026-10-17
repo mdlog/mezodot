@@ -24,7 +24,8 @@ export type ValuedPosition = PositionSummary & {
 const toNumber = (v: bigint, decimals: number) => Number(v) / 10 ** decimals;
 
 /** Underlying units of a pToken balance. */
-export const pTokenUnits = (market: MarketState, shares: bigint): number => toNumber(shares, market.shareDecimals) * toNumber(market.exchangeRate, market.decimals);
+export const pTokenUnits = (market: MarketState, shares: bigint): number =>
+  toNumber(shares, market.shareDecimals) * toNumber(market.exchangeRate, market.decimals);
 
 /**
  * Values a position with off-chain (fresh) prices using the same rules as VaultManager:

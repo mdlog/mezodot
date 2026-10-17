@@ -88,11 +88,21 @@ export function Loop() {
             <label className="field-label" htmlFor="loop-amount">
               INITIAL EQUITY <span>Wallet · {musd ? fmt(units(wallet, musd.decimals), 2) : '—'} MUSD</span>
             </label>
-            <AmountInput id="loop-amount" large value={amount} onChange={setAmount} unit="MUSD" onMax={() => musd && setAmount(units(wallet, musd.decimals).toFixed(2))} />
+            <AmountInput
+              id="loop-amount"
+              large
+              value={amount}
+              onChange={setAmount}
+              unit="MUSD"
+              onMax={() => musd && setAmount(units(wallet, musd.decimals).toFixed(2))}
+            />
           </div>
           <div className="form-section">
             <div className="field-label">
-              TARGET LEVERAGE <span>{leverage.toFixed(2)}× · max {plan.maxLeverage.toFixed(2)}× at {(collateral?.ltvBps ?? 8000) / 100}% LTV</span>
+              TARGET LEVERAGE{' '}
+              <span>
+                {leverage.toFixed(2)}× · max {plan.maxLeverage.toFixed(2)}× at {(collateral?.ltvBps ?? 8000) / 100}% LTV
+              </span>
             </div>
             <div className="leverage-selector">
               {LEVERAGE_OPTIONS.map((v) => (
@@ -102,7 +112,15 @@ export function Loop() {
               ))}
             </div>
             <div className="slider-shell">
-              <input aria-label="Leverage target" type="range" min="1.25" max="4" step="0.25" value={leverage} onChange={(e) => setLeverage(Number(e.target.value))} />
+              <input
+                aria-label="Leverage target"
+                type="range"
+                min="1.25"
+                max="4"
+                step="0.25"
+                value={leverage}
+                onChange={(e) => setLeverage(Number(e.target.value))}
+              />
             </div>
           </div>
           <ConnectGate connected={isConnected}>
@@ -171,7 +189,10 @@ export function Loop() {
             </div>
             <div className="projection-foot">
               <TriangleAlert size={14} />
-              <span>Same-asset loop: no price liquidation risk, but supply APY is always below borrow APY by construction, so carry is negative without external incentives. Use the risk report before looping volatile collateral.</span>
+              <span>
+                Same-asset loop: no price liquidation risk, but supply APY is always below borrow APY by construction, so carry is negative without external
+                incentives. Use the risk report before looping volatile collateral.
+              </span>
             </div>
           </section>
 
@@ -226,7 +247,8 @@ export function Loop() {
         <div>
           <b>PRD flow C: 1,000 MUSD at 3×</b>
           <p>
-            Flash borrow 2,000 MUSD, supply 3,000, borrow 2,001.8 (incl. 0.09% fee) and repay the flash loan in the same transaction — LTV 66.7%, health {fmtHealth((3_000 * (collateral?.ltBps ?? 8500)) / 10_000 / 2_001.8)}.
+            Flash borrow 2,000 MUSD, supply 3,000, borrow 2,001.8 (incl. 0.09% fee) and repay the flash loan in the same transaction — LTV 66.7%, health{' '}
+            {fmtHealth((3_000 * (collateral?.ltBps ?? 8500)) / 10_000 / 2_001.8)}.
           </p>
         </div>
         <button

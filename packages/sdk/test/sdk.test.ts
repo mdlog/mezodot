@@ -80,7 +80,13 @@ describe('math mirrors the contracts', () => {
 
 describe('wire formats match Solidity', () => {
   it('payload encodes byte-for-byte like Payload.sol', () => {
-    const encoded = encodePayload({ msgType: MessageType.DEPOSIT, nonce: 7n, account: toBytes32(ALICE), token: toBytes32(BASE_WETH), amount: 2_400_000_000_000_000_000n });
+    const encoded = encodePayload({
+      msgType: MessageType.DEPOSIT,
+      nonce: 7n,
+      account: toBytes32(ALICE),
+      token: toBytes32(BASE_WETH),
+      amount: 2_400_000_000_000_000_000n,
+    });
     expect(encoded).toBe(SOLIDITY_PAYLOAD);
     const d = decodePayload(encoded);
     expect(d.nonce).toBe(7n);
@@ -95,7 +101,15 @@ describe('wire formats match Solidity', () => {
 
   it('dev VAA is signed by the guardian over keccak(keccak(body))', async () => {
     const key: Hex = '0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6';
-    const m = { timestamp: 1_700_000_000, nonce: 0, emitterChain: 10004, emitter: BASE_WETH, sequence: 5n, consistencyLevel: 1, payload: '0xcafe' as Hex } as const;
+    const m = {
+      timestamp: 1_700_000_000,
+      nonce: 0,
+      emitterChain: 10004,
+      emitter: BASE_WETH,
+      sequence: 5n,
+      consistencyLevel: 1,
+      payload: '0xcafe' as Hex,
+    } as const;
     const vaa = await signDevVaa(key, m);
     const body = vaaBody(m);
     expect(sliceHex(vaa, 72)).toBe(body); // header(6) + signature(66)

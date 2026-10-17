@@ -100,7 +100,8 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
             <span>
               <b>{HUB.label}</b>
               <small>
-                <i className={HUB_DEPLOYED ? '' : 'dot-off'} /> {HUB_DEPLOYED ? `Hub live · ${SPOKES.length} spoke${SPOKES.length === 1 ? '' : 's'}` : 'Not deployed yet'}
+                <i className={HUB_DEPLOYED ? '' : 'dot-off'} />{' '}
+                {HUB_DEPLOYED ? `Hub live · ${SPOKES.length} spoke${SPOKES.length === 1 ? '' : 's'}` : 'Not deployed yet'}
               </small>
             </span>
           </div>

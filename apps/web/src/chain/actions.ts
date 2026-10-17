@@ -73,7 +73,11 @@ export const withdrawSteps = ({ account }: Ctx, m: MarketState, amount: bigint, 
 
 export const postCollateralSteps = ({ account, hub }: Ctx, c: CollateralState, shares: bigint): TxStep[] => [
   approveStep(hub, hubId, c.token, account, d().contracts.vaultManager, shares, `Approve ${c.symbol}`),
-  { label: `Post ${c.symbol} as collateral`, chainId: hubId, request: async () => ({ address: d().contracts.vaultManager, abi: vaultManagerAbi, functionName: 'depositCollateral', args: [BigInt(c.id), shares] }) },
+  {
+    label: `Post ${c.symbol} as collateral`,
+    chainId: hubId,
+    request: async () => ({ address: d().contracts.vaultManager, abi: vaultManagerAbi, functionName: 'depositCollateral', args: [BigInt(c.id), shares] }),
+  },
 ];
 
 export const withdrawCollateralSteps = ({ account, hub }: Ctx, c: CollateralState, shares: bigint): TxStep[] => [
@@ -82,7 +86,13 @@ export const withdrawCollateralSteps = ({ account, hub }: Ctx, c: CollateralStat
     chainId: hubId,
     request: async () => {
       const { updates, fee } = await priceUpdate(hub);
-      return { address: d().contracts.vaultManager, abi: vaultManagerAbi, functionName: 'withdrawCollateral', args: [BigInt(c.id), shares, account, updates], value: fee };
+      return {
+        address: d().contracts.vaultManager,
+        abi: vaultManagerAbi,
+        functionName: 'withdrawCollateral',
+        args: [BigInt(c.id), shares, account, updates],
+        value: fee,
+      };
     },
   },
 ];
@@ -105,7 +115,16 @@ export const repaySteps = ({ account, hub }: Ctx, m: MarketState, amount: bigint
   const approveAmount = all ? amount + amount / 1_000n + 1n : amount;
   return [
     approveStep(hub, hubId, m.asset, account, d().contracts.vaultManager, approveAmount, `Approve ${m.symbol}`),
-    { label: `Repay ${m.symbol}`, chainId: hubId, request: async () => ({ address: d().contracts.vaultManager, abi: vaultManagerAbi, functionName: 'repay', args: [BigInt(m.id), all ? maxUint256 : amount, account] }) },
+    {
+      label: `Repay ${m.symbol}`,
+      chainId: hubId,
+      request: async () => ({
+        address: d().contracts.vaultManager,
+        abi: vaultManagerAbi,
+        functionName: 'repay',
+        args: [BigInt(m.id), all ? maxUint256 : amount, account],
+      }),
+    },
   ];
 };
 
@@ -136,18 +155,32 @@ export const withdrawRemoteSteps = ({ account, hub }: Ctx, c: CollateralState, a
         priceUpdate(hub),
         hub.readContract({ address: d().contracts.wormholeAdapter, abi: wormholeAdapterAbi, functionName: 'messageFee' }),
       ]);
-      return { address: d().contracts.vaultManager, abi: vaultManagerAbi, functionName: 'withdrawRemote', args: [BigInt(c.id), amount, toBytes32(recipient), updates], value: fee + wormholeFee };
+      return {
+        address: d().contracts.vaultManager,
+        abi: vaultManagerAbi,
+        functionName: 'withdrawRemote',
+        args: [BigInt(c.id), amount, toBytes32(recipient), updates],
+        value: fee + wormholeFee,
+      };
     },
   },
 ];
 
 /** Permissionless self-relay: anyone can deliver a signed VAA. */
 export const relayHubSteps = (vaa: Hex): TxStep[] => [
-  { label: 'Deliver message to Mezo', chainId: hubId, request: async () => ({ address: d().contracts.keeperGateway, abi: keeperGatewayAbi, functionName: 'relayMessage', args: [vaa] }) },
+  {
+    label: 'Deliver message to Mezo',
+    chainId: hubId,
+    request: async () => ({ address: d().contracts.keeperGateway, abi: keeperGatewayAbi, functionName: 'relayMessage', args: [vaa] }),
+  },
 ];
 
 export const relaySpokeSteps = (spoke: SpokeInfo, vaa: Hex): TxStep[] => [
-  { label: `Deliver release to ${spoke.label}`, chainId: spoke.chain.id, request: async () => ({ address: spoke.deployment!.contracts.spokeGateway, abi: spokeGatewayAbi, functionName: 'receiveMessage', args: [vaa] }) },
+  {
+    label: `Deliver release to ${spoke.label}`,
+    chainId: spoke.chain.id,
+    request: async () => ({ address: spoke.deployment!.contracts.spokeGateway, abi: spokeGatewayAbi, functionName: 'receiveMessage', args: [vaa] }),
+  },
 ];
 
 // --- Loop ----------------------------------------------------------------------------
@@ -156,7 +189,11 @@ export const loopSteps = ({ account, hub }: Ctx, musd: MarketState, principal: b
   const lm = d().contracts.leverageManager;
   const leverageWad = parseUnits(leverage.toString(), 18);
   return [
-    { label: 'Authorise LeverageManager', chainId: hubId, request: async () => (isOperator ? null : { address: d().contracts.vaultManager, abi: vaultManagerAbi, functionName: 'setOperator', args: [lm, true] }) },
+    {
+      label: 'Authorise LeverageManager',
+      chainId: hubId,
+      request: async () => (isOperator ? null : { address: d().contracts.vaultManager, abi: vaultManagerAbi, functionName: 'setOperator', args: [lm, true] }),
+    },
     approveStep(hub, hubId, musd.asset, account, lm, principal, 'Approve MUSD'),
     {
       label: `Open ${leverage}× loop`,
@@ -165,7 +202,13 @@ export const loopSteps = ({ account, hub }: Ctx, musd: MarketState, principal: b
         const gross = (principal * leverageWad) / 10n ** 18n;
         const expectedShares = await hub.readContract({ address: musd.pool, abi: pTokenAbi, functionName: 'previewDeposit', args: [gross] });
         const { updates, fee } = await priceUpdate(hub);
-        return { address: lm, abi: leverageManagerAbi, functionName: 'loop', args: [principal, leverageWad, (expectedShares * 995n) / 1000n, updates], value: fee };
+        return {
+          address: lm,
+          abi: leverageManagerAbi,
+          functionName: 'loop',
+          args: [principal, leverageWad, (expectedShares * 995n) / 1000n, updates],
+          value: fee,
+        };
       },
     },
   ];
@@ -177,7 +220,13 @@ export const unwindSteps = ({ hub }: Ctx, minOut: bigint): TxStep[] => [
     chainId: hubId,
     request: async () => {
       const { updates, fee } = await priceUpdate(hub);
-      return { address: d().contracts.leverageManager, abi: leverageManagerAbi, functionName: 'unwind', args: [maxUint256, maxUint256, minOut, updates], value: fee };
+      return {
+        address: d().contracts.leverageManager,
+        abi: leverageManagerAbi,
+        functionName: 'unwind',
+        args: [maxUint256, maxUint256, minOut, updates],
+        value: fee,
+      };
     },
   },
 ];

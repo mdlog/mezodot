@@ -47,11 +47,51 @@ const WORMHOLESCAN_TESTNET = 'https://api.testnet.wormholescan.io';
 export const DEVNET_HERMES = 'http://127.0.0.1:8787/hermes';
 
 export const NETWORKS: Record<NetworkName, NetworkInfo> = {
-  'mezo-testnet': { name: 'mezo-testnet', label: 'Mezo Testnet', role: 'hub', chain: mezoTestnet, wormholeChainId: 50, wormholescanApi: WORMHOLESCAN_TESTNET, hermesUrl: HERMES },
-  'base-sepolia': { name: 'base-sepolia', label: 'Base Sepolia', role: 'spoke', chain: baseSepolia, wormholeChainId: 10004, wormholescanApi: WORMHOLESCAN_TESTNET, hermesUrl: HERMES },
-  'eth-sepolia': { name: 'eth-sepolia', label: 'Ethereum Sepolia', role: 'spoke', chain: sepolia, wormholeChainId: 10002, wormholescanApi: WORMHOLESCAN_TESTNET, hermesUrl: HERMES },
-  'devnet-hub': { name: 'devnet-hub', label: 'Devnet Hub', role: 'hub', chain: devnetHub, wormholeChainId: 50, wormholescanApi: null, hermesUrl: DEVNET_HERMES },
-  'devnet-spoke': { name: 'devnet-spoke', label: 'Devnet Spoke (Base)', role: 'spoke', chain: devnetSpoke, wormholeChainId: 10004, wormholescanApi: null, hermesUrl: DEVNET_HERMES },
+  'mezo-testnet': {
+    name: 'mezo-testnet',
+    label: 'Mezo Testnet',
+    role: 'hub',
+    chain: mezoTestnet,
+    wormholeChainId: 50,
+    wormholescanApi: WORMHOLESCAN_TESTNET,
+    hermesUrl: HERMES,
+  },
+  'base-sepolia': {
+    name: 'base-sepolia',
+    label: 'Base Sepolia',
+    role: 'spoke',
+    chain: baseSepolia,
+    wormholeChainId: 10004,
+    wormholescanApi: WORMHOLESCAN_TESTNET,
+    hermesUrl: HERMES,
+  },
+  'eth-sepolia': {
+    name: 'eth-sepolia',
+    label: 'Ethereum Sepolia',
+    role: 'spoke',
+    chain: sepolia,
+    wormholeChainId: 10002,
+    wormholescanApi: WORMHOLESCAN_TESTNET,
+    hermesUrl: HERMES,
+  },
+  'devnet-hub': {
+    name: 'devnet-hub',
+    label: 'Devnet Hub',
+    role: 'hub',
+    chain: devnetHub,
+    wormholeChainId: 50,
+    wormholescanApi: null,
+    hermesUrl: DEVNET_HERMES,
+  },
+  'devnet-spoke': {
+    name: 'devnet-spoke',
+    label: 'Devnet Spoke (Base)',
+    role: 'spoke',
+    chain: devnetSpoke,
+    wormholeChainId: 10004,
+    wormholescanApi: null,
+    hermesUrl: DEVNET_HERMES,
+  },
 };
 
 /** Hub + spokes that belong together. */

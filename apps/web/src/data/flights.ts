@@ -46,8 +46,18 @@ export function useFlightStatus(flight: Flight) {
         const digest = vaaDigest(vaa);
         delivered =
           flight.direction === 'deposit'
-            ? await targetClient.readContract({ address: HUB.deployment!.contracts.wormholeAdapter, abi: wormholeAdapterAbi, functionName: 'isConsumed', args: [digest] })
-            : await targetClient.readContract({ address: SPOKES.find((s) => s.name === flight.target)!.deployment!.contracts.spokeGateway, abi: spokeGatewayAbi, functionName: 'isConsumed', args: [digest] });
+            ? await targetClient.readContract({
+                address: HUB.deployment!.contracts.wormholeAdapter,
+                abi: wormholeAdapterAbi,
+                functionName: 'isConsumed',
+                args: [digest],
+              })
+            : await targetClient.readContract({
+                address: SPOKES.find((s) => s.name === flight.target)!.deployment!.contracts.spokeGateway,
+                abi: spokeGatewayAbi,
+                functionName: 'isConsumed',
+                args: [digest],
+              });
       }
       const signed = Boolean(vaa) || agentStatus === 'ready' || delivered;
       return { stage: delivered ? 4 : signed ? 2 : 1, vaa, delivered, relayer: api ? 'Mezodot agent or you (self-relay)' : 'Mezodot agent (devnet)' };

@@ -84,9 +84,20 @@ export function startHttp(s: Services, host = process.env.HTTP_HOST ?? '127.0.0.
           });
         }
         case '/messages':
-          return send(res, 200, s.relayer.messages().slice(0, 100).map(({ vaa: _vaa, ...m }) => m));
+          return send(
+            res,
+            200,
+            s.relayer
+              .messages()
+              .slice(0, 100)
+              .map(({ vaa: _vaa, ...m }) => m),
+          );
         case '/liquidatable':
-          return send(res, 200, s.liquidator.lastEvaluations.filter((e) => e.healthFactor < 1.2));
+          return send(
+            res,
+            200,
+            s.liquidator.lastEvaluations.filter((e) => e.healthFactor < 1.2),
+          );
         default:
           return send(res, 404, { error: 'Not found' });
       }

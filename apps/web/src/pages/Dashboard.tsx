@@ -50,7 +50,13 @@ export function Dashboard() {
 
       <div className="stats-grid">
         <StatCard label="Total value locked" value={tvl === null ? '—' : compactUsd(tvl)} icon={Layers3} foot="Hub pools + collateral on spokes" />
-        <StatCard label="Looping volume" value={loops ? compactUsd(units(loops.volume, 18)) : '—'} icon={RefreshCw} foot={loops ? `${loops.loops} loops via LeverageManager` : 'LeverageManager events'} accent />
+        <StatCard
+          label="Looping volume"
+          value={loops ? compactUsd(units(loops.volume, 18)) : '—'}
+          icon={RefreshCw}
+          foot={loops ? `${loops.loops} loops via LeverageManager` : 'LeverageManager events'}
+          accent
+        />
         <StatCard label="Keeper agents" value={protocol ? String(protocol.keeperCount) : '—'} icon={Radio} foot="Unique addresses on KeeperGateway" />
         <StatCard
           label="Cross-chain borrow"

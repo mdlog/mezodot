@@ -143,7 +143,11 @@ export function Borrow() {
                   </>
                 )}
               </button>
-              <button className="button button--light button--wide" onClick={() => market && openModal({ type: 'repay', marketId: market.id })} disabled={debt === 0n}>
+              <button
+                className="button button--light button--wide"
+                onClick={() => market && openModal({ type: 'repay', marketId: market.id })}
+                disabled={debt === 0n}
+              >
                 Repay <ArrowUpRight size={14} />
               </button>
             </div>
@@ -216,7 +220,8 @@ export function Borrow() {
             <div>
               <b>One risk view, multiple chains.</b>
               <p>
-                VaultManager sums every collateral — pTokens on Mezo and WETH/USDC on spokes — weighted by its LTV and liquidation threshold. {ltvMarks.length > 1 ? 'Limits shown are the blended thresholds of your collateral mix.' : ''}
+                VaultManager sums every collateral — pTokens on Mezo and WETH/USDC on spokes — weighted by its LTV and liquidation threshold.{' '}
+                {ltvMarks.length > 1 ? 'Limits shown are the blended thresholds of your collateral mix.' : ''}
               </p>
             </div>
           </div>

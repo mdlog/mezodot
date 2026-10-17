@@ -50,7 +50,8 @@ export function Crosschain() {
         </div>
       </div>
       <InfoBar title="How safety works." action="Architecture" onAction={() => go('architecture')}>
-        The hub only credits collateral from VAAs signed by Wormhole guardians and emitted by a registered SpokeGateway; each VAA can be used once. Withdrawals debit the hub before the spoke releases.
+        The hub only credits collateral from VAAs signed by Wormhole guardians and emitted by a registered SpokeGateway; each VAA can be used once. Withdrawals
+        debit the hub before the spoke releases.
       </InfoBar>
     </>
   );
@@ -301,7 +302,11 @@ function WithdrawRemotePanel() {
         <>
           <div className="asset-select-row">
             {remote.map((r) => (
-              <button key={r.collateral.id} className={`asset-choice ${row?.collateral.id === r.collateral.id ? 'is-selected' : ''}`} onClick={() => setSelected(r.collateral.id)}>
+              <button
+                key={r.collateral.id}
+                className={`asset-choice ${row?.collateral.id === r.collateral.id ? 'is-selected' : ''}`}
+                onClick={() => setSelected(r.collateral.id)}
+              >
                 <b>{r.collateral.symbol}</b>
                 <span>
                   {fmt(r.units, 4)} · {spokeByWormholeChain(r.collateral.chainId)?.label ?? `chain ${r.collateral.chainId}`}
@@ -309,7 +314,13 @@ function WithdrawRemotePanel() {
               </button>
             ))}
           </div>
-          <AmountInput id="withdraw-remote" value={amount} onChange={setAmount} unit={row?.collateral.symbol ?? ''} onMax={() => row && setAmount(units(row.balance, row.collateral.decimals).toString())} />
+          <AmountInput
+            id="withdraw-remote"
+            value={amount}
+            onChange={setAmount}
+            unit={row?.collateral.symbol ?? ''}
+            onMax={() => row && setAmount(units(row.balance, row.collateral.decimals).toString())}
+          />
           <button className="button button--light button--wide" onClick={withdraw} disabled={invalid || Boolean(busy)}>
             {busy ?? 'Release on spoke'}
           </button>

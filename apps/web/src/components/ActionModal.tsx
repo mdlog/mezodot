@@ -60,7 +60,8 @@ function ActionBody({ modal }: { modal: AmountModal }) {
     const debt = position?.debts.find((x) => x.marketId === market.id)?.amount ?? 0n;
     const postedShares = collateral ? (position?.collateral.find((c) => c.id === collateral.id)?.balance ?? 0n) : 0n;
     const availableUsd = valued?.availableUsd ?? 0;
-    const borrowMax = price > 0 ? parseUnits(Math.max(0, (availableUsd / price) * 0.999).toFixed(market.decimals > 6 ? 6 : market.decimals), market.decimals) : 0n;
+    const borrowMax =
+      price > 0 ? parseUnits(Math.max(0, (availableUsd / price) * 0.999).toFixed(market.decimals > 6 ? 6 : market.decimals), market.decimals) : 0n;
 
     // Max per action, in underlying units.
     const max: Record<AmountModal['type'], bigint> = {
@@ -122,7 +123,8 @@ function ActionBody({ modal }: { modal: AmountModal }) {
     if (result.ok) closeModal();
   };
 
-  const rate = modal.type === 'borrow' || modal.type === 'repay' ? perSecondToAnnual(market.borrowRatePerSecond) : perSecondToAnnual(market.supplyRatePerSecond);
+  const rate =
+    modal.type === 'borrow' || modal.type === 'repay' ? perSecondToAnnual(market.borrowRatePerSecond) : perSecondToAnnual(market.supplyRatePerSecond);
   const tone = hfAfter === null ? 'ok' : healthStatus(hfAfter).tone;
 
   return (
@@ -138,7 +140,11 @@ function ActionBody({ modal }: { modal: AmountModal }) {
             {modal.type === 'post' && `Escrow ${market.receiptSymbol} in VaultManager — it keeps earning`}
             {modal.type === 'unpost' && `Return ${market.receiptSymbol} from VaultManager to your wallet`}
           </b>
-          <p>{modal.type === 'borrow' || modal.type === 'unpost' ? 'Fresh Pyth prices are posted with the transaction (small BTC fee).' : 'Approval is requested only if your allowance is too low.'}</p>
+          <p>
+            {modal.type === 'borrow' || modal.type === 'unpost'
+              ? 'Fresh Pyth prices are posted with the transaction (small BTC fee).'
+              : 'Approval is requested only if your allowance is too low.'}
+          </p>
         </div>
       </div>
       <label className="field-label" htmlFor="modal-amount">
@@ -172,7 +178,10 @@ function ActionBody({ modal }: { modal: AmountModal }) {
         </span>
         {modal.type === 'supply' && (
           <span>
-            You receive<b>≈ {fmt(units(sharesFor(market, value), market.shareDecimals), 4)} {market.receiptSymbol}</b>
+            You receive
+            <b>
+              ≈ {fmt(units(sharesFor(market, value), market.shareDecimals), 4)} {market.receiptSymbol}
+            </b>
           </span>
         )}
         {(modal.type === 'borrow' || modal.type === 'repay' || isCollateral) && valued && (
@@ -201,7 +210,9 @@ function ActionBody({ modal }: { modal: AmountModal }) {
           )}
         </button>
       </ConnectGate>
-      {useMax && modal.type === 'repay' && info.debt > info.walletAsset && <p className="muted-note">Wallet balance is below the full debt; repaying what you hold.</p>}
+      {useMax && modal.type === 'repay' && info.debt > info.walletAsset && (
+        <p className="muted-note">Wallet balance is below the full debt; repaying what you hold.</p>
+      )}
     </form>
   );
 }

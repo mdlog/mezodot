@@ -95,7 +95,8 @@ export function useWalletBalances() {
     enabled: Boolean(address && hubClient && protocol.data),
     refetchInterval: 15_000,
     queryFn: async (): Promise<WalletBalances> => {
-      const bal = (client: PublicClient, token: Address) => client.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [address!] }).catch(() => 0n);
+      const bal = (client: PublicClient, token: Address) =>
+        client.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [address!] }).catch(() => 0n);
       const tokens: Record<string, bigint> = {};
       await Promise.all(
         protocol.data!.markets.flatMap((m) => [
@@ -109,7 +110,11 @@ export function useWalletBalances() {
         SPOKES.map(async (s, i) => {
           const c = spokeClients[i];
           if (!c || !s.deployment) return;
-          const [n, weth, usdc] = await Promise.all([c.getBalance({ address: address! }).catch(() => 0n), bal(c, s.deployment.tokens.WETH), bal(c, s.deployment.tokens.USDC)]);
+          const [n, weth, usdc] = await Promise.all([
+            c.getBalance({ address: address! }).catch(() => 0n),
+            bal(c, s.deployment.tokens.WETH),
+            bal(c, s.deployment.tokens.USDC),
+          ]);
           spokes[s.name] = { native: n, WETH: weth, USDC: usdc };
         }),
       );

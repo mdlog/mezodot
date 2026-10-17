@@ -49,7 +49,10 @@ export function Markets() {
           <div>
             <span className="overline">YIELD RECEIPT TOKENS</span>
             <h2>Your deposit earns its way forward.</h2>
-            <p>Interest paid by borrowers raises totalAssets; every pToken share redeems for more underlying. pTokens are standard ERC-20s usable across Mezo DeFi.</p>
+            <p>
+              Interest paid by borrowers raises totalAssets; every pToken share redeems for more underlying. pTokens are standard ERC-20s usable across Mezo
+              DeFi.
+            </p>
           </div>
           <div className="vault-rate">
             <span>pMUSD / MUSD</span>
@@ -104,7 +107,9 @@ export function Markets() {
                 <b>
                   1 {m.receiptSymbol} <i>=</i> {fmt(units(m.exchangeRate, m.decimals), 6)} {m.symbol}
                 </b>
-                <small>Rises as borrower interest accrues · reserves {fmt(units(m.totalReserves, m.decimals), 2)} {m.symbol}</small>
+                <small>
+                  Rises as borrower interest accrues · reserves {fmt(units(m.totalReserves, m.decimals), 2)} {m.symbol}
+                </small>
               </div>
               <div className="pool-row">
                 <span>Supplied</span>
@@ -117,7 +122,10 @@ export function Markets() {
               <div className="user-deposit">
                 <span>In wallet</span>
                 <strong>
-                  {fmt(pTokenUnits(m, shares), 4)} <small>{m.symbol} as {m.receiptSymbol}</small>
+                  {fmt(pTokenUnits(m, shares), 4)}{' '}
+                  <small>
+                    {m.symbol} as {m.receiptSymbol}
+                  </small>
                 </strong>
                 <span>Posted as collateral</span>
                 <strong>
@@ -128,16 +136,28 @@ export function Markets() {
                 <button className="button button--dark" onClick={() => openModal({ type: 'supply', marketId: m.id })}>
                   Supply
                 </button>
-                <button className="button button--light" onClick={() => openModal({ type: 'withdraw', marketId: m.id })} disabled={isConnected && shares === 0n}>
+                <button
+                  className="button button--light"
+                  onClick={() => openModal({ type: 'withdraw', marketId: m.id })}
+                  disabled={isConnected && shares === 0n}
+                >
                   Withdraw
                 </button>
               </div>
               {collateral && (
                 <div className="market-actions">
-                  <button className="button button--outline" onClick={() => openModal({ type: 'post', collateralId: collateral.id })} disabled={isConnected && shares === 0n}>
+                  <button
+                    className="button button--outline"
+                    onClick={() => openModal({ type: 'post', collateralId: collateral.id })}
+                    disabled={isConnected && shares === 0n}
+                  >
                     Use as collateral · LTV {collateral.ltvBps / 100}%
                   </button>
-                  <button className="button button--light" onClick={() => openModal({ type: 'unpost', collateralId: collateral.id })} disabled={isConnected && posted === 0n}>
+                  <button
+                    className="button button--light"
+                    onClick={() => openModal({ type: 'unpost', collateralId: collateral.id })}
+                    disabled={isConnected && posted === 0n}
+                  >
                     Remove
                   </button>
                 </div>
@@ -152,7 +172,10 @@ export function Markets() {
           <div className="panel explainer-panel">
             <span className="overline">HOW RATES WORK</span>
             <h3>Suppliers earn what borrowers pay.</h3>
-            <p>Kinked curve per pool (MUSD: 6% at 80% utilization, steep above). Supply APY = borrow APY × utilization × (1 − 10% reserve factor). Flash-loan fees (0.09%) go to reserves.</p>
+            <p>
+              Kinked curve per pool (MUSD: 6% at 80% utilization, steep above). Supply APY = borrow APY × utilization × (1 − 10% reserve factor). Flash-loan
+              fees (0.09%) go to reserves.
+            </p>
             <button className="text-link" onClick={() => go('architecture')}>
               Protocol architecture <ArrowRight size={13} />
             </button>

@@ -56,7 +56,10 @@ const toast = async () => {
   await t.waitFor({ timeout: 60_000 });
   const text = await t.innerText();
   console.log('  toast:', text.replace(/\s+/g, ' '));
-  await page.locator('.toast button').click().catch(() => {});
+  await page
+    .locator('.toast button')
+    .click()
+    .catch(() => {});
   return text;
 };
 const shot = (name) => page.screenshot({ path: `${OUT}ui-${name}.png`, fullPage: true });
@@ -83,7 +86,11 @@ await page.locator('form button[type=submit]').click();
 console.log(' ', await toast());
 
 step('post pMUSD as collateral (MAX)');
-await page.locator('.market-detail-card').first().getByRole('button', { name: /Use as collateral/ }).click();
+await page
+  .locator('.market-detail-card')
+  .first()
+  .getByRole('button', { name: /Use as collateral/ })
+  .click();
 await page.locator('.amount-input button', { hasText: 'MAX' }).click();
 await page.locator('form button[type=submit]').click();
 await toast();

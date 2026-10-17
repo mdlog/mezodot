@@ -55,7 +55,12 @@ const toNumber = (v: bigint, decimals: number) => Number(v) / 10 ** decimals;
  * Values a position with fresh off-chain prices and, if HF < 1, picks the largest debt and the
  * largest collateral, repaying up to the 50% close factor (capped by keeper inventory).
  */
-export function evaluateAccount(protocol: ProtocolState, position: PositionState, prices: UsdPrices, inventory: Record<number, bigint> = {}): AccountEvaluation {
+export function evaluateAccount(
+  protocol: ProtocolState,
+  position: PositionState,
+  prices: UsdPrices,
+  inventory: Record<number, bigint> = {},
+): AccountEvaluation {
   const valued = valuePosition(protocol, position, prices);
   const collateralRows = valued.collateral.map((r) => ({ c: r.collateral, balance: r.balance, units: r.units, price: r.price, valueUsd: r.valueUsd }));
   const debtRows = valued.debts.map((d) => ({ m: d.market, amount: d.amount, price: d.price, valueUsd: d.valueUsd }));
@@ -148,20 +153,35 @@ export class Liquidator {
     const latest = await client.getBlockNumber();
     const from = this.store.get().cursor ?? BigInt(deployment.startBlock);
     if (from <= latest) {
-      const logs = await client.getContractEvents({ address: deployment.contracts.vaultManager, abi: vaultManagerAbi, eventName: 'Borrowed', fromBlock: from, toBlock: latest });
+      const logs = await client.getContractEvents({
+        address: deployment.contracts.vaultManager,
+        abi: vaultManagerAbi,
+        eventName: 'Borrowed',
+        fromBlock: from,
+        toBlock: latest,
+      });
       this.store.update((s) => {
-        s.accounts = mergeAccounts(s.accounts, logs.flatMap((l) => (l.args.account ? [l.args.account] : [])));
+        s.accounts = mergeAccounts(
+          s.accounts,
+          logs.flatMap((l) => (l.args.account ? [l.args.account] : [])),
+        );
         s.cursor = latest + 1n;
       });
     }
     return this.store.get().accounts;
   }
 
-  async evaluateAll(): Promise<{ protocol: ProtocolState; evaluations: AccountEvaluation[]; update: Awaited<ReturnType<Liquidator['freshPrices']>>['update'] }> {
+  async evaluateAll(): Promise<{
+    protocol: ProtocolState;
+    evaluations: AccountEvaluation[];
+    update: Awaited<ReturnType<Liquidator['freshPrices']>>['update'];
+  }> {
     const { client, deployment } = this.ctx.hub;
     const [accounts, protocol, { update, prices }] = await Promise.all([this.indexAccounts(), readProtocol(client, deployment), this.freshPrices()]);
     const inventory = await this.inventory(protocol);
-    const evaluations = await Promise.all(accounts.map(async (a) => evaluateAccount(protocol, await readPosition(client, deployment, protocol, a), prices, inventory)));
+    const evaluations = await Promise.all(
+      accounts.map(async (a) => evaluateAccount(protocol, await readPosition(client, deployment, protocol, a), prices, inventory)),
+    );
     this.lastEvaluations = evaluations;
     this.lastRun = Date.now();
     return { protocol, evaluations, update };
@@ -171,7 +191,13 @@ export class Liquidator {
     const wallet = this.ctx.hub.wallet;
     if (!wallet) return {};
     const entries = await Promise.all(
-      protocol.markets.map(async (m) => [m.id, await this.ctx.hub.client.readContract({ address: m.asset, abi: erc20Abi, functionName: 'balanceOf', args: [wallet.account.address] })] as const),
+      protocol.markets.map(
+        async (m) =>
+          [
+            m.id,
+            await this.ctx.hub.client.readContract({ address: m.asset, abi: erc20Abi, functionName: 'balanceOf', args: [wallet.account.address] }),
+          ] as const,
+      ),
     );
     return Object.fromEntries(entries);
   }
@@ -206,7 +232,15 @@ export class Liquidator {
       address: gateway,
       abi: keeperGatewayAbi,
       functionName: 'triggerLiquidation',
-      args: [e.account, BigInt(plan.marketId), plan.repayAmount, BigInt(plan.collateralId), plan.minSeize, '0x0000000000000000000000000000000000000000000000000000000000000000', updates],
+      args: [
+        e.account,
+        BigInt(plan.marketId),
+        plan.repayAmount,
+        BigInt(plan.collateralId),
+        plan.minSeize,
+        '0x0000000000000000000000000000000000000000000000000000000000000000',
+        updates,
+      ],
       value: fee,
     });
     if (dryRun) return { simulated: result, txHash: null };

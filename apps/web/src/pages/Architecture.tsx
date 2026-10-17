@@ -9,16 +9,72 @@ type Row = { name: string; role: string; description: string; location: string; 
 function contractRows(): Row[] {
   const c = HUB.deployment?.contracts;
   const rows: Row[] = [
-    { name: 'VaultManager.sol', role: 'Global state', description: 'Cross-chain positions, LTV limits, health factors, liquidations.', location: 'Mezo Hub', address: c?.vaultManager, network: HUB },
-    { name: 'PToken.sol (pMUSD)', role: 'ERC-4626 + MezodotPool', description: 'MUSD vault & lending pool: kinked rates, reserves, flash loans.', location: 'Mezo Hub', address: c?.pMUSD, network: HUB },
-    { name: 'PToken.sol (pMEZO)', role: 'ERC-4626 + MezodotPool', description: 'MEZO vault & lending pool.', location: 'Mezo Hub', address: c?.pMEZO, network: HUB },
-    { name: 'OracleRouter.sol', role: 'Prices', description: 'Pyth pull prices with staleness and confidence checks.', location: 'Mezo Hub', address: c?.oracleRouter, network: HUB },
-    { name: 'WormholeAdapter.sol', role: 'Messaging', description: 'Verifies spoke DEPOSIT VAAs, publishes RELEASE messages.', location: 'Mezo Hub', address: c?.wormholeAdapter, network: HUB },
-    { name: 'LeverageManager.sol', role: 'Leverage', description: 'One-transaction flash-loan loop and unwind.', location: 'Mezo Hub', address: c?.leverageManager, network: HUB },
-    { name: 'KeeperGateway.sol', role: 'Agent layer', description: 'Permissionless liquidations and relays; keeper KPI.', location: 'Mezo Hub', address: c?.keeperGateway, network: HUB },
+    {
+      name: 'VaultManager.sol',
+      role: 'Global state',
+      description: 'Cross-chain positions, LTV limits, health factors, liquidations.',
+      location: 'Mezo Hub',
+      address: c?.vaultManager,
+      network: HUB,
+    },
+    {
+      name: 'PToken.sol (pMUSD)',
+      role: 'ERC-4626 + MezodotPool',
+      description: 'MUSD vault & lending pool: kinked rates, reserves, flash loans.',
+      location: 'Mezo Hub',
+      address: c?.pMUSD,
+      network: HUB,
+    },
+    {
+      name: 'PToken.sol (pMEZO)',
+      role: 'ERC-4626 + MezodotPool',
+      description: 'MEZO vault & lending pool.',
+      location: 'Mezo Hub',
+      address: c?.pMEZO,
+      network: HUB,
+    },
+    {
+      name: 'OracleRouter.sol',
+      role: 'Prices',
+      description: 'Pyth pull prices with staleness and confidence checks.',
+      location: 'Mezo Hub',
+      address: c?.oracleRouter,
+      network: HUB,
+    },
+    {
+      name: 'WormholeAdapter.sol',
+      role: 'Messaging',
+      description: 'Verifies spoke DEPOSIT VAAs, publishes RELEASE messages.',
+      location: 'Mezo Hub',
+      address: c?.wormholeAdapter,
+      network: HUB,
+    },
+    {
+      name: 'LeverageManager.sol',
+      role: 'Leverage',
+      description: 'One-transaction flash-loan loop and unwind.',
+      location: 'Mezo Hub',
+      address: c?.leverageManager,
+      network: HUB,
+    },
+    {
+      name: 'KeeperGateway.sol',
+      role: 'Agent layer',
+      description: 'Permissionless liquidations and relays; keeper KPI.',
+      location: 'Mezo Hub',
+      address: c?.keeperGateway,
+      network: HUB,
+    },
   ];
   for (const s of SPOKES) {
-    rows.push({ name: 'SpokeGateway.sol', role: 'Collateral vault', description: 'Locks WETH/USDC, emits DEPOSIT, executes hub RELEASE.', location: s.label, address: s.deployment?.contracts.spokeGateway, network: s });
+    rows.push({
+      name: 'SpokeGateway.sol',
+      role: 'Collateral vault',
+      description: 'Locks WETH/USDC, emits DEPOSIT, executes hub RELEASE.',
+      location: s.label,
+      address: s.deployment?.contracts.spokeGateway,
+      network: s,
+    });
   }
   return rows;
 }
@@ -178,7 +234,9 @@ export function Architecture() {
                   <small>{c.role}</small>
                 </span>
                 <span className="contract-description">{c.description}</span>
-                <span className="contract-location">{c.address && c.network ? <AddressLink network={c.network} address={c.address} /> : `${c.location} · not deployed`}</span>
+                <span className="contract-location">
+                  {c.address && c.network ? <AddressLink network={c.network} address={c.address} /> : `${c.location} · not deployed`}
+                </span>
               </div>
             ))}
           </div>
@@ -189,12 +247,17 @@ export function Architecture() {
         <article className="panel arch-note">
           <span className="arch-note-id">01 / HUB</span>
           <h3>One place to account.</h3>
-          <p>MUSD and MEZO liquidity, debt and every position live on Mezo. VaultManager values all collateral with Pyth prices and enforces one health factor.</p>
+          <p>
+            MUSD and MEZO liquidity, debt and every position live on Mezo. VaultManager values all collateral with Pyth prices and enforces one health factor.
+          </p>
         </article>
         <article className="panel arch-note">
           <span className="arch-note-id">02 / SPOKE</span>
           <h3>Collateral stays put.</h3>
-          <p>Deposits lock first, then credit. Withdrawals debit the hub first, then release. Hub credit can never exceed tokens locked on the spoke — an invariant the tests fuzz.</p>
+          <p>
+            Deposits lock first, then credit. Withdrawals debit the hub first, then release. Hub credit can never exceed tokens locked on the spoke — an
+            invariant the tests fuzz.
+          </p>
         </article>
         <article className="panel arch-note">
           <span className="arch-note-id">03 / COMPOSABLE</span>

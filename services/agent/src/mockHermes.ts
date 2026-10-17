@@ -27,7 +27,10 @@ export class MockHermes {
     const entries = (Object.entries(this.bySymbol) as [PriceSymbol, Hex][]).filter(([, id]) => wanted.includes(id.toLowerCase().slice(2)));
     return {
       binary: { encoding: 'hex', data: entries.map(([s, id]) => encodeMockPythUpdate(id, toPythInt(this.prices[s]), 0n, -8, BigInt(publishTime)).slice(2)) },
-      parsed: entries.map(([s, id]) => ({ id: id.slice(2), price: { price: toPythInt(this.prices[s]).toString(), conf: '0', expo: -8, publish_time: publishTime } })),
+      parsed: entries.map(([s, id]) => ({
+        id: id.slice(2),
+        price: { price: toPythInt(this.prices[s]).toString(), conf: '0', expo: -8, publish_time: publishTime },
+      })),
     };
   }
 }

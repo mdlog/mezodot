@@ -1,11 +1,4 @@
-import {
-  NETWORKS,
-  getHubDeployment,
-  getSpokeDeployment,
-  type HubDeployment,
-  type NetworkName,
-  type SpokeDeployment,
-} from '@mezodot/sdk';
+import { NETWORKS, getHubDeployment, getSpokeDeployment, type HubDeployment, type NetworkName, type SpokeDeployment } from '@mezodot/sdk';
 import { createPublicClient, createWalletClient, http, type PublicClient, type WalletClient, type Account, type Chain, type Transport } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { AgentConfig } from './config';

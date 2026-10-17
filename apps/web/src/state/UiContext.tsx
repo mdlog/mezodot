@@ -4,8 +4,7 @@ import type { NetworkName } from '@mezodot/sdk';
 import { useHashRoute, type View } from '../hooks/useHashRoute';
 
 export type AmountModal =
-  | { type: 'supply' | 'withdraw' | 'borrow' | 'repay'; marketId: number; preset?: string }
-  | { type: 'post' | 'unpost'; collateralId: number; preset?: string };
+  { type: 'supply' | 'withdraw' | 'borrow' | 'repay'; marketId: number; preset?: string } | { type: 'post' | 'unpost'; collateralId: number; preset?: string };
 
 export type Toast = { message: string; tone: 'ok' | 'error' };
 

@@ -51,7 +51,17 @@ describe('MCP server', () => {
     await Promise.all([server.connect(a), client.connect(b)]);
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(['get_markets', 'get_position', 'get_risk_report', 'list_liquidatable', 'list_pending_messages', 'relay_message', 'simulate_borrow', 'simulate_loop', 'trigger_liquidation']);
+    expect(names).toEqual([
+      'get_markets',
+      'get_position',
+      'get_risk_report',
+      'list_liquidatable',
+      'list_pending_messages',
+      'relay_message',
+      'simulate_borrow',
+      'simulate_loop',
+      'trigger_liquidation',
+    ]);
     expect(tools.find((t) => t.name === 'trigger_liquidation')?.annotations?.readOnlyHint).toBe(false);
     expect(tools.find((t) => t.name === 'get_markets')?.annotations?.readOnlyHint).toBe(true);
 

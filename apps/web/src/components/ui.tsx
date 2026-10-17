@@ -87,7 +87,21 @@ export function SummaryStrip({ snapshot, time, icon: Icon }: { snapshot: ReactNo
   );
 }
 
-export function StatCard({ label, value, change, icon: Icon, accent = false, foot }: { label: string; value: string; change?: string; icon: LucideIcon; accent?: boolean; foot: string }) {
+export function StatCard({
+  label,
+  value,
+  change,
+  icon: Icon,
+  accent = false,
+  foot,
+}: {
+  label: string;
+  value: string;
+  change?: string;
+  icon: LucideIcon;
+  accent?: boolean;
+  foot: string;
+}) {
   return (
     <article className={`stat-card ${accent ? 'stat-card--accent' : ''}`}>
       <div className="stat-top">

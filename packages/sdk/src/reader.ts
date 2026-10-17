@@ -82,26 +82,71 @@ export async function readProtocol(client: PublicClient, hub: HubDeployment): Pr
     Array.from({ length: Number(marketCount) }, async (_, id): Promise<MarketState> => {
       const m = await client.readContract({ address: vm, abi: vaultManagerAbi, functionName: 'markets', args: [BigInt(id)] });
       const pool = m.pool;
-      const read = <F extends 'totalAssets' | 'totalBorrows' | 'totalReserves' | 'cash' | 'totalSupply' | 'exchangeRate' | 'borrowRatePerSecond' | 'supplyRatePerSecond' | 'supplyCap' | 'borrowCap'>(functionName: F) =>
-        client.readContract({ address: pool, abi: pTokenAbi, functionName }) as Promise<bigint>;
-      const [asset, shareDecimals, receiptSymbol, totalAssets, totalBorrows, totalReserves, cash, totalSupply, exchangeRate, borrowRatePerSecond, supplyRatePerSecond, supplyCap, borrowCap] =
-        await Promise.all([
-          client.readContract({ address: pool, abi: pTokenAbi, functionName: 'asset' }),
-          client.readContract({ address: pool, abi: pTokenAbi, functionName: 'decimals' }),
-          client.readContract({ address: pool, abi: pTokenAbi, functionName: 'symbol' }),
-          read('totalAssets'),
-          read('totalBorrows'),
-          read('totalReserves'),
-          read('cash'),
-          read('totalSupply'),
-          read('exchangeRate'),
-          read('borrowRatePerSecond'),
-          read('supplyRatePerSecond'),
-          read('supplyCap'),
-          read('borrowCap'),
-        ]);
+      const read = <
+        F extends
+          | 'totalAssets'
+          | 'totalBorrows'
+          | 'totalReserves'
+          | 'cash'
+          | 'totalSupply'
+          | 'exchangeRate'
+          | 'borrowRatePerSecond'
+          | 'supplyRatePerSecond'
+          | 'supplyCap'
+          | 'borrowCap',
+      >(
+        functionName: F,
+      ) => client.readContract({ address: pool, abi: pTokenAbi, functionName }) as Promise<bigint>;
+      const [
+        asset,
+        shareDecimals,
+        receiptSymbol,
+        totalAssets,
+        totalBorrows,
+        totalReserves,
+        cash,
+        totalSupply,
+        exchangeRate,
+        borrowRatePerSecond,
+        supplyRatePerSecond,
+        supplyCap,
+        borrowCap,
+      ] = await Promise.all([
+        client.readContract({ address: pool, abi: pTokenAbi, functionName: 'asset' }),
+        client.readContract({ address: pool, abi: pTokenAbi, functionName: 'decimals' }),
+        client.readContract({ address: pool, abi: pTokenAbi, functionName: 'symbol' }),
+        read('totalAssets'),
+        read('totalBorrows'),
+        read('totalReserves'),
+        read('cash'),
+        read('totalSupply'),
+        read('exchangeRate'),
+        read('borrowRatePerSecond'),
+        read('supplyRatePerSecond'),
+        read('supplyCap'),
+        read('borrowCap'),
+      ]);
       const symbol = await client.readContract({ address: asset, abi: erc20Abi, functionName: 'symbol' });
-      return { id, symbol, receiptSymbol, pool, asset, decimals: m.decimals, shareDecimals, priceKey: m.priceKey, totalAssets, totalBorrows, totalReserves, cash, totalSupply, exchangeRate, borrowRatePerSecond, supplyRatePerSecond, supplyCap, borrowCap };
+      return {
+        id,
+        symbol,
+        receiptSymbol,
+        pool,
+        asset,
+        decimals: m.decimals,
+        shareDecimals,
+        priceKey: m.priceKey,
+        totalAssets,
+        totalBorrows,
+        totalReserves,
+        cash,
+        totalSupply,
+        exchangeRate,
+        borrowRatePerSecond,
+        supplyRatePerSecond,
+        supplyCap,
+        borrowCap,
+      };
     }),
   );
 
@@ -113,9 +158,24 @@ export async function readProtocol(client: PublicClient, hub: HubDeployment): Pr
       ]);
       const priceSymbol = symbolForPriceKey(c.priceKey);
       const symbol = c.isRemote
-        ? (priceSymbol && REMOTE_SYMBOL[priceSymbol]) ?? 'REMOTE'
+        ? ((priceSymbol && REMOTE_SYMBOL[priceSymbol]) ?? 'REMOTE')
         : (markets.find((m) => m.pool.toLowerCase() === c.token.toLowerCase())?.receiptSymbol ?? 'pToken');
-      return { id, enabled: c.enabled, isRemote: c.isRemote, token: c.token, chainId: c.chainId, remoteToken: c.remoteToken, decimals: c.decimals, priceKey: c.priceKey, ltvBps: c.ltvBps, ltBps: c.ltBps, bonusBps: c.bonusBps, cap: c.cap, total, symbol };
+      return {
+        id,
+        enabled: c.enabled,
+        isRemote: c.isRemote,
+        token: c.token,
+        chainId: c.chainId,
+        remoteToken: c.remoteToken,
+        decimals: c.decimals,
+        priceKey: c.priceKey,
+        ltvBps: c.ltvBps,
+        ltBps: c.ltBps,
+        bonusBps: c.bonusBps,
+        cap: c.cap,
+        total,
+        symbol,
+      };
     }),
   );
 
@@ -123,7 +183,12 @@ export async function readProtocol(client: PublicClient, hub: HubDeployment): Pr
   await Promise.all(
     PRICE_SYMBOLS.map(async (s) => {
       try {
-        const [price, publishTime] = await client.readContract({ address: hub.contracts.oracleRouter, abi: oracleRouterAbi, functionName: 'getPriceUnsafe', args: [PRICE_KEYS[s]] });
+        const [price, publishTime] = await client.readContract({
+          address: hub.contracts.oracleRouter,
+          abi: oracleRouterAbi,
+          functionName: 'getPriceUnsafe',
+          args: [PRICE_KEYS[s]],
+        });
         prices[s] = { price, publishTime };
       } catch {
         // Feed never updated on-chain yet.

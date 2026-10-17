@@ -59,28 +59,63 @@ const setPrice = (prices: Record<string, number>) =>
 
 async function main() {
   await setPrice({ ETH: 3_200 });
-  const wethId = Number(await hubClient.readContract({ address: hub!.contracts.vaultManager, abi: vaultManagerAbi, functionName: 'remoteCollateralId', args: [10004, toBytes32(spoke!.tokens.WETH)] })) - 1;
+  const wethId =
+    Number(
+      await hubClient.readContract({
+        address: hub!.contracts.vaultManager,
+        abi: vaultManagerAbi,
+        functionName: 'remoteCollateralId',
+        args: [10004, toBytes32(spoke!.tokens.WETH)],
+      }),
+    ) - 1;
 
   // 1. Lock on the spoke.
   const gateway = spoke!.contracts.spokeGateway;
-  await spokeClient.waitForTransactionReceipt({ hash: await spokeWallet.writeContract({ address: spoke!.tokens.WETH, abi: erc20Abi, functionName: 'approve', args: [gateway, parseEther('1')] }) });
-  await spokeClient.waitForTransactionReceipt({ hash: await spokeWallet.writeContract({ address: gateway, abi: spokeGatewayAbi, functionName: 'deposit', args: [spoke!.tokens.WETH, parseEther('1')] }) });
+  await spokeClient.waitForTransactionReceipt({
+    hash: await spokeWallet.writeContract({ address: spoke!.tokens.WETH, abi: erc20Abi, functionName: 'approve', args: [gateway, parseEther('1')] }),
+  });
+  await spokeClient.waitForTransactionReceipt({
+    hash: await spokeWallet.writeContract({ address: gateway, abi: spokeGatewayAbi, functionName: 'deposit', args: [spoke!.tokens.WETH, parseEther('1')] }),
+  });
   log('user locked 1 WETH on the spoke');
-  const balanceBefore = await hubClient.readContract({ address: hub!.contracts.vaultManager, abi: vaultManagerAbi, functionName: 'collateralBalance', args: [user.address, BigInt(wethId)] });
+  const balanceBefore = await hubClient.readContract({
+    address: hub!.contracts.vaultManager,
+    abi: vaultManagerAbi,
+    functionName: 'collateralBalance',
+    args: [user.address, BigInt(wethId)],
+  });
   await until('hub credit', async () => {
-    const b = await hubClient.readContract({ address: hub!.contracts.vaultManager, abi: vaultManagerAbi, functionName: 'collateralBalance', args: [user.address, BigInt(wethId)] });
+    const b = await hubClient.readContract({
+      address: hub!.contracts.vaultManager,
+      abi: vaultManagerAbi,
+      functionName: 'collateralBalance',
+      args: [user.address, BigInt(wethId)],
+    });
     return b >= balanceBefore + parseEther('1') && b;
   });
   log('agent relayed DEPOSIT → hub credited 1 WETH');
 
   // 2. Borrow up to just below the limit at $3,200 (75% LTV), whatever the account already owes,
   //    so the script is repeatable on the same account.
-  const weth = await hubClient.readContract({ address: hub!.contracts.vaultManager, abi: vaultManagerAbi, functionName: 'collateralBalance', args: [user.address, BigInt(wethId)] });
+  const weth = await hubClient.readContract({
+    address: hub!.contracts.vaultManager,
+    abi: vaultManagerAbi,
+    functionName: 'collateralBalance',
+    args: [user.address, BigInt(wethId)],
+  });
   const owed = await hubClient.readContract({ address: hub!.contracts.pMUSD, abi: pTokenAbi, functionName: 'borrowBalanceView', args: [user.address] });
   const borrowAmount = (weth * 3_200n * 75n) / 100n - owed - parseUnits('100', 18);
   const update = await fetchPriceUpdate(DEVNET_HERMES, Object.values(hub!.priceFeeds));
   const fee = await hubClient.readContract({ address: hub!.contracts.oracleRouter, abi: oracleRouterAbi, functionName: 'updateFee', args: [update.updates] });
-  await hubClient.waitForTransactionReceipt({ hash: await hubWallet.writeContract({ address: hub!.contracts.vaultManager, abi: vaultManagerAbi, functionName: 'borrow', args: [0n, borrowAmount, update.updates], value: fee }) });
+  await hubClient.waitForTransactionReceipt({
+    hash: await hubWallet.writeContract({
+      address: hub!.contracts.vaultManager,
+      abi: vaultManagerAbi,
+      functionName: 'borrow',
+      args: [0n, borrowAmount, update.updates],
+      value: fee,
+    }),
+  });
   log(`user borrowed ${(Number(borrowAmount) / 1e18).toFixed(2)} MUSD (debt now ${(Number(owed + borrowAmount) / 1e18).toFixed(2)})`);
 
   // 3. Crash ETH.
@@ -91,10 +126,18 @@ async function main() {
   const keeperWethBefore = await spokeClient.readContract({ address: spoke!.tokens.WETH, abi: erc20Abi, functionName: 'balanceOf', args: [KEEPER] });
   const fromBlock = await hubClient.getBlockNumber();
   const liquidation = await until('liquidation', async () => {
-    const logs = await hubClient.getContractEvents({ address: hub!.contracts.vaultManager, abi: vaultManagerAbi, eventName: 'Liquidated', args: { account: user.address }, fromBlock });
+    const logs = await hubClient.getContractEvents({
+      address: hub!.contracts.vaultManager,
+      abi: vaultManagerAbi,
+      eventName: 'Liquidated',
+      args: { account: user.address },
+      fromBlock,
+    });
     return logs[0];
   });
-  log(`agent liquidated: repaid ${Number(liquidation.args.repaid) / 1e18} MUSD, seized ${Number(liquidation.args.seized) / 1e18} WETH (liquidator ${liquidation.args.liquidator})`);
+  log(
+    `agent liquidated: repaid ${Number(liquidation.args.repaid) / 1e18} MUSD, seized ${Number(liquidation.args.seized) / 1e18} WETH (liquidator ${liquidation.args.liquidator})`,
+  );
 
   // 5. Agent relays the RELEASE; keeper receives WETH on the spoke.
   const received = await until('release on spoke', async () => {
@@ -104,8 +147,15 @@ async function main() {
   log(`agent relayed RELEASE → keeper received ${Number(received) / 1e18} WETH on the spoke`);
   if (received !== liquidation.args.seized) throw new Error('Released amount does not match seized amount');
 
-  const snapshot = await hubClient.readContract({ address: hub!.contracts.vaultManager, abi: vaultManagerAbi, functionName: 'getRiskSnapshot', args: [user.address] });
-  log(`user health factor after liquidation: ${(Number(snapshot.healthFactor) / 1e18).toFixed(3)} (debt ${(Number(snapshot.debtValue) / 1e18).toFixed(2)} USD)`);
+  const snapshot = await hubClient.readContract({
+    address: hub!.contracts.vaultManager,
+    abi: vaultManagerAbi,
+    functionName: 'getRiskSnapshot',
+    args: [user.address],
+  });
+  log(
+    `user health factor after liquidation: ${(Number(snapshot.healthFactor) / 1e18).toFixed(3)} (debt ${(Number(snapshot.debtValue) / 1e18).toFixed(2)} USD)`,
+  );
   await setPrice({ ETH: 3_200 });
   console.log(`\n✓ devnet e2e passed in ${((Date.now() - started) / 1000).toFixed(1)}s`);
 }

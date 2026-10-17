@@ -1,12 +1,5 @@
 import { formatUnits, getAddress, isAddress, type Address } from 'viem';
-import {
-  perSecondToAnnual,
-  planLoop,
-  readPosition,
-  readProtocol,
-  symbolForPriceKey,
-  type ProtocolState,
-} from '@mezodot/sdk';
+import { perSecondToAnnual, planLoop, readPosition, readProtocol, symbolForPriceKey, type ProtocolState } from '@mezodot/sdk';
 import { evaluateAccount } from '../liquidator';
 import type { Services } from '../services';
 
@@ -75,7 +68,9 @@ export function createTools(s: Services) {
         collateral: position.collateral
           .filter((c) => c.balance > 0n)
           .map((c) => ({ ...describeCollaterals(p)[c.id], balance: formatUnits(c.balance, p.collaterals[c.id].isRemote ? p.collaterals[c.id].decimals : 24) })),
-        debts: position.debts.filter((d) => d.amount > 0n).map((d) => ({ market: p.markets[d.marketId].symbol, amount: formatUnits(d.amount, p.markets[d.marketId].decimals) })),
+        debts: position.debts
+          .filter((d) => d.amount > 0n)
+          .map((d) => ({ market: p.markets[d.marketId].symbol, amount: formatUnits(d.amount, p.markets[d.marketId].decimals) })),
         liquidation: evaluation.plan,
         pricesUsed: prices,
       };
@@ -130,7 +125,9 @@ export function createTools(s: Services) {
     async trigger_liquidation({ address, dry_run = true }: { address: string; dry_run?: boolean }) {
       const account = addr(address);
       const { protocol: p, evaluations, update } = await s.liquidator.evaluateAll();
-      const e = evaluations.find((x) => x.account.toLowerCase() === account.toLowerCase()) ?? evaluateAccount(p, await readPosition(ctx.hub.client, ctx.hub.deployment, p, account), (await s.liquidator.freshPrices()).prices);
+      const e =
+        evaluations.find((x) => x.account.toLowerCase() === account.toLowerCase()) ??
+        evaluateAccount(p, await readPosition(ctx.hub.client, ctx.hub.deployment, p, account), (await s.liquidator.freshPrices()).prices);
       if (!e.plan) return { executed: false, reason: 'Account is not liquidatable', healthFactor: e.healthFactor };
       const execute = !dry_run && ctx.config.mcpAllowWrite;
       if (!ctx.hub.wallet) return { executed: false, reason: 'No keeper key configured; returning plan only', plan: e.plan };

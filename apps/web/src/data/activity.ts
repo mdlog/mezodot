@@ -5,7 +5,8 @@ import { leverageManagerAbi, pTokenAbi, spokeGatewayAbi, vaultManagerAbi, type N
 import { HUB, SPOKES } from '../chain/env';
 import { QK, useHubClient, useProtocol, useSpokeClients } from './hooks';
 
-export type ActivityKind = 'Supply' | 'Withdraw' | 'Collateral in' | 'Collateral out' | 'Cross-chain' | 'Release' | 'Borrow' | 'Repay' | 'Loop' | 'Unwind' | 'Liquidation';
+export type ActivityKind =
+  'Supply' | 'Withdraw' | 'Collateral in' | 'Collateral out' | 'Cross-chain' | 'Release' | 'Borrow' | 'Repay' | 'Loop' | 'Unwind' | 'Liquidation';
 
 export type ActivityItem = {
   id: string;
@@ -43,8 +44,20 @@ async function hubActivity(client: PublicClient, protocol: ProtocolState, accoun
   const market = (id: bigint) => protocol.markets[Number(id)];
 
   const [poolDeposits, poolWithdraws, cIn, cOut, credited, releases, borrows, repays, loops, unwinds, liqs] = await Promise.all([
-    Promise.all(protocol.markets.map((m) => client.getContractEvents({ address: m.pool, abi: pTokenAbi, eventName: 'Deposit', args: { owner: account }, fromBlock }).then((l) => l.map((x) => ({ x, m }))))),
-    Promise.all(protocol.markets.map((m) => client.getContractEvents({ address: m.pool, abi: pTokenAbi, eventName: 'Withdraw', args: { owner: account }, fromBlock }).then((l) => l.map((x) => ({ x, m }))))),
+    Promise.all(
+      protocol.markets.map((m) =>
+        client
+          .getContractEvents({ address: m.pool, abi: pTokenAbi, eventName: 'Deposit', args: { owner: account }, fromBlock })
+          .then((l) => l.map((x) => ({ x, m }))),
+      ),
+    ),
+    Promise.all(
+      protocol.markets.map((m) =>
+        client
+          .getContractEvents({ address: m.pool, abi: pTokenAbi, eventName: 'Withdraw', args: { owner: account }, fromBlock })
+          .then((l) => l.map((x) => ({ x, m }))),
+      ),
+    ),
     client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'CollateralDeposited', args: { account }, fromBlock }),
     client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'CollateralWithdrawn', args: { account }, fromBlock }),
     client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'RemoteCredited', args: { account }, fromBlock }),
@@ -56,17 +69,127 @@ async function hubActivity(client: PublicClient, protocol: ProtocolState, accoun
     client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Liquidated', args: { account }, fromBlock }),
   ]);
 
-  for (const { x, m } of poolDeposits.flat()) push({ kind: 'Supply', asset: m.symbol, amount: x.args.assets!, decimals: m.decimals, detail: `Minted ${m.receiptSymbol}`, txHash: x.transactionHash, blockNumber: x.blockNumber, logIndex: x.logIndex });
-  for (const { x, m } of poolWithdraws.flat()) push({ kind: 'Withdraw', asset: m.symbol, amount: x.args.assets!, decimals: m.decimals, detail: `Redeemed ${m.receiptSymbol}`, txHash: x.transactionHash, blockNumber: x.blockNumber, logIndex: x.logIndex });
-  for (const x of cIn) push({ kind: 'Collateral in', asset: collat(x.args.id!).symbol, amount: x.args.amount!, decimals: 24, detail: 'Posted to VaultManager', txHash: x.transactionHash, blockNumber: x.blockNumber, logIndex: x.logIndex });
-  for (const x of cOut) push({ kind: 'Collateral out', asset: collat(x.args.id!).symbol, amount: x.args.amount!, decimals: 24, detail: 'Withdrawn from VaultManager', txHash: x.transactionHash, blockNumber: x.blockNumber, logIndex: x.logIndex });
-  for (const x of credited) push({ kind: 'Cross-chain', asset: collat(x.args.id!).symbol, amount: x.args.amount!, decimals: collat(x.args.id!).decimals, detail: `Spoke collateral credited (Wormhole chain ${collat(x.args.id!).chainId})`, txHash: x.transactionHash, blockNumber: x.blockNumber, logIndex: x.logIndex });
-  for (const x of releases) push({ kind: 'Release', asset: collat(x.args.id!).symbol, amount: x.args.amount!, decimals: collat(x.args.id!).decimals, detail: `RELEASE #${x.args.sequence} sent to spoke`, txHash: x.transactionHash, blockNumber: x.blockNumber, logIndex: x.logIndex });
-  for (const x of borrows) push({ kind: 'Borrow', asset: market(x.args.marketId!).symbol, amount: x.args.amount!, decimals: market(x.args.marketId!).decimals, detail: 'Borrowed from Mezo Hub', txHash: x.transactionHash, blockNumber: x.blockNumber, logIndex: x.logIndex });
-  for (const x of repays) push({ kind: 'Repay', asset: market(x.args.marketId!).symbol, amount: x.args.amount!, decimals: market(x.args.marketId!).decimals, detail: 'Debt repaid', txHash: x.transactionHash, blockNumber: x.blockNumber, logIndex: x.logIndex });
-  for (const x of loops) push({ kind: 'Loop', asset: 'MUSD', amount: x.args.principal!, decimals: 18, detail: `${Number(x.args.leverage!) / 1e18}× via flash loan · debt ${(Number(x.args.debt!) / 1e18).toFixed(2)} MUSD`, txHash: x.transactionHash, blockNumber: x.blockNumber, logIndex: x.logIndex });
-  for (const x of unwinds) push({ kind: 'Unwind', asset: 'MUSD', amount: x.args.out!, decimals: 18, detail: 'Loop closed, equity returned', txHash: x.transactionHash, blockNumber: x.blockNumber, logIndex: x.logIndex });
-  for (const x of liqs) push({ kind: 'Liquidation', asset: market(x.args.marketId!).symbol, amount: x.args.repaid!, decimals: market(x.args.marketId!).decimals, detail: `Liquidated by ${x.args.liquidator!.slice(0, 8)}…`, txHash: x.transactionHash, blockNumber: x.blockNumber, logIndex: x.logIndex });
+  for (const { x, m } of poolDeposits.flat())
+    push({
+      kind: 'Supply',
+      asset: m.symbol,
+      amount: x.args.assets!,
+      decimals: m.decimals,
+      detail: `Minted ${m.receiptSymbol}`,
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
+  for (const { x, m } of poolWithdraws.flat())
+    push({
+      kind: 'Withdraw',
+      asset: m.symbol,
+      amount: x.args.assets!,
+      decimals: m.decimals,
+      detail: `Redeemed ${m.receiptSymbol}`,
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
+  for (const x of cIn)
+    push({
+      kind: 'Collateral in',
+      asset: collat(x.args.id!).symbol,
+      amount: x.args.amount!,
+      decimals: 24,
+      detail: 'Posted to VaultManager',
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
+  for (const x of cOut)
+    push({
+      kind: 'Collateral out',
+      asset: collat(x.args.id!).symbol,
+      amount: x.args.amount!,
+      decimals: 24,
+      detail: 'Withdrawn from VaultManager',
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
+  for (const x of credited)
+    push({
+      kind: 'Cross-chain',
+      asset: collat(x.args.id!).symbol,
+      amount: x.args.amount!,
+      decimals: collat(x.args.id!).decimals,
+      detail: `Spoke collateral credited (Wormhole chain ${collat(x.args.id!).chainId})`,
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
+  for (const x of releases)
+    push({
+      kind: 'Release',
+      asset: collat(x.args.id!).symbol,
+      amount: x.args.amount!,
+      decimals: collat(x.args.id!).decimals,
+      detail: `RELEASE #${x.args.sequence} sent to spoke`,
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
+  for (const x of borrows)
+    push({
+      kind: 'Borrow',
+      asset: market(x.args.marketId!).symbol,
+      amount: x.args.amount!,
+      decimals: market(x.args.marketId!).decimals,
+      detail: 'Borrowed from Mezo Hub',
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
+  for (const x of repays)
+    push({
+      kind: 'Repay',
+      asset: market(x.args.marketId!).symbol,
+      amount: x.args.amount!,
+      decimals: market(x.args.marketId!).decimals,
+      detail: 'Debt repaid',
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
+  for (const x of loops)
+    push({
+      kind: 'Loop',
+      asset: 'MUSD',
+      amount: x.args.principal!,
+      decimals: 18,
+      detail: `${Number(x.args.leverage!) / 1e18}× via flash loan · debt ${(Number(x.args.debt!) / 1e18).toFixed(2)} MUSD`,
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
+  for (const x of unwinds)
+    push({
+      kind: 'Unwind',
+      asset: 'MUSD',
+      amount: x.args.out!,
+      decimals: 18,
+      detail: 'Loop closed, equity returned',
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
+  for (const x of liqs)
+    push({
+      kind: 'Liquidation',
+      asset: market(x.args.marketId!).symbol,
+      amount: x.args.repaid!,
+      decimals: market(x.args.marketId!).decimals,
+      detail: `Liquidated by ${x.args.liquidator!.slice(0, 8)}…`,
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
 
   await withTimestamps(client, HUB.name, items);
   return items;
@@ -74,10 +197,27 @@ async function hubActivity(client: PublicClient, protocol: ProtocolState, accoun
 
 async function spokeActivity(client: PublicClient, spoke: (typeof SPOKES)[number], account: Address): Promise<ActivityItem[]> {
   if (!spoke.deployment) return [];
-  const logs = await client.getContractEvents({ address: spoke.deployment.contracts.spokeGateway, abi: spokeGatewayAbi, eventName: 'Deposited', args: { account }, fromBlock: BigInt(spoke.deployment.startBlock) });
+  const logs = await client.getContractEvents({
+    address: spoke.deployment.contracts.spokeGateway,
+    abi: spokeGatewayAbi,
+    eventName: 'Deposited',
+    args: { account },
+    fromBlock: BigInt(spoke.deployment.startBlock),
+  });
   const items: ActivityItem[] = logs.map((x) => {
     const symbol = x.args.token!.toLowerCase() === spoke.deployment!.tokens.WETH.toLowerCase() ? 'WETH' : 'USDC';
-    return { id: `${x.transactionHash}-${x.logIndex}`, kind: 'Cross-chain', network: spoke.name, asset: symbol, amount: x.args.amount!, decimals: symbol === 'WETH' ? 18 : 6, detail: `Locked on ${spoke.label} · DEPOSIT #${x.args.sequence}`, txHash: x.transactionHash, blockNumber: x.blockNumber, timestamp: null };
+    return {
+      id: `${x.transactionHash}-${x.logIndex}`,
+      kind: 'Cross-chain',
+      network: spoke.name,
+      asset: symbol,
+      amount: x.args.amount!,
+      decimals: symbol === 'WETH' ? 18 : 6,
+      detail: `Locked on ${spoke.label} · DEPOSIT #${x.args.sequence}`,
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      timestamp: null,
+    };
   });
   await withTimestamps(client, spoke.name, items);
   return items;
