@@ -1,186 +1,180 @@
-import { ArrowRight, Clock3, Coins, LockKeyhole, MoreHorizontal, Plus, TrendingUp } from 'lucide-react';
-import { PageTitle, SummaryStrip } from '../components/ui';
-import { LP_DEPOSIT, MARKETS, PRICES } from '../data/mock';
-import { accrueInterest, marketStats } from '../lib/engine';
-import { fmt, money, pct } from '../lib/format';
-import { sharesForAssets } from '../lib/protocol';
-import { useApp } from '../state/AppContext';
-
-const ACCRUAL_DAYS = 30;
+import { ArrowRight, Coins, LockKeyhole, Plus, TrendingUp } from 'lucide-react';
+import { useAccount } from 'wagmi';
+import { perSecondToAnnual, pTokenUnits } from '@mezodot/sdk';
+import { AddressLink, NotDeployed, PageTitle, SummaryStrip } from '../components/ui';
+import { HUB, HUB_DEPLOYED } from '../chain/env';
+import { usePrices, useProtocol, useValuedPosition, useWalletBalances } from '../data/hooks';
+import { compactUsd, fmt, fmtApy, money, pct, units } from '../lib/format';
+import { useUi } from '../state/UiContext';
 
 export function Markets() {
-  const { state, summary, go, openAmount, showToast, run } = useApp();
-  const { rates, previousRates, account } = state;
-  const rateChange = (rates.pMUSD / previousRates.pMUSD - 1) * 100;
+  const { openModal, go } = useUi();
+  const { isConnected } = useAccount();
+  const protocol = useProtocol().data;
+  const prices = usePrices().data?.prices;
+  const balances = useWalletBalances().data;
+  const { position } = useValuedPosition();
+  const musd = protocol?.markets.find((m) => m.symbol === 'MUSD');
 
   return (
     <>
       <PageTitle
         eyebrow="LIQUIDITY / 01"
         title="Markets & vaults"
-        subtitle="Supply MUSD or MEZO. Receive an interest-bearing pToken whose exchange rate grows with simulated borrower interest."
+        subtitle="Supply MUSD or MEZO and receive pMUSD / pMEZO — ERC-4626 shares whose exchange rate grows with borrower interest. Post them as collateral and they keep earning."
         right={
-          <button className="button button--dark" onClick={() => openAmount('supply', 'MUSD')}>
-            <Plus size={15} /> Supply assets
-          </button>
+          musd && (
+            <button className="button button--dark" onClick={() => openModal({ type: 'supply', marketId: musd.id })}>
+              <Plus size={15} /> Supply MUSD
+            </button>
+          )
         }
       />
       <SummaryStrip
         snapshot={
           <>
-            ERC-4626 STYLE VAULTS <i>/</i> COMPOSABLE RECEIPTS
+            ERC-4626 VAULTS <i>/</i> COMPOSABLE RECEIPTS
           </>
         }
-        time="Mezo Hub"
+        time={HUB.label}
         icon={LockKeyhole}
       />
+      {!HUB_DEPLOYED && <NotDeployed />}
 
-      <div className="vault-banner">
-        <div className="vault-emblem">
-          <Coins size={23} />
+      {musd && (
+        <div className="vault-banner">
+          <div className="vault-emblem">
+            <Coins size={23} />
+          </div>
+          <div>
+            <span className="overline">YIELD RECEIPT TOKENS</span>
+            <h2>Your deposit earns its way forward.</h2>
+            <p>Interest paid by borrowers raises totalAssets; every pToken share redeems for more underlying. pTokens are standard ERC-20s usable across Mezo DeFi.</p>
+          </div>
+          <div className="vault-rate">
+            <span>pMUSD / MUSD</span>
+            <strong>{fmt(units(musd.exchangeRate, musd.decimals), 6)}</strong>
+            <small>
+              <TrendingUp size={12} /> {fmtApy(perSecondToAnnual(musd.supplyRatePerSecond))} supply APY
+            </small>
+          </div>
         </div>
-        <div>
-          <span className="overline">YIELD RECEIPT TOKENS</span>
-          <h2>Your deposit earns its way forward.</h2>
-          <p>pMUSD and pMEZO represent vault shares. As borrower interest accrues, each share redeems for more of its underlying asset.</p>
-          <button className="button button--outline accrue-button" onClick={() => run((s) => accrueInterest(s, ACCRUAL_DAYS))}>
-            <Clock3 size={14} /> Simulate {ACCRUAL_DAYS} days of interest
-          </button>
-        </div>
-        <div className="vault-rate">
-          <span>pMUSD / MUSD</span>
-          <strong>{rates.pMUSD.toFixed(4)}</strong>
-          <small>
-            <TrendingUp size={12} /> +{rateChange.toFixed(3)}% vs previous
-          </small>
-        </div>
-      </div>
+      )}
 
       <div className="market-card-grid">
-        {MARKETS.map((market) => {
-          const stats = marketStats(market.symbol);
-          const rate = rates[market.receipt];
-          const shares = account.earnShares[market.receipt];
-          const deposited = summary.earn[market.symbol];
+        {(protocol?.markets ?? []).map((m) => {
+          const util = m.totalAssets > 0n ? Number(m.totalBorrows) / Number(m.totalAssets) : 0;
+          const price = prices?.[m.symbol as 'MUSD' | 'MEZO'] ?? 0;
+          const shares = balances?.hub.tokens[m.receiptSymbol] ?? 0n;
+          const collateral = protocol!.collaterals.find((c) => c.token.toLowerCase() === m.pool.toLowerCase());
+          const posted = collateral ? (position?.collateral.find((c) => c.id === collateral.id)?.balance ?? 0n) : 0n;
           return (
-            <article className="market-detail-card" key={market.symbol}>
+            <article className="market-detail-card" key={m.id}>
               <div className="market-detail-top">
                 <div className="asset-cell">
-                  <span className="asset-icon asset-icon--large" style={{ background: market.color }}>
-                    {market.icon}
+                  <span className="asset-icon asset-icon--large" style={{ background: m.symbol === 'MUSD' ? '#5b52ce' : '#b97b48' }}>
+                    M
                   </span>
                   <span>
-                    <b>{market.symbol}</b>
+                    <b>{m.symbol}</b>
                     <small>
-                      {market.name} · {market.kind} · {money(PRICES[market.symbol], 2)}
+                      {m.receiptSymbol} · {money(price, price < 1 ? 5 : 2)} · <AddressLink network={HUB} address={m.pool} />
                     </small>
                   </span>
                 </div>
-                <button
-                  className="icon-button"
-                  aria-label={`More about ${market.symbol}`}
-                  onClick={() => showToast(`${market.symbol} market data is simulated`)}
-                >
-                  <MoreHorizontal size={18} />
-                </button>
               </div>
               <div className="market-yield-row">
                 <div>
                   <span>SUPPLY APY</span>
-                  <strong className="apy-value">
-                    {stats.totalSupplyApy.toFixed(2)}
-                    <small>%</small>
-                  </strong>
-                  <em className="apy-split">
-                    {stats.baseSupplyApy.toFixed(2)}% interest + {market.rewardApr.toFixed(2)}% MEZO
-                  </em>
+                  <strong className="apy-value">{fmtApy(perSecondToAnnual(m.supplyRatePerSecond))}</strong>
                 </div>
                 <div>
                   <span>BORROW APY</span>
-                  <strong>
-                    {market.borrowApy.toFixed(2)}
-                    <small>%</small>
-                  </strong>
+                  <strong>{fmtApy(perSecondToAnnual(m.borrowRatePerSecond))}</strong>
                 </div>
                 <div>
                   <span>UTILIZATION</span>
-                  <strong>
-                    {fmt(stats.utilization * 100, 0)}
-                    <small>%</small>
-                  </strong>
+                  <strong>{pct(util)}</strong>
                 </div>
               </div>
               <div className="rate-box">
                 <span>
-                  <span className="receipt-glyph">p</span> {market.receipt} exchange rate
+                  <span className="receipt-glyph">p</span> {m.receiptSymbol} exchange rate
                 </span>
                 <b>
-                  1 {market.receipt} <i>=</i> {rate.toFixed(4)} {market.symbol}
+                  1 {m.receiptSymbol} <i>=</i> {fmt(units(m.exchangeRate, m.decimals), 6)} {m.symbol}
                 </b>
-                <small>Previous {previousRates[market.receipt].toFixed(4)} · rate increases as interest accrues</small>
+                <small>Rises as borrower interest accrues · reserves {fmt(units(m.totalReserves, m.decimals), 2)} {m.symbol}</small>
               </div>
               <div className="pool-row">
-                <span>Pool size</span>
-                <b>
-                  {fmt(market.supplied)} {market.symbol}
-                </b>
+                <span>Supplied</span>
+                <b>{compactUsd(units(m.totalAssets, m.decimals) * price)}</b>
                 <span>Available liquidity</span>
                 <b>
-                  {fmt(stats.liquidity)} {market.symbol}
+                  {fmt(units(m.cash, m.decimals), 0)} {m.symbol}
                 </b>
               </div>
               <div className="user-deposit">
-                <span>Your supplied balance</span>
+                <span>In wallet</span>
                 <strong>
-                  {fmt(deposited, 2)} <small>{market.symbol}</small>
+                  {fmt(pTokenUnits(m, shares), 4)} <small>{m.symbol} as {m.receiptSymbol}</small>
                 </strong>
-                <span>Receipt shares held</span>
+                <span>Posted as collateral</span>
                 <strong>
-                  {fmt(shares, 2)} <small>{market.receipt}</small>
+                  {fmt(pTokenUnits(m, posted), 4)} <small>{m.symbol}</small>
                 </strong>
               </div>
               <div className="market-actions">
-                <button className="button button--dark" onClick={() => openAmount('supply', market.symbol)}>
-                  Supply {market.symbol}
+                <button className="button button--dark" onClick={() => openModal({ type: 'supply', marketId: m.id })}>
+                  Supply
                 </button>
-                <button className="button button--light" onClick={() => openAmount('withdraw', market.symbol)} disabled={shares <= 0}>
+                <button className="button button--light" onClick={() => openModal({ type: 'withdraw', marketId: m.id })} disabled={isConnected && shares === 0n}>
                   Withdraw
                 </button>
               </div>
+              {collateral && (
+                <div className="market-actions">
+                  <button className="button button--outline" onClick={() => openModal({ type: 'post', collateralId: collateral.id })} disabled={isConnected && shares === 0n}>
+                    Use as collateral · LTV {collateral.ltvBps / 100}%
+                  </button>
+                  <button className="button button--light" onClick={() => openModal({ type: 'unpost', collateralId: collateral.id })} disabled={isConnected && posted === 0n}>
+                    Remove
+                  </button>
+                </div>
+              )}
             </article>
           );
         })}
       </div>
 
-      <div className="two-col-note">
-        <div className="panel explainer-panel">
-          <span className="overline">COMPOSABLE BY DESIGN</span>
-          <h3>One receipt. More places to work.</h3>
-          <p>
-            pMUSD and pMEZO follow an ERC-4626-style share model in this product concept. Base interest ({pct(marketStats('MUSD').baseSupplyApy / 100, 2)} for
-            MUSD) never exceeds what borrowers pay: borrow APY × utilization × (1 − 10% reserve factor).
-          </p>
-          <button className="text-link" onClick={() => go('architecture')}>
-            Explore protocol architecture <ArrowRight size={13} />
-          </button>
-        </div>
-        <div className="panel example-panel">
-          <span className="overline">LP SCENARIO / SIMULATED</span>
-          <div className="example-math">
-            <span>
-              {fmt(LP_DEPOSIT)} <small>MUSD supplied</small>
-            </span>
-            <ArrowRight size={20} />
-            <span>
-              {fmt(sharesForAssets(LP_DEPOSIT, rates.pMUSD), 2)} <small>pMUSD received</small>
-            </span>
+      {musd && (
+        <div className="two-col-note">
+          <div className="panel explainer-panel">
+            <span className="overline">HOW RATES WORK</span>
+            <h3>Suppliers earn what borrowers pay.</h3>
+            <p>Kinked curve per pool (MUSD: 6% at 80% utilization, steep above). Supply APY = borrow APY × utilization × (1 − 10% reserve factor). Flash-loan fees (0.09%) go to reserves.</p>
+            <button className="text-link" onClick={() => go('architecture')}>
+              Protocol architecture <ArrowRight size={13} />
+            </button>
           </div>
-          <p>At the current demo exchange rate of {rates.pMUSD.toFixed(4)} MUSD per pMUSD. Future share value accrues as modeled interest is added.</p>
-          <button className="button button--outline" onClick={() => openAmount('supply', 'MUSD', String(LP_DEPOSIT))}>
-            Preview this supply <ArrowRight size={13} />
-          </button>
+          <div className="panel example-panel">
+            <span className="overline">PRD FLOW A · PASSIVE LP</span>
+            <div className="example-math">
+              <span>
+                10,000 <small>MUSD supplied</small>
+              </span>
+              <ArrowRight size={20} />
+              <span>
+                {fmt(10_000 / units(musd.exchangeRate, musd.decimals), 2)} <small>pMUSD received</small>
+              </span>
+            </div>
+            <p>At the live exchange rate of {fmt(units(musd.exchangeRate, musd.decimals), 6)} MUSD per pMUSD.</p>
+            <button className="button button--outline" onClick={() => openModal({ type: 'supply', marketId: musd.id, preset: '10000' })}>
+              Supply 10,000 MUSD <ArrowRight size={13} />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </>
   );
 }

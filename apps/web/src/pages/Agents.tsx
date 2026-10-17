@@ -1,27 +1,55 @@
-import { Activity as ActivityIcon, BarChart3, Code2, Copy, Crosshair, Radio, RefreshCw, Shield, ShieldAlert, TriangleAlert } from 'lucide-react';
-import { useState } from 'react';
-import { DisclaimerBar, PageTitle, PanelTitle, Sparkline, SummaryStrip } from '../components/ui';
-import { AGENTS, RISK_METRICS } from '../data/mock';
-import { agentDryRun } from '../lib/engine';
-import { useApp } from '../state/AppContext';
+import { Activity as ActivityIcon, BarChart3, Code2, Copy, Radio, Shield, TriangleAlert } from 'lucide-react';
+import { AddressLink, InfoBar, NotDeployed, PageTitle, PanelTitle, SummaryStrip } from '../components/ui';
+import { AGENT_URL, HUB, HUB_DEPLOYED } from '../chain/env';
+import { useAgent, useProtocol } from '../data/hooks';
+import { fmtHealth, money, pct, timeAgo } from '../lib/format';
+import { useUi } from '../state/UiContext';
 
-const pad2 = (n: number) => String(n).padStart(2, '0');
+type AssetRisk = {
+  symbol: string;
+  collateral: string | null;
+  points: number;
+  lastPrice: number;
+  vol30dAnnual: number;
+  vol90dAnnual: number;
+  maxDrawdown90d: number;
+  var99_1h: number;
+  var99_24h: number;
+  currentLtv: number | null;
+  recommendedLtv: number | null;
+  verdict: 'ok' | 'tighten' | 'n/a';
+};
+type StrategyRisk = { collateral: string; description: string; windows: number; oosSharpeAnnual: number; deflatedSharpe: number; modalLeverage: number; robust: boolean };
+type RiskReport = { generatedAt: number; dsrThreshold: number; assets: AssetRisk[]; strategies: StrategyRisk[]; loopCarry: { leverage: number; netApy: number }[]; notes: string[] };
+type Health = { ok: boolean; modules: string[]; keeper: string | null; liquidatorLastRun: number | null };
+type Evaluation = { account: string; healthFactor: number; debtUsd: number; plan: { profitUsd: number } | null };
+
+const TOOLS = [
+  ['get_markets', 'Pools, APYs, exchange rates, collateral params'],
+  ['get_position', 'Cross-chain position valued with fresh Pyth prices'],
+  ['get_risk_report', 'Volatility, VaR, LTV advice, walk-forward + DSR'],
+  ['simulate_loop', 'Preview a 1-click loop'],
+  ['simulate_borrow', 'Health factor after a borrow'],
+  ['list_liquidatable', 'Accounts below HF 1 with liquidation plan'],
+  ['list_pending_messages', 'Wormhole messages awaiting delivery'],
+  ['trigger_liquidation', 'KeeperGateway.triggerLiquidation (dry-run default)'],
+  ['relay_message', 'Deliver a VAA (dry-run default)'],
+] as const;
 
 export function Agents() {
-  const { go, run, showToast } = useApp();
-  const [dryRun, setDryRun] = useState(false);
+  const { go, showToast } = useUi();
+  const protocol = useProtocol().data;
+  const health = useAgent<Health>('/health', 15_000).data;
+  const report = useAgent<RiskReport>('/risk', 60_000).data;
+  const watch = useAgent<Evaluation[]>('/liquidatable', 15_000).data ?? [];
+  const mcpUrl = `${AGENT_URL}/mcp`;
 
-  const copyEndpoint = () => {
-    // Clipboard is unavailable on insecure origins (e.g. LAN http); fall back to showing the value.
-    if (!navigator.clipboard) return showToast(`Demo endpoint: ${AGENTS.endpoint}`);
+  const copy = () => {
+    if (!navigator.clipboard) return showToast(mcpUrl);
     navigator.clipboard
-      .writeText(AGENTS.endpoint)
-      .then(() => showToast('Demo endpoint copied'))
-      .catch(() => showToast(`Demo endpoint: ${AGENTS.endpoint}`));
-  };
-
-  const dry = (kind: 'Liquidation' | 'Rebalance') => {
-    if (run((s) => agentDryRun(s, kind))) setDryRun(true);
+      .writeText(mcpUrl)
+      .then(() => showToast('MCP endpoint copied'))
+      .catch(() => showToast(mcpUrl));
   };
 
   return (
@@ -29,164 +57,146 @@ export function Agents() {
       <PageTitle
         eyebrow="INTELLIGENCE / 05"
         title="Risk, with receipts."
-        subtitle="A transparent view into the quantitative signals and keeper flows designed to support autonomous protocol operations."
+        subtitle="Permissionless keepers liquidate and relay through KeeperGateway. The Mezodot agent publishes quantitative risk — volatility, VaR-based LTV advice and Deflated Sharpe walk-forward tests — over HTTP and MCP."
         right={
-          <button className="button button--outline" onClick={copyEndpoint}>
-            <Copy size={14} /> Copy demo endpoint
+          <button className="button button--outline" onClick={copy}>
+            <Copy size={14} /> Copy MCP endpoint
           </button>
         }
       />
       <SummaryStrip
         snapshot={
           <>
-            MCP / KEEPER GATEWAY <i>/</i> LOCAL DEMO TELEMETRY
+            KEEPERGATEWAY <i>/</i> MCP · STREAMABLE HTTP + STDIO
           </>
         }
-        time="No agent connected"
+        time={health ? `Agent online · ${health.modules.join(', ')}` : 'Agent offline'}
         icon={Radio}
       />
+      {!HUB_DEPLOYED && <NotDeployed />}
 
       <div className="agent-status-band">
         <div className="agent-status-symbol">
           <Radio size={21} />
         </div>
         <div>
-          <span className="overline">KEEPER GATEWAY STATUS</span>
-          <h2>{dryRun ? 'Dry-run completed.' : 'Monitoring the model.'}</h2>
-          <p>KeeperGateway endpoints are shown for product design context. There is no live automation behind this preview.</p>
+          <span className="overline">KEEPER NETWORK</span>
+          <h2>{protocol ? `${protocol.keeperCount} keeper${protocol.keeperCount === 1n ? '' : 's'} on KeeperGateway` : 'Reading KeeperGateway…'}</h2>
+          <p>
+            Anyone can liquidate unhealthy positions (earning the liquidation bonus) or deliver Wormhole messages. {HUB.deployment && <AddressLink network={HUB} address={HUB.deployment.contracts.keeperGateway} />}
+          </p>
         </div>
         <span className="monitor-pill">
-          <i /> {AGENTS.keeperStatus.toUpperCase()} · DEMO
+          <i /> {health ? (health.keeper ? 'AGENT KEEPER ACTIVE' : 'AGENT READ-ONLY') : 'AGENT OFFLINE'}
         </span>
       </div>
 
-      <div className="risk-metrics-grid">
-        <article className="risk-metric-card">
-          <div className="metric-card-head">
-            <span>Deflated Sharpe Ratio</span>
-            <Shield size={16} />
-          </div>
-          <strong>{RISK_METRICS.dsr.toFixed(2)}</strong>
-          <div className="meter-track">
-            <i style={{ width: `${RISK_METRICS.dsr * 100}%` }} />
-          </div>
-          <small>DSR &gt; {RISK_METRICS.dsrThreshold.toFixed(2)} threshold · simulated</small>
-        </article>
-        <article className="risk-metric-card">
-          <div className="metric-card-head">
-            <span>Walk-forward Sharpe</span>
-            <ActivityIcon size={16} />
-          </div>
-          <strong>{RISK_METRICS.walkForwardSharpe.toFixed(2)}</strong>
-          <div className="metric-chart">
-            <Sparkline values={RISK_METRICS.walkForwardSeries} />
-          </div>
-          <small>Out-of-sample · {RISK_METRICS.walkForwardWindows} rolling windows</small>
-        </article>
-        <article className="risk-metric-card">
-          <div className="metric-card-head">
-            <span>30-day volatility</span>
-            <BarChart3 size={16} />
-          </div>
-          <strong>
-            {RISK_METRICS.volatility30d.toFixed(2)}
-            <small>%</small>
-          </strong>
-          <div className="metric-scale">
-            {Array.from({ length: 12 }, (_, i) => (
-              <i key={i} />
+      {report ? (
+        <>
+          <div className="risk-metrics-grid">
+            {report.assets.map((a) => (
+              <article className="risk-metric-card" key={a.symbol}>
+                <div className="metric-card-head">
+                  <span>
+                    {a.symbol}
+                    {a.collateral ? ` · ${a.collateral}` : ''}
+                  </span>
+                  {a.verdict === 'tighten' ? <TriangleAlert size={16} /> : <Shield size={16} />}
+                </div>
+                <strong>
+                  {pct(a.vol90dAnnual)}
+                  <small> vol</small>
+                </strong>
+                <small>
+                  1h VaR99 {pct(a.var99_1h, 2)} · 90d max DD {pct(a.maxDrawdown90d)}
+                </small>
+                <small className={a.verdict === 'tighten' ? 'tone-warn' : ''}>
+                  LTV {a.currentLtv === null ? '—' : pct(a.currentLtv, 0)} vs advised ≤ {a.recommendedLtv === null ? '—' : pct(a.recommendedLtv)} · {a.verdict.toUpperCase()}
+                </small>
+              </article>
             ))}
           </div>
-          <small>MUSD pool · annualized proxy</small>
-        </article>
-        <article className="risk-metric-card">
-          <div className="metric-card-head">
-            <span>Max drawdown</span>
-            <TriangleAlert size={16} />
-          </div>
-          <strong>
-            {RISK_METRICS.maxDrawdown.toFixed(1)}
-            <small>%</small>
-          </strong>
-          <div className="drawdown-line">
-            <span />
-          </div>
-          <small>Backtest window · 90 days</small>
-        </article>
-      </div>
 
-      <div className="agent-lower-grid">
-        <section className="panel agent-activity-panel">
-          <PanelTitle label="Keeper activity" meta="Last 24h · sample data" />
-          <div className="keeper-counts">
-            <div>
-              <span className="keeper-icon keeper-purple">
-                <ShieldAlert size={15} />
-              </span>
-              <span>
-                <b>Liquidations monitored</b>
-                <small>Risk threshold checks</small>
-              </span>
-              <strong>{pad2(AGENTS.liquidations24h)}</strong>
-            </div>
-            <div>
-              <span className="keeper-icon keeper-green">
-                <RefreshCw size={15} />
-              </span>
-              <span>
-                <b>Spoke rebalances</b>
-                <small>Liquidity routing proposals</small>
-              </span>
-              <strong>{pad2(AGENTS.rebalances24h)}</strong>
-            </div>
-            <div>
-              <span className="keeper-icon keeper-amber">
-                <Crosshair size={15} />
-              </span>
-              <span>
-                <b>Risk alerts</b>
-                <small>Model-generated flags</small>
-              </span>
-              <strong>{pad2(AGENTS.riskAlerts24h)}</strong>
-            </div>
-          </div>
-          <div className="agent-actions">
-            <button className="button button--outline" onClick={() => dry('Liquidation')}>
-              <ShieldAlert size={14} /> Dry-run liquidation
-            </button>
-            <button className="button button--light" onClick={() => dry('Rebalance')}>
-              <RefreshCw size={14} /> Dry-run rebalance
-            </button>
-          </div>
-        </section>
-        <section className="panel endpoint-panel">
-          <PanelTitle label="MCP endpoint surface" meta="Concept · not deployed" />
-          <div className="endpoint-url">
-            <span>
-              <Code2 size={14} />
-            </span>
-            <code>{AGENTS.endpoint}</code>
-            <button onClick={copyEndpoint} aria-label="Copy demo endpoint">
-              <Copy size={14} />
-            </button>
-          </div>
-          <div className="endpoint-list">
-            {AGENTS.methods.map(({ method, contract }) => (
-              <div key={method}>
-                <span className="method-dot" />
-                <code>{method}()</code>
-                <small>{contract}</small>
-                <span className="endpoint-state">SPEC</span>
+          <div className="agent-lower-grid">
+            <section className="panel agent-activity-panel">
+              <PanelTitle label="Walk-forward leverage tests" meta={`Deflated Sharpe ≥ ${report.dsrThreshold} = robust`} />
+              <div className="keeper-counts">
+                {report.strategies.map((s) => (
+                  <div key={s.collateral}>
+                    <span className={`keeper-icon ${s.robust ? 'keeper-green' : 'keeper-amber'}`}>
+                      <ActivityIcon size={15} />
+                    </span>
+                    <span>
+                      <b>
+                        {s.collateral} collateral · modal {s.modalLeverage}×
+                      </b>
+                      <small>
+                        OOS Sharpe {s.oosSharpeAnnual.toFixed(2)} · {s.windows} windows · DSR {s.deflatedSharpe.toFixed(3)}
+                      </small>
+                    </span>
+                    <strong className={s.robust ? 'positive-text' : 'tone-warn'}>{s.robust ? 'ROBUST' : 'OVERFIT?'}</strong>
+                  </div>
+                ))}
               </div>
-            ))}
+              <p className="endpoint-disclaimer">
+                Hourly prices, 90 days. Updated {timeAgo(report.generatedAt)}. {report.notes.join(' ')}
+              </p>
+            </section>
+            <section className="panel endpoint-panel">
+              <PanelTitle label="Liquidation watchlist" meta="HF < 1.2, fresh prices" />
+              <div className="endpoint-list">
+                {watch.length === 0 && <p className="muted-note">No accounts near liquidation.</p>}
+                {watch.slice(0, 6).map((e) => (
+                  <div key={e.account}>
+                    <span className="method-dot" />
+                    <code>{e.account.slice(0, 10)}…</code>
+                    <small>
+                      HF {fmtHealth(e.healthFactor)} · debt {money(e.debtUsd)}
+                    </small>
+                    <span className="endpoint-state">{e.plan ? `+${money(e.plan.profitUsd, 2)}` : 'WATCH'}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
           </div>
-          <p className="endpoint-disclaimer">Methods are architectural references only. This preview exposes no callable keeper API.</p>
-        </section>
-      </div>
+        </>
+      ) : (
+        <div className="panel empty-state empty-state--panel">
+          <BarChart3 size={23} />
+          <b>Risk report unavailable</b>
+          <span>
+            Start the agent (<code>pnpm --filter @mezodot/agent start</code>) — it serves the report at <code>{AGENT_URL}/risk</code>.
+          </span>
+        </div>
+      )}
 
-      <DisclaimerBar title="Quantitative metrics are illustrative, not investment advice." action="Agent architecture" onAction={() => go('architecture')}>
-        DSR, walk-forward analysis, volatility, and drawdown are static examples—not a live oracle or validated strategy.
-      </DisclaimerBar>
+      <section className="panel endpoint-panel">
+        <PanelTitle label="MCP server" meta="For AI agents (Claude, custom keepers)" />
+        <div className="endpoint-url">
+          <span>
+            <Code2 size={14} />
+          </span>
+          <code>{mcpUrl}</code>
+          <button onClick={copy} aria-label="Copy MCP endpoint">
+            <Copy size={14} />
+          </button>
+        </div>
+        <div className="endpoint-list">
+          {TOOLS.map(([name, desc]) => (
+            <div key={name}>
+              <span className="method-dot" />
+              <code>{name}()</code>
+              <small>{desc}</small>
+              <span className="endpoint-state">{name.startsWith('trigger') || name.startsWith('relay') ? 'WRITE' : 'READ'}</span>
+            </div>
+          ))}
+        </div>
+        <p className="endpoint-disclaimer">Write tools dry-run unless the agent runs with MCP_ALLOW_WRITE=true. Local stdio: pnpm --filter @mezodot/agent mcp.</p>
+      </section>
+
+      <InfoBar title="Quantitative metrics are research tools, not investment advice." action="Architecture" onAction={() => go('architecture')}>
+        DSR (Bailey & López de Prado) discounts the best backtest for the six leverage levels tried.
+      </InfoBar>
     </>
   );
 }

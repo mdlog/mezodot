@@ -1,32 +1,53 @@
 import { useState } from 'react';
 import { ArrowRight, ArrowUpRight, LockKeyhole, Network, Shield, ShieldAlert } from 'lucide-react';
-import { AmountInput, PageTitle, PanelTitle, SummaryStrip } from '../components/ui';
-import { RISK_PARAMS, marketOf } from '../data/mock';
-import { borrow as borrowAction, marketStats } from '../lib/engine';
-import { fmt, fmtHealth, money, pct } from '../lib/format';
-import { healthFactor, healthStatus, parseAmount } from '../lib/protocol';
-import { useApp } from '../state/AppContext';
+import { useAccount } from 'wagmi';
+import { parseUnits } from 'viem';
+import { healthStatus, perSecondToAnnual, symbolForPriceKey } from '@mezodot/sdk';
+import { AmountInput, ConnectGate, NotDeployed, PageTitle, PanelTitle, SummaryStrip } from '../components/ui';
+import { HUB_DEPLOYED, spokeByWormholeChain } from '../chain/env';
+import { borrowSteps } from '../chain/actions';
+import { useTx } from '../chain/tx';
+import { useHubClient, useValuedPosition } from '../data/hooks';
+import { fmt, fmtApy, fmtHealth, money, pct, units } from '../lib/format';
+import { useUi } from '../state/UiContext';
 
-/** LTV meter spans 0..90% so both the max-borrow and liquidation marks are visible. */
 const METER_SPAN = 0.9;
 
 export function Borrow() {
-  const { state, summary, go, openAmount, showToast } = useApp();
-  const { account } = state;
-  const [amount, setAmount] = useState('1000');
-  const parsed = parseAmount(amount);
-  const status = healthStatus(summary.healthFactor);
-  const posted = summary.remoteByChain.filter((c) => c.usd > 0);
-  // Live preview of the position after the entered borrow.
-  const previewHf = parsed ? healthFactor(summary.collateral, summary.debt + parsed, RISK_PARAMS.liquidationThreshold) : summary.healthFactor;
+  const { go, openModal } = useUi();
+  const { address, isConnected } = useAccount();
+  const hub = useHubClient();
+  const { run, busy } = useTx();
+  const { valued, protocol, prices, position } = useValuedPosition();
+  const [marketId, setMarketId] = useState(0);
+  const [amount, setAmount] = useState('');
 
-  const review = () => {
-    if (parsed === null) return showToast('Enter a valid MUSD amount to borrow', 'error');
-    if (parsed > summary.available) return showToast(`Amount exceeds available capacity (${money(summary.available, 2)})`, 'error');
-    // Validate with the engine too (pool liquidity etc.) before opening the confirmation.
-    const check = borrowAction(state, parsed);
-    if (!check.ok) return showToast(check.error, 'error');
-    openAmount('borrow', 'MUSD', String(parsed));
+  const market = protocol?.markets[marketId];
+  const priceSymbol = market ? symbolForPriceKey(market.priceKey) : undefined;
+  const price = priceSymbol ? (prices?.[priceSymbol] ?? 0) : 0;
+  const availableUnits = valued && price > 0 ? Math.max(0, valued.availableUsd / price) : 0;
+  const liquidity = market ? units(market.cash, market.decimals) : 0;
+  const maxUnits = Math.min(availableUnits, liquidity) * 0.999;
+
+  let parsed: bigint | null = null;
+  try {
+    parsed = market && amount ? parseUnits(amount, market.decimals) : null;
+  } catch {
+    parsed = null;
+  }
+  const value = parsed && market ? units(parsed, market.decimals) : 0;
+  const invalid = !parsed || value <= 0 || value > maxUnits;
+  const hfAfter = valued ? (valued.debtUsd + value * price > 0 ? valued.adjustedCollateralUsd / (valued.debtUsd + value * price) : Infinity) : Infinity;
+  const status = healthStatus(valued?.healthFactor ?? Infinity);
+  const debt = market ? (position?.debts.find((d) => d.marketId === market.id)?.amount ?? 0n) : 0n;
+  const ltvMarks = protocol?.collaterals.filter((c) => valued?.collateral.find((v) => v.collateral.id === c.id && v.balance > 0n)) ?? [];
+  const maxLtv = valued && valued.collateralUsd > 0 ? valued.borrowLimitUsd / valued.collateralUsd : 0.75;
+  const liqLtv = valued && valued.collateralUsd > 0 ? valued.adjustedCollateralUsd / valued.collateralUsd : 0.8;
+
+  const borrow = async () => {
+    if (!address || !hub || !market || !parsed) return;
+    const result = await run(`Borrow ${market.symbol}`, borrowSteps({ account: address, hub }, market, parsed));
+    if (result.ok) setAmount('');
   };
 
   return (
@@ -34,95 +55,101 @@ export function Borrow() {
       <PageTitle
         eyebrow="CAPITAL / 03"
         title="Borrow against your position."
-        subtitle="Use remote collateral to open a MUSD position on the Mezo Hub. Your principal stays on its source chain."
+        subtitle="Borrow MUSD or MEZO on the Mezo Hub against pTokens and collateral locked on Base or Ethereum. One health factor across every chain."
         right={
-          <span className="availability-pill">
-            <i /> MUSD liquidity available · {money(marketStats('MUSD').liquidity)}
-          </span>
+          market && (
+            <span className="availability-pill">
+              <i /> {market.symbol} liquidity · {fmt(liquidity, 0)}
+            </span>
+          )
         }
       />
       <SummaryStrip
         snapshot={
           <>
-            VAULTMANAGER <i>/</i> CROSS-CHAIN LTV STATE
+            VAULTMANAGER <i>/</i> CROSS-CHAIN HEALTH FACTOR
           </>
         }
-        time="Risk parameters simulated"
+        time="Prices: Pyth (posted with each borrow)"
         icon={Shield}
       />
+      {!HUB_DEPLOYED && <NotDeployed />}
 
       <div className="borrow-layout">
         <section className="panel borrow-form-panel">
-          <PanelTitle label="Borrow MUSD" meta="Mezo Hub · MUSD Pool" />
+          <PanelTitle label="Borrow" meta="Mezo Hub · MezodotPool" />
           <div className="borrow-from">
             <div>
               <span className="field-label">COLLATERAL POSITION</span>
-              {posted.length === 0 && <p className="muted-note">No collateral posted yet.</p>}
-              {posted.map((c) => (
-                <div className="collateral-detail" key={c.chain.id}>
-                  <span className="coin-large" style={{ background: c.chain.color }}>
-                    {c.chain.short}
+              {(valued?.collateral.filter((c) => c.balance > 0n) ?? []).map((c) => (
+                <div className="collateral-detail" key={c.collateral.id}>
+                  <span className="coin-large" style={{ background: c.collateral.isRemote ? '#edf0fa' : '#efeefb' }}>
+                    {c.collateral.isRemote ? 'Ξ' : 'p'}
                   </span>
                   <span>
-                    <b>{[c.wETH > 0 && `${fmt(c.wETH, 2)} wETH`, c.USDC > 0 && `${fmt(c.USDC)} USDC`].filter(Boolean).join(' + ')}</b>
+                    <b>
+                      {fmt(c.units, 4)} {c.collateral.symbol}
+                    </b>
                     <small>
-                      {c.chain.name} Spoke · {money(c.usd)}
+                      {c.collateral.isRemote ? `${spokeByWormholeChain(c.collateral.chainId)?.label ?? 'Spoke'} · ` : 'Mezo Hub · '}
+                      {money(c.valueUsd)} · LTV {c.collateral.ltvBps / 100}%
                     </small>
                   </span>
                 </div>
               ))}
-              {summary.loopCollateral > 0 && (
-                <div className="collateral-detail">
-                  <span className="coin-large coin-loop">p</span>
-                  <span>
-                    <b>{money(summary.loopCollateral)} pMUSD</b>
-                    <small>Loop position · Mezo Hub</small>
-                  </span>
-                </div>
-              )}
+              {valued && valued.collateralUsd === 0 && <p className="muted-note">No collateral posted yet.</p>}
             </div>
             <button className="text-link" onClick={() => go('crosschain')}>
-              Manage collateral <ArrowRight size={13} />
+              Add collateral <ArrowRight size={13} />
             </button>
           </div>
-          <label className="field-label" htmlFor="borrow-amount">
-            BORROW AMOUNT <span>Available up to {money(summary.available, 2)}</span>
-          </label>
-          <AmountInput
-            id="borrow-amount"
-            large
-            value={amount}
-            onChange={setAmount}
-            unit="MUSD"
-            onMax={() => setAmount(String(Math.floor(summary.available * 100) / 100))}
-          />
-          <div className="amount-estimate">
-            Wallet balance <b>{money(account.wallet.MUSD, 2)} MUSD</b>
+
+          <div className="leverage-selector market-switch">
+            {(protocol?.markets ?? []).map((m) => (
+              <button key={m.id} className={m.id === marketId ? 'is-selected' : ''} onClick={() => setMarketId(m.id)} aria-pressed={m.id === marketId}>
+                {m.symbol}
+              </button>
+            ))}
           </div>
+          <label className="field-label" htmlFor="borrow-amount">
+            BORROW AMOUNT{' '}
+            <span>
+              Available ≈ {fmt(maxUnits, 2)} {market?.symbol}
+            </span>
+          </label>
+          <AmountInput id="borrow-amount" large value={amount} onChange={setAmount} unit={market?.symbol ?? ''} onMax={() => setAmount(maxUnits.toFixed(4))} />
           <div className="borrow-preview">
             <div>
               <span>Borrow APY</span>
-              <b>{marketOf('MUSD').borrowApy.toFixed(2)}%</b>
+              <b>{market ? fmtApy(perSecondToAnnual(market.borrowRatePerSecond)) : '—'}</b>
             </div>
             <div>
-              <span>Health after borrow</span>
-              <b className={`tone-${healthStatus(previewHf).tone}`}>{fmtHealth(previewHf)}</b>
+              <span>Health after</span>
+              <b className={`tone-${healthStatus(hfAfter).tone}`}>{fmtHealth(hfAfter)}</b>
             </div>
             <div>
-              <span>wETH liquidation price</span>
-              <b>{summary.liquidationPriceWeth === null ? '—' : summary.liquidationPriceWeth === 0 ? 'None' : `${money(summary.liquidationPriceWeth, 2)}`}</b>
+              <span>Your debt</span>
+              <b>
+                {market ? fmt(units(debt, market.decimals), 2) : '—'} {market?.symbol}
+              </b>
             </div>
           </div>
-          <div className="borrow-actions">
-            <button className="button button--dark button--wide" onClick={review}>
-              Review borrow <ArrowRight size={15} />
-            </button>
-            <button className="button button--light button--wide" onClick={() => openAmount('repay', 'MUSD')} disabled={account.debtMUSD <= 0}>
-              Repay debt <ArrowUpRight size={14} />
-            </button>
-          </div>
+          <ConnectGate connected={isConnected}>
+            <div className="borrow-actions">
+              <button className="button button--dark button--wide" onClick={borrow} disabled={invalid || Boolean(busy)}>
+                {busy ?? (
+                  <>
+                    Borrow {market?.symbol} <ArrowRight size={15} />
+                  </>
+                )}
+              </button>
+              <button className="button button--light button--wide" onClick={() => market && openModal({ type: 'repay', marketId: market.id })} disabled={debt === 0n}>
+                Repay <ArrowUpRight size={14} />
+              </button>
+            </div>
+          </ConnectGate>
           <div className="small-disclosure">
-            <LockKeyhole size={14} /> Simulated preview only · no signing or transaction broadcast
+            <LockKeyhole size={14} /> Fresh Pyth prices are posted with the borrow; the oracle fee is paid in BTC.
           </div>
         </section>
 
@@ -130,7 +157,7 @@ export function Borrow() {
           <section className="panel risk-panel">
             <PanelTitle
               label="Position health"
-              meta="VaultManager state"
+              meta="Fresh-price valuation"
               action={
                 <span className={`health-badge tone-${status.tone}`}>
                   <i /> {status.label}
@@ -140,42 +167,45 @@ export function Borrow() {
             <div className="health-overview">
               <div className="health-number">
                 <span>HEALTH FACTOR</span>
-                <strong className={`tone-${status.tone}`}>{fmtHealth(summary.healthFactor)}</strong>
-                <em>Liquidation risk increases below 1.00×</em>
+                <strong className={`tone-${status.tone}`}>{fmtHealth(valued?.healthFactor ?? Infinity)}</strong>
+                <em>Liquidatable below 1.00×</em>
               </div>
               <div className="health-gauge">
                 <div className="gauge-inner">
-                  <b>{pct(summary.ltv)}</b>
+                  <b>{pct(valued?.ltv ?? 0)}</b>
                   <small>CURRENT LTV</small>
                 </div>
-                <div className="gauge-needle" style={{ transform: `rotate(${-125 + Math.min(100, summary.ltv * 100) * 2.5}deg)` }} />
+                <div className="gauge-needle" style={{ transform: `rotate(${-125 + Math.min(100, (valued?.ltv ?? 0) * 100) * 2.5}deg)` }} />
               </div>
             </div>
             <div className="risk-meter">
               <div>
                 <span>Current LTV</span>
-                <b>{pct(summary.ltv)}</b>
+                <b>{pct(valued?.ltv ?? 0)}</b>
               </div>
               <div className="meter-track meter-track--marked">
-                <i style={{ width: `${Math.min(100, (summary.ltv / METER_SPAN) * 100)}%` }} />
-                <span className="meter-mark" style={{ left: `${(RISK_PARAMS.maxLtv / METER_SPAN) * 100}%` }} />
-                <span className="meter-mark meter-mark--danger" style={{ left: `${(RISK_PARAMS.liquidationThreshold / METER_SPAN) * 100}%` }} />
+                <i style={{ width: `${Math.min(100, ((valued?.ltv ?? 0) / METER_SPAN) * 100)}%` }} />
+                <span className="meter-mark" style={{ left: `${(maxLtv / METER_SPAN) * 100}%` }} />
+                <span className="meter-mark meter-mark--danger" style={{ left: `${(liqLtv / METER_SPAN) * 100}%` }} />
               </div>
               <div className="meter-labels">
                 <span>0%</span>
-                <span>{pct(RISK_PARAMS.maxLtv, 0)} max borrow</span>
-                <span>{pct(RISK_PARAMS.liquidationThreshold, 0)} liquidation</span>
+                <span>{pct(maxLtv, 0)} max borrow</span>
+                <span>{pct(liqLtv, 0)} liquidation</span>
               </div>
             </div>
             <div className="risk-math">
               <span>
-                Collateral value <b>{money(summary.collateral)}</b>
+                Collateral value <b>{money(valued?.collateralUsd ?? 0)}</b>
               </span>
               <span>
-                Outstanding debt <b>{money(summary.debt)}</b>
+                Borrow limit <b>{money(valued?.borrowLimitUsd ?? 0)}</b>
               </span>
               <span>
-                Available capacity <b className="positive-text">{money(summary.available)}</b>
+                Outstanding debt <b>{money(valued?.debtUsd ?? 0)}</b>
+              </span>
+              <span>
+                Available <b className="positive-text">{money(valued?.availableUsd ?? 0)}</b>
               </span>
             </div>
           </section>
@@ -186,8 +216,7 @@ export function Borrow() {
             <div>
               <b>One risk view, multiple chains.</b>
               <p>
-                VaultManager aggregates Spoke collateral and the loop position, enforces LTV limits, and computes one health factor at the Mezo Hub. Figures
-                here are local demo values.
+                VaultManager sums every collateral — pTokens on Mezo and WETH/USDC on spokes — weighted by its LTV and liquidation threshold. {ltvMarks.length > 1 ? 'Limits shown are the blended thresholds of your collateral mix.' : ''}
               </p>
             </div>
           </div>
@@ -197,7 +226,7 @@ export function Borrow() {
             </span>
             <span>
               <b>How hub accounting works</b>
-              <small>Explore the cross-chain state model</small>
+              <small>Contracts and message flow</small>
             </span>
             <ArrowRight size={15} />
           </button>

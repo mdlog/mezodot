@@ -1,26 +1,35 @@
 import { ArrowRight, ArrowUpRight, Clock3, GitBranch, Layers3, Radio, RefreshCw, Waves, Zap } from 'lucide-react';
-import { ActivityRow, DisclaimerBar, PageTitle, PanelTitle, StatCard, SummaryStrip } from '../components/ui';
-import { MARKETS, PRICES, PROTOCOL, marketOf } from '../data/mock';
-import { marketStats, protocolKpis } from '../lib/engine';
-import { compactUsd, fmt, fmtHealth, money, pct } from '../lib/format';
-import { healthStatus } from '../lib/protocol';
-import { useApp } from '../state/AppContext';
+import { useAccount } from 'wagmi';
+import { healthStatus, perSecondToAnnual } from '@mezodot/sdk';
+import { EventIcon, InfoBar, NotDeployed, PageTitle, PanelTitle, StatCard, SummaryStrip, TxLink } from '../components/ui';
+import { HUB, HUB_DEPLOYED, SPOKES } from '../chain/env';
+import { useActivity } from '../data/activity';
+import { computeTvl, useAgent, useLoopStats, usePrices, useProtocol, useValuedPosition } from '../data/hooks';
+import { compactUsd, fmt, fmtApy, fmtHealth, money, pct, timeAgo, units } from '../lib/format';
+import { useUi } from '../state/UiContext';
 import { HealthBar } from './shared';
 
+type Stats = { crossChainBorrowRatio: number | null; borrowers: number };
+
 export function Dashboard() {
-  const { state, summary, go, setSelectedActivity } = useApp();
-  const { account, rates } = state;
-  const kpis = protocolKpis();
-  const musd = marketStats('MUSD');
-  const status = healthStatus(summary.healthFactor);
-  const postedChains = summary.remoteByChain.filter((c) => c.usd > 0);
+  const { go } = useUi();
+  const { isConnected } = useAccount();
+  const protocol = useProtocol().data;
+  const prices = usePrices().data;
+  const loops = useLoopStats().data;
+  const stats = useAgent<Stats>('/stats').data;
+  const { valued } = useValuedPosition();
+  const activity = useActivity().data ?? [];
+
+  const tvl = protocol && prices ? computeTvl(protocol, prices.prices) : null;
+  const status = valued ? healthStatus(valued.healthFactor) : null;
 
   return (
     <>
       <PageTitle
         eyebrow="PROTOCOL OVERVIEW"
         title="Capital, in motion."
-        subtitle="A market dashboard for productive MUSD and MEZO across the Mezo Hub and connected Spokes."
+        subtitle="An omnichain money market for MUSD and MEZO: ERC-4626 yield, cross-chain collateral via Wormhole, and 1-click loops on the Mezo Hub."
         right={
           <button className="button button--dark" onClick={() => go('loop')}>
             <Zap size={15} /> Open loop desk <ArrowRight size={14} />
@@ -30,36 +39,24 @@ export function Dashboard() {
       <SummaryStrip
         snapshot={
           <>
-            <span className="live-dot" /> {PROTOCOL.network} <i>/</i> {PROTOCOL.snapshot}
+            <span className="live-dot" /> {HUB.label} <i>/</i> {protocol ? `Block ${fmt(Number(protocol.blockNumber))}` : 'connecting…'}
           </>
         }
-        time={state.elapsedDays > 0 ? `+${state.elapsedDays} simulated days` : 'Demo snapshot'}
+        time={prices ? `Pyth prices ${timeAgo(prices.publishTime * 1000)}` : 'Loading prices'}
         icon={Clock3}
       />
 
+      {!HUB_DEPLOYED && <NotDeployed />}
+
       <div className="stats-grid">
-        <StatCard
-          label="Total value locked"
-          value={compactUsd(kpis.tvl)}
-          change={`${PROTOCOL.tvlDailyChange.toFixed(2)}%`}
-          icon={Layers3}
-          foot="MUSD + MEZO pools + Spoke collateral"
-        />
-        <StatCard
-          label="Looping volume"
-          value={compactUsd(PROTOCOL.loopVolume)}
-          change={`${PROTOCOL.loopVolumeChange.toFixed(2)}%`}
-          icon={RefreshCw}
-          foot="Lifetime · simulated"
-          accent
-        />
-        <StatCard label="Keeper agents" value={String(PROTOCOL.activeAgents)} icon={Radio} foot="Demo network participants" />
+        <StatCard label="Total value locked" value={tvl === null ? '—' : compactUsd(tvl)} icon={Layers3} foot="Hub pools + collateral on spokes" />
+        <StatCard label="Looping volume" value={loops ? compactUsd(units(loops.volume, 18)) : '—'} icon={RefreshCw} foot={loops ? `${loops.loops} loops via LeverageManager` : 'LeverageManager events'} accent />
+        <StatCard label="Keeper agents" value={protocol ? String(protocol.keeperCount) : '—'} icon={Radio} foot="Unique addresses on KeeperGateway" />
         <StatCard
           label="Cross-chain borrow"
-          value={pct(kpis.crossChainRatio)}
-          change={`${PROTOCOL.crossChainChange.toFixed(2)}%`}
+          value={stats?.crossChainBorrowRatio != null ? pct(stats.crossChainBorrowRatio) : '—'}
           icon={GitBranch}
-          foot="MUSD borrow backed by Spoke collateral"
+          foot={stats ? `Debt backed by spoke collateral · ${stats.borrowers} borrowers` : 'Needs the Mezodot agent'}
         />
       </div>
 
@@ -74,12 +71,12 @@ export function Dashboard() {
               <br />
               <em>More surface area.</em>
             </h2>
-            <p>Turn a single MUSD deposit into a leveraged yield position. Simulate the flash-loan loop before you commit.</p>
+            <p>Turn a single MUSD deposit into a leveraged pMUSD position with an atomic flash-loan loop — one transaction instead of six.</p>
             <button className="button button--dark" onClick={() => go('loop')}>
               Configure a loop <ArrowRight size={14} />
             </button>
           </div>
-          <div className="loop-visual" aria-label="Simulation: 1,000 MUSD at 3 times exposure">
+          <div className="loop-visual" aria-label="1,000 MUSD at 3 times exposure">
             <div className="loop-ring loop-ring--outer">
               <div className="loop-ring loop-ring--inner">
                 <div className="loop-core">
@@ -99,11 +96,10 @@ export function Dashboard() {
               <br />
               ROUTE
             </div>
-            <span className="loop-visual-mark">SIM / 03</span>
           </div>
           <div className="feature-card-foot">
             <span>
-              <i className="small-dot" /> Illustrative 3× position
+              <i className="small-dot" /> PRD flow C: 1,000 MUSD × 3
             </span>
             <span>
               pMUSD / MUSD <ArrowUpRight size={13} />
@@ -116,26 +112,26 @@ export function Dashboard() {
             <span className="overline">
               <Waves size={13} /> SPOKE GATEWAY <b>·</b> 02
             </span>
-            <span className="route-id">ROUTE / ARB—MEZO</span>
+            <span className="route-id">{SPOKES.map((s) => s.label).join(' · ')}</span>
           </div>
           <h2>
             Keep your collateral
             <br />
             where it <em>belongs.</em>
           </h2>
-          <p>Post wETH on Arbitrum. Borrow MUSD at the Mezo Hub. No principal bridge in this simulated flow.</p>
+          <p>Lock WETH or USDC on a spoke chain, borrow MUSD on Mezo. Only a guardian-signed Wormhole message crosses — never your principal.</p>
           <div className="bridge-map">
             <div className="map-chain">
-              <span className="chain-disc chain-disc--arb">A</span>
+              <span className="chain-disc chain-disc--arb">{SPOKES[0]?.label[0] ?? 'S'}</span>
               <span>
-                <b>Arbitrum</b>
+                <b>{SPOKES.map((s) => s.label.split(' ')[0]).join(' / ')}</b>
                 <small>External collateral</small>
               </span>
             </div>
             <div className="map-route">
               <div className="route-dash" />
               <span>
-                <Waves size={13} /> WORMHOLE MESSAGE
+                <Waves size={13} /> WORMHOLE VAA
               </span>
               <div className="route-dash" />
             </div>
@@ -152,9 +148,9 @@ export function Dashboard() {
           </button>
           <div className="feature-card-foot">
             <span>
-              <span className="live-dot live-dot--muted" /> Remote collateral stays on source chain
+              <span className="live-dot live-dot--muted" /> Principal never leaves the source chain
             </span>
-            <span>FLOW / 02</span>
+            <span>FLOW / B</span>
           </div>
         </article>
       </div>
@@ -162,8 +158,8 @@ export function Dashboard() {
       <div className="dashboard-lower">
         <section className="panel market-panel">
           <PanelTitle
-            label="Markets at a glance"
-            meta="Supply / borrow"
+            label="Markets"
+            meta="Live from MezodotPool"
             action={
               <button className="text-link" onClick={() => go('markets')}>
                 All markets <ArrowRight size={13} />
@@ -178,134 +174,106 @@ export function Dashboard() {
                   <th>SUPPLY APY</th>
                   <th>BORROW APY</th>
                   <th>UTILIZATION</th>
-                  <th>TVL</th>
+                  <th>SUPPLIED</th>
                 </tr>
               </thead>
               <tbody>
-                {MARKETS.map((market) => {
-                  const stats = marketStats(market.symbol);
+                {(protocol?.markets ?? []).map((m) => {
+                  const util = m.totalAssets > 0n ? Number(m.totalBorrows) / Number(m.totalAssets) : 0;
+                  const price = prices?.prices[m.symbol as 'MUSD' | 'MEZO'] ?? 0;
                   return (
-                    <tr key={market.symbol} onClick={() => go('markets')} className="clickable-row">
+                    <tr key={m.id} onClick={() => go('markets')} className="clickable-row">
                       <td>
                         <div className="asset-cell">
-                          <span className="asset-icon" style={{ background: market.color }}>
-                            {market.icon}
+                          <span className="asset-icon" style={{ background: m.symbol === 'MUSD' ? '#5b52ce' : '#b97b48' }}>
+                            M
                           </span>
                           <span>
-                            <b>{market.symbol}</b>
-                            <small>{market.name}</small>
+                            <b>{m.symbol}</b>
+                            <small>{m.receiptSymbol}</small>
                           </span>
                         </div>
                       </td>
                       <td>
-                        <b className="apy-value">{stats.totalSupplyApy.toFixed(2)}%</b>
-                        <small className="table-subline">incl. {market.rewardApr.toFixed(1)}% rewards</small>
+                        <b className="apy-value">{fmtApy(perSecondToAnnual(m.supplyRatePerSecond))}</b>
                       </td>
-                      <td>{market.borrowApy.toFixed(2)}%</td>
+                      <td>{fmtApy(perSecondToAnnual(m.borrowRatePerSecond))}</td>
                       <td>
                         <div className="util-cell">
                           <span className="mini-progress">
-                            <i style={{ width: pct(stats.utilization) }} />
+                            <i style={{ width: pct(util) }} />
                           </span>
-                          <span>{pct(stats.utilization, 0)}</span>
+                          <span>{pct(util, 0)}</span>
                         </div>
                       </td>
-                      <td>{compactUsd(stats.suppliedUsd)}</td>
+                      <td>{compactUsd(units(m.totalAssets, m.decimals) * price)}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
-          <div className="table-caption">
-            <span>
-              <i className="tiny-square" /> Utilization rate
-            </span>
-            <span>
-              All metrics simulated <ArrowUpRight size={12} />
-            </span>
-          </div>
         </section>
 
         <section className="panel position-panel">
-          <PanelTitle label="Your position" meta={`Demo account · ${PROTOCOL.demoAddress}`} />
-          <div className="position-value">
-            <div>
-              <span>NET ACCOUNT VALUE</span>
-              <strong>{money(summary.netValue)}</strong>
-            </div>
-            <span className="value-chip">Hub + Spoke collateral</span>
-          </div>
-          <div className="position-list">
-            <div>
-              <span className="position-token token-purple">p</span>
-              <span>
-                <b>pMUSD supplied</b>
-                <small>
-                  {fmt(account.earnShares.pMUSD, 2)} pMUSD · <span className="positive-text">{musd.totalSupplyApy.toFixed(2)}% APY</span>
-                </small>
-              </span>
-              <strong>{money(summary.earn.MUSD)}</strong>
-            </div>
-            {account.earnShares.pMEZO > 0 && (
-              <div>
-                <span className="position-token token-amber">p</span>
-                <span>
-                  <b>pMEZO supplied</b>
-                  <small>
-                    {fmt(account.earnShares.pMEZO, 2)} pMEZO · {fmt(summary.earn.MEZO, 2)} MEZO
-                  </small>
-                </span>
-                <strong>{money(summary.earn.MEZO * PRICES.MEZO)}</strong>
+          <PanelTitle label="Your position" meta={isConnected ? 'Valued with fresh Pyth prices' : 'Connect a wallet'} />
+          {valued ? (
+            <>
+              <div className="position-value">
+                <div>
+                  <span>NET COLLATERAL − DEBT</span>
+                  <strong>{money(valued.collateralUsd - valued.debtUsd)}</strong>
+                </div>
+                <span className="value-chip">Borrow limit {money(valued.borrowLimitUsd)}</span>
               </div>
-            )}
-            {account.loop.shares > 0 && (
-              <div>
-                <span className="position-token token-purple">{fmt(summary.loopCollateral / Math.max(summary.loopEquity, 1), 1)}×</span>
-                <span>
-                  <b>Looped pMUSD position</b>
-                  <small>
-                    {money(summary.loopCollateral)} gross · {money(account.loop.debt)} loop debt
-                  </small>
-                </span>
-                <strong>{money(summary.loopEquity)}</strong>
+              <div className="position-list">
+                {valued.collateral
+                  .filter((c) => c.balance > 0n)
+                  .map((c) => (
+                    <div key={c.collateral.id}>
+                      <span className={`position-token ${c.collateral.isRemote ? 'token-blue' : 'token-purple'}`}>{c.collateral.isRemote ? '↗' : 'p'}</span>
+                      <span>
+                        <b>{c.collateral.symbol} collateral</b>
+                        <small>
+                          {fmt(c.units, 4)} · {c.collateral.isRemote ? `spoke chain ${c.collateral.chainId}` : 'Mezo Hub'}
+                        </small>
+                      </span>
+                      <strong>{money(c.valueUsd)}</strong>
+                    </div>
+                  ))}
+                {valued.debts
+                  .filter((d) => d.amount > 0n)
+                  .map((d) => (
+                    <div key={d.market.id}>
+                      <span className="position-token token-amber">↓</span>
+                      <span>
+                        <b>{d.market.symbol} borrowed</b>
+                        <small>{fmtApy(perSecondToAnnual(d.market.borrowRatePerSecond))} borrow APY</small>
+                      </span>
+                      <strong className="debt-value">−{money(d.valueUsd)}</strong>
+                    </div>
+                  ))}
+                {valued.collateralUsd === 0 && valued.debtUsd === 0 && <p className="muted-note">No collateral or debt yet.</p>}
               </div>
-            )}
-            {postedChains.map((c) => (
-              <div key={c.chain.id}>
-                <span className="position-token token-blue">{c.chain.short}</span>
-                <span>
-                  <b>{c.chain.name} collateral</b>
-                  <small>{[c.wETH > 0 && `${fmt(c.wETH, 2)} wETH`, c.USDC > 0 && `${fmt(c.USDC, 0)} USDC`].filter(Boolean).join(' + ')}</small>
-                </span>
-                <strong>{money(c.usd)}</strong>
+              <div className="health-row">
+                <div>
+                  <span>HEALTH FACTOR</span>
+                  <b className={`tone-${status!.tone}`}>{fmtHealth(valued.healthFactor)}</b>
+                </div>
+                <HealthBar hf={valued.healthFactor} />
+                <span className={`health-status tone-${status!.tone}`}>{status!.label}</span>
               </div>
-            ))}
-            <div>
-              <span className="position-token token-amber">↓</span>
-              <span>
-                <b>MUSD borrowed</b>
-                <small>{marketOf('MUSD').borrowApy.toFixed(2)}% borrow APY · Hub debt</small>
-              </span>
-              <strong className="debt-value">−{money(account.debtMUSD)}</strong>
-            </div>
-          </div>
-          <div className="health-row">
-            <div>
-              <span>HEALTH FACTOR</span>
-              <b className={`tone-${status.tone}`}>{fmtHealth(summary.healthFactor)}</b>
-            </div>
-            <HealthBar hf={summary.healthFactor} />
-            <span className={`health-status tone-${status.tone}`}>{status.label}</span>
-          </div>
-          <small className="position-rate-note">pMUSD rate {rates.pMUSD.toFixed(4)} MUSD</small>
+            </>
+          ) : (
+            <p className="muted-note">{isConnected ? 'Loading position…' : 'Connect a wallet to see your collateral, debt and health factor.'}</p>
+          )}
         </section>
       </div>
 
       <section className="activity-preview panel">
         <PanelTitle
-          label="Recent protocol activity"
-          meta="Newest first · simulated"
+          label="Your recent activity"
+          meta="On-chain events"
           action={
             <button className="text-link" onClick={() => go('activity')}>
               Open activity <ArrowRight size={13} />
@@ -313,15 +281,26 @@ export function Dashboard() {
           }
         />
         <div className="activity-rows">
-          {state.activities.slice(0, 3).map((item) => (
-            <ActivityRow key={item.id} item={item} onClick={() => setSelectedActivity(item)} />
+          {activity.slice(0, 3).map((item) => (
+            <div className="activity-row" key={item.id}>
+              <EventIcon kind={item.kind} />
+              <span className="activity-row-main">
+                <b>
+                  {item.kind} {fmt(units(item.amount, item.decimals), 4)} {item.asset}
+                </b>
+                <small>{item.detail}</small>
+              </span>
+              <TxLink network={item.network === HUB.name ? HUB : SPOKES.find((s) => s.name === item.network)!} hash={item.txHash} />
+              <span className="activity-row-time">{item.timestamp ? timeAgo(item.timestamp) : ''}</span>
+            </div>
           ))}
+          {activity.length === 0 && <p className="muted-note">{isConnected ? 'No activity yet.' : 'Connect a wallet to see your activity.'}</p>}
         </div>
       </section>
 
-      <DisclaimerBar title="Simulation environment." action="How it works" onAction={() => go('architecture')}>
-        Figures are illustrative demo data. No wallet is connected and no transaction is sent to a blockchain.
-      </DisclaimerBar>
+      <InfoBar title="Unaudited testnet protocol." action="How it works" onAction={() => go('architecture')}>
+        Smart contracts on {HUB.label} and spoke testnets. Use test funds only.
+      </InfoBar>
     </>
   );
 }

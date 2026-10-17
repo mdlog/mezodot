@@ -1,37 +1,61 @@
 import { useState } from 'react';
 import { ArrowRight, Check, Shield, Sparkles, TriangleAlert, Undo2, Zap } from 'lucide-react';
-import { AmountInput, PageTitle, PanelTitle, SummaryStrip } from '../components/ui';
-import { RISK_PARAMS, marketOf } from '../data/mock';
-import { closeLoop, marketStats, openLoop, previewLoop } from '../lib/engine';
-import { fmtHealth, money, pct } from '../lib/format';
-import { healthStatus, maxLeverage } from '../lib/protocol';
-import { useApp } from '../state/AppContext';
+import { useAccount } from 'wagmi';
+import { parseUnits } from 'viem';
+import { healthStatus, perSecondToAnnual, planLoop } from '@mezodot/sdk';
+import { AmountInput, ConnectGate, NotDeployed, PageTitle, PanelTitle, SummaryStrip } from '../components/ui';
+import { HUB_DEPLOYED } from '../chain/env';
+import { loopSteps, unwindSteps } from '../chain/actions';
+import { useTx } from '../chain/tx';
+import { useHubClient, useValuedPosition, useWalletBalances } from '../data/hooks';
+import { fmt, fmtApy, fmtHealth, money, pct, units } from '../lib/format';
 
-// Max LTV 70% caps recursive leverage at 1 / (1 − 0.7) ≈ 3.33×, so the selector stops at 3×.
-const LEVERAGE_OPTIONS = [1.5, 2, 2.5, 3];
-const MAX_LEVERAGE = LEVERAGE_OPTIONS[LEVERAGE_OPTIONS.length - 1];
+const LEVERAGE_OPTIONS = [1.5, 2, 2.5, 3, 3.5, 4];
 
 export function Loop() {
-  const { state, summary, run } = useApp();
-  const { account } = state;
+  const { address, isConnected } = useAccount();
+  const hub = useHubClient();
+  const { run, busy } = useTx();
+  const { valued, protocol, position } = useValuedPosition();
+  const balances = useWalletBalances().data;
   const [amount, setAmount] = useState('1000');
   const [leverage, setLeverage] = useState(3);
-  const [lastRun, setLastRun] = useState(false);
+  const [lastLoop, setLastLoop] = useState<string | null>(null);
 
-  const plan = previewLoop(Number(amount) || 0, leverage);
-  const stats = marketStats('MUSD');
-  const borrowApy = marketOf('MUSD').borrowApy;
-  const tone = healthStatus(plan.healthFactor).tone;
+  const musd = protocol?.markets.find((m) => m.symbol === 'MUSD');
+  const collateral = protocol?.collaterals.find((c) => c.symbol === 'pMUSD');
+  const supplyApy = musd ? perSecondToAnnual(musd.supplyRatePerSecond) : 0;
+  const borrowApy = musd ? perSecondToAnnual(musd.borrowRatePerSecond) : 0;
+  const plan = planLoop(Number(amount) || 0, leverage, { ltvBps: collateral?.ltvBps ?? 8000, ltBps: collateral?.ltBps ?? 8500, supplyApy, borrowApy });
+  const wallet = balances?.hub.tokens.MUSD ?? 0n;
+  const liquidity = musd ? units(musd.cash, musd.decimals) : 0;
+  const overBalance = musd ? (Number(amount) || 0) > units(wallet, musd.decimals) : false;
+  const overLiquidity = plan.flashAmount > liquidity;
 
-  const simulate = () => {
-    if (run((s) => openLoop(s, Number(amount) || 0, leverage))) setLastRun(true);
+  const loopCollateral = valued?.collateral.find((c) => c.collateral.symbol === 'pMUSD');
+  const loopDebt = valued?.debts.find((d) => d.market.symbol === 'MUSD');
+  const hasLoop = (loopCollateral?.balance ?? 0n) > 0n && (loopDebt?.amount ?? 0n) > 0n;
+  const equity = (loopCollateral?.valueUsd ?? 0) - (loopDebt?.valueUsd ?? 0);
+
+  const open = async () => {
+    if (!address || !hub || !musd || plan.error) return;
+    const principal = parseUnits(amount, musd.decimals);
+    const result = await run(`${leverage}× loop`, loopSteps({ account: address, hub }, musd, principal, leverage, position?.isLeverageOperator ?? false));
+    if (result.ok) setLastLoop(result.receipts[result.receipts.length - 1].transactionHash);
+  };
+
+  const unwind = async () => {
+    if (!address || !hub) return;
+    // Accept up to 2% below the fresh-price equity estimate (fees + interest).
+    const minOut = parseUnits(Math.max(0, equity * 0.98).toFixed(6), 18);
+    await run('Unwind loop', unwindSteps({ account: address, hub }, minOut));
   };
 
   const trace = [
-    { n: '01', title: 'Flash borrow MUSD', amount: money(plan.debt) },
-    { n: '02', title: 'Supply into MezodotPool', amount: money(plan.gross) },
-    { n: '03', title: 'Borrow against pMUSD', amount: money(plan.debt) },
-    { n: '04', title: 'Repay flash liquidity', amount: 'Same block' },
+    { n: '01', title: 'Flash borrow MUSD from MezodotPool', amount: money(plan.flashAmount) },
+    { n: '02', title: 'Supply principal + flash into pMUSD', amount: money(plan.gross) },
+    { n: '03', title: 'Post pMUSD, borrow flash + fee', amount: money(plan.debt, 2) },
+    { n: '04', title: 'Repay flash loan', amount: 'Same transaction' },
   ];
 
   return (
@@ -39,109 +63,72 @@ export function Loop() {
       <PageTitle
         eyebrow="CAPITAL / 04"
         title="Loop desk."
-        subtitle="Amplify a yield position with a single simulated flash-loan route—without stitching together six separate steps."
+        subtitle="LeverageManager opens a leveraged pMUSD position in one transaction: flash borrow → supply → borrow → repay. VaultManager enforces the LTV, so an unsafe loop simply reverts."
         right={
           <span className="security-pill">
-            <Shield size={14} /> ATOMIC ROUTE DESIGN
+            <Shield size={14} /> ATOMIC FLASH-LOAN ROUTE
           </span>
         }
       />
       <SummaryStrip
         snapshot={
           <>
-            LEVERAGEMANAGER <i>/</i> FLASH-LOAN SIMULATOR
+            LEVERAGEMANAGER <i>/</i> ERC-3156 FLASH LOAN · 0.09% FEE
           </>
         }
-        time="Single-action preview"
+        time="One transaction"
         icon={Zap}
       />
+      {!HUB_DEPLOYED && <NotDeployed />}
 
       <div className="loop-layout">
         <section className="panel loop-config-panel">
-          <PanelTitle label="Configure your position" meta="MUSD → pMUSD yield loop" />
+          <PanelTitle label="Configure your position" meta="MUSD → pMUSD loop" />
           <div className="form-section">
             <label className="field-label" htmlFor="loop-amount">
-              INITIAL EQUITY <span>Wallet balance · {money(account.wallet.MUSD, 2)} MUSD</span>
+              INITIAL EQUITY <span>Wallet · {musd ? fmt(units(wallet, musd.decimals), 2) : '—'} MUSD</span>
             </label>
-            <AmountInput
-              id="loop-amount"
-              large
-              value={amount}
-              onChange={setAmount}
-              unit="MUSD"
-              onMax={() => setAmount(String(Math.floor(account.wallet.MUSD * 100) / 100))}
-            />
-            <div className="amount-estimate">
-              You provide <b>{money(plan.principal)} equity</b>
-            </div>
+            <AmountInput id="loop-amount" large value={amount} onChange={setAmount} unit="MUSD" onMax={() => musd && setAmount(units(wallet, musd.decimals).toFixed(2))} />
           </div>
           <div className="form-section">
             <div className="field-label">
-              TARGET LEVERAGE <span>{leverage.toFixed(2)}×</span>
+              TARGET LEVERAGE <span>{leverage.toFixed(2)}× · max {plan.maxLeverage.toFixed(2)}× at {(collateral?.ltvBps ?? 8000) / 100}% LTV</span>
             </div>
             <div className="leverage-selector">
-              {LEVERAGE_OPTIONS.map((value) => (
-                <button key={value} className={leverage === value ? 'is-selected' : ''} onClick={() => setLeverage(value)} aria-pressed={leverage === value}>
-                  {value}×
+              {LEVERAGE_OPTIONS.map((v) => (
+                <button key={v} className={leverage === v ? 'is-selected' : ''} onClick={() => setLeverage(v)} aria-pressed={leverage === v}>
+                  {v}×
                 </button>
               ))}
             </div>
             <div className="slider-shell">
-              <input
-                aria-label="Leverage target"
-                type="range"
-                min={LEVERAGE_OPTIONS[0]}
-                max={MAX_LEVERAGE}
-                step="0.25"
-                value={leverage}
-                onChange={(e) => setLeverage(Number(e.target.value))}
-              />
-              <div>
-                <span>{LEVERAGE_OPTIONS[0]}× · lower risk</span>
-                <span>
-                  {MAX_LEVERAGE}× · limit {maxLeverage(RISK_PARAMS.maxLtv).toFixed(2)}× at {pct(RISK_PARAMS.maxLtv, 0)} LTV
-                </span>
-              </div>
+              <input aria-label="Leverage target" type="range" min="1.25" max="4" step="0.25" value={leverage} onChange={(e) => setLeverage(Number(e.target.value))} />
             </div>
           </div>
-          <div className="loop-route">
-            <div>
-              <span className="loop-step-num">01</span>
-              <span>
-                <b>Flash borrow</b>
-                <small>{money(plan.debt)} MUSD · same-block simulation</small>
-              </span>
-            </div>
-            <ArrowRight size={14} />
-            <div>
-              <span className="loop-step-num">02</span>
-              <span>
-                <b>Supply to pMUSD</b>
-                <small>{money(plan.gross)} total collateral</small>
-              </span>
-            </div>
-            <ArrowRight size={14} />
-            <div>
-              <span className="loop-step-num">03</span>
-              <span>
-                <b>Borrow & repay</b>
-                <small>Atomic route · one transaction</small>
-              </span>
-            </div>
-          </div>
-          <button className="button button--dark button--wide" onClick={simulate}>
-            <Zap size={15} /> Simulate {leverage}× loop <ArrowRight size={15} />
-          </button>
+          <ConnectGate connected={isConnected}>
+            <button className="button button--dark button--wide" onClick={open} disabled={Boolean(plan.error) || overBalance || overLiquidity || Boolean(busy)}>
+              {busy ?? (
+                <>
+                  <Zap size={15} /> Open {leverage}× loop <ArrowRight size={15} />
+                </>
+              )}
+            </button>
+          </ConnectGate>
+          {(plan.error || overBalance || overLiquidity) && (
+            <p className="inline-error" role="alert">
+              {plan.error ?? (overBalance ? 'Amount exceeds your MUSD balance' : 'Not enough MUSD liquidity for the flash loan')}
+            </p>
+          )}
           <div className="small-disclosure">
-            <Shield size={14} /> This is a local simulation. No flash loan or contract call is executed.
+            <Shield size={14} /> First time: one extra transaction authorises LeverageManager as your VaultManager operator.
           </div>
         </section>
 
         <div className="loop-side">
           <section className="panel loop-projection">
             <div className="projection-head">
-              <span className="overline">POSITION PROJECTION</span>
-              <span className="projection-tag">MOCK MODEL</span>
+              <span className="overline">POSITION PREVIEW</span>
+              <span className="projection-tag">LIVE RATES</span>
             </div>
             <div className="projection-value">
               <div>
@@ -161,46 +148,39 @@ export function Loop() {
               </div>
               <div>
                 <span>
-                  Borrowed <b>{money(plan.debt)}</b>
+                  Debt (incl. fee) <b>{money(plan.debt, 2)}</b>
                 </span>
                 <i>
-                  <span style={{ width: `${(1 - 1 / leverage) * 100}%` }} />
+                  <span style={{ width: `${Math.min(100, plan.ltv * 100)}%` }} />
                 </i>
               </div>
             </div>
             <div className="projection-metrics">
               <div>
                 <span>Supply APY</span>
-                <b className="positive-text">{stats.totalSupplyApy.toFixed(2)}%</b>
-                <small>
-                  {stats.baseSupplyApy.toFixed(2)}% + {marketOf('MUSD').rewardApr.toFixed(2)}% MEZO
-                </small>
+                <b className="positive-text">{fmtApy(supplyApy)}</b>
               </div>
               <div>
                 <span>Borrow APY</span>
-                <b>{borrowApy.toFixed(2)}%</b>
+                <b>{fmtApy(borrowApy)}</b>
               </div>
               <div>
-                <span>Net modeled APY</span>
-                <b className={plan.netApy >= 0 ? 'positive-text' : 'tone-danger'}>{plan.netApy.toFixed(2)}%</b>
-                <small>on equity, incl. rewards</small>
+                <span>Net APY on equity</span>
+                <b className={plan.netApy >= 0 ? 'positive-text' : 'tone-danger'}>{fmtApy(plan.netApy)}</b>
               </div>
             </div>
             <div className="projection-foot">
               <TriangleAlert size={14} />
-              <span>
-                Without MEZO rewards the loop is net-negative: borrow APY ({borrowApy.toFixed(2)}%) exceeds base supply APY ({stats.baseSupplyApy.toFixed(2)}%).
-                Estimates use static mock assumptions.
-              </span>
+              <span>Same-asset loop: no price liquidation risk, but supply APY is always below borrow APY by construction, so carry is negative without external incentives. Use the risk report before looping volatile collateral.</span>
             </div>
           </section>
 
           <section className="panel trace-panel">
-            <PanelTitle label="Atomic execution trace" meta="LeverageManager · demo" />
+            <PanelTitle label="Atomic execution trace" meta="LeverageManager.loop" />
             <div className="trace-list">
-              {trace.map((item, index) => (
-                <div className={`trace-item ${lastRun || index === 0 ? 'trace-item--active' : ''}`} key={item.n}>
-                  <span>{lastRun ? <Check size={11} /> : item.n}</span>
+              {trace.map((item) => (
+                <div className={`trace-item ${lastLoop ? 'trace-item--active' : ''}`} key={item.n}>
+                  <span>{lastLoop ? <Check size={11} /> : item.n}</span>
                   <b>{item.title}</b>
                   <small>{item.amount}</small>
                 </div>
@@ -208,38 +188,33 @@ export function Loop() {
             </div>
             <div className="trace-summary">
               <span>LOOP LTV / HEALTH</span>
-              <b className={`tone-${tone}`}>
+              <b className={`tone-${healthStatus(plan.healthFactor).tone}`}>
                 {pct(plan.ltv)} · {fmtHealth(plan.healthFactor)}
               </b>
               <span>LIQUIDATION BUFFER</span>
-              <b>pMUSD −{plan.liquidationBuffer.toFixed(1)}%</b>
+              <b>pMUSD −{(plan.liquidationBuffer * 100).toFixed(1)}%</b>
             </div>
-            {plan.error && (
-              <p className="inline-error" role="alert">
-                {plan.error}
-              </p>
-            )}
           </section>
 
-          {account.loop.shares > 0 && (
+          {hasLoop && (
             <section className="panel open-loop-panel">
-              <PanelTitle label="Open loop position" meta="Counts toward account health" />
+              <PanelTitle label="Open pMUSD position" meta="Counts toward account health" />
               <div className="risk-math">
                 <span>
-                  Gross pMUSD <b>{money(summary.loopCollateral, 2)}</b>
+                  pMUSD collateral <b>{money(loopCollateral!.valueUsd, 2)}</b>
                 </span>
                 <span>
-                  Loop debt <b>{money(account.loop.debt, 2)}</b>
+                  MUSD debt <b>{money(loopDebt!.valueUsd, 2)}</b>
                 </span>
                 <span>
-                  Equity <b className="positive-text">{money(summary.loopEquity, 2)}</b>
+                  Equity <b className="positive-text">{money(equity, 2)}</b>
                 </span>
                 <span>
-                  Account health <b>{fmtHealth(summary.healthFactor)}</b>
+                  Account health <b>{fmtHealth(valued!.healthFactor)}</b>
                 </span>
               </div>
-              <button className="button button--light button--wide" onClick={() => run(closeLoop)}>
-                <Undo2 size={14} /> Unwind loop
+              <button className="button button--light button--wide" onClick={unwind} disabled={Boolean(busy)}>
+                <Undo2 size={14} /> {busy ?? 'Unwind: repay all MUSD debt, withdraw all pMUSD'}
               </button>
             </section>
           )}
@@ -249,8 +224,10 @@ export function Loop() {
       <div className="loop-example">
         <Sparkles size={16} />
         <div>
-          <b>Try the PRD scenario: 1,000 MUSD at 3×</b>
-          <p>Simulates a 2,000 MUSD flash borrow, a 3,000 MUSD supply position, and a same-block 2,000 MUSD repay — 66.7% LTV, 1.20× health factor.</p>
+          <b>PRD flow C: 1,000 MUSD at 3×</b>
+          <p>
+            Flash borrow 2,000 MUSD, supply 3,000, borrow 2,001.8 (incl. 0.09% fee) and repay the flash loan in the same transaction — LTV 66.7%, health {fmtHealth((3_000 * (collateral?.ltBps ?? 8500)) / 10_000 / 2_001.8)}.
+          </p>
         </div>
         <button
           className="text-link"

@@ -1,4 +1,4 @@
-import { concatHex, decodeEventLog, encodePacked, keccak256, numberToHex, type Address, type Hex, type Log } from 'viem';
+import { concatHex, decodeEventLog, encodePacked, hexToNumber, keccak256, numberToHex, sliceHex, type Address, type Hex, type Log } from 'viem';
 import { sign } from 'viem/accounts';
 import { wormholeAbi } from './abis';
 import { toBytes32 } from './payload';
@@ -64,4 +64,10 @@ export async function signDevVaa(guardianKey: Hex, m: Parameters<typeof vaaBody>
     numberToHex(recovery, { size: 1 }),
     body,
   ]);
+}
+
+/** Wormhole digest used by the contracts as the replay key: keccak256(keccak256(body)). */
+export function vaaDigest(vaa: Hex): Hex {
+  const signatures = hexToNumber(sliceHex(vaa, 5, 6));
+  return keccak256(keccak256(sliceHex(vaa, 6 + signatures * 66)));
 }

@@ -14,7 +14,7 @@
     "check": "tsc --noEmit && vitest run"
   },
   "dependencies": {
-    "viem": "^2.22.8"
+    "viem": "^2.57.7"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

@@ -1,4 +1,4 @@
-import { healthStatus } from '../lib/protocol';
+import { healthStatus } from '@mezodot/sdk';
 
 /** Health bar scaled so 3.0× fills the track; "no debt" renders full. */
 export function HealthBar({ hf }: { hf: number }) {

@@ -1,48 +1,31 @@
-import { useState } from 'react';
-import { ArrowDownLeft, ArrowRight, BadgeCheck, Check, LoaderCircle, Shield, Waves } from 'lucide-react';
-import { AmountInput, DisclaimerBar, PageTitle, PanelTitle, SummaryStrip } from '../components/ui';
-import { CHAINS, PRICES, chainOf, type ChainId, type CollateralAsset } from '../data/mock';
-import { validateCollateral } from '../lib/engine';
-import { fmt, money } from '../lib/format';
-import { parseAmount } from '../lib/protocol';
-import { BRIDGE_STEPS, useApp } from '../state/AppContext';
+import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { ArrowDownLeft, ArrowRight, BadgeCheck, Check, Shield, Waves, X } from 'lucide-react';
+import { useAccount, usePublicClient } from 'wagmi';
+import { parseEventLogs, parseUnits, type PublicClient } from 'viem';
+import { spokeGatewayAbi, wormholeAdapterAbi } from '@mezodot/sdk';
+import { AmountInput, ConnectGate, InfoBar, NotDeployed, PageTitle, PanelTitle, Spinner, SummaryStrip, TxLink } from '../components/ui';
+import { HUB, HUB_DEPLOYED, SPOKES, spokeByWormholeChain, type SpokeInfo } from '../chain/env';
+import { relayHubSteps, relaySpokeSteps, spokeDepositSteps, withdrawRemoteSteps } from '../chain/actions';
+import { useTx } from '../chain/tx';
+import { useFlightStatus } from '../data/flights';
+import { useHubClient, usePrices, useValuedPosition, useWalletBalances } from '../data/hooks';
+import { fmt, money, timeAgo, units } from '../lib/format';
+import { useUi, type Flight } from '../state/UiContext';
 
-const ASSETS: CollateralAsset[] = ['wETH', 'USDC'];
+type Asset = 'WETH' | 'USDC';
+const DECIMALS: Record<Asset, number> = { WETH: 18, USDC: 6 };
+const PRICE_SYMBOL = { WETH: 'ETH', USDC: 'USDC' } as const;
 
 export function Crosschain() {
-  const { state, summary, go, openModal, showToast, bridgeStage, bridgeFlight } = useApp();
-  const [chainId, setChainId] = useState<ChainId>('arbitrum');
-  const [asset, setAsset] = useState<CollateralAsset>('wETH');
-  const [amount, setAmount] = useState('0.5');
-
-  const chain = chainOf(chainId);
-  const balance = state.account.spokeWallet[chainId][asset];
-  const parsed = parseAmount(amount);
-  const chainCollateral = summary.remoteByChain.find((c) => c.chain.id === chainId)!;
-  // While a message is in flight the lifecycle follows that message's chain, not the current form selection.
-  const lifecycleChain = bridgeFlight ? chainOf(bridgeFlight.chain) : chain;
-  const inFlight = bridgeFlight !== null;
-
-  const review = () => {
-    const value = parsed ?? 0;
-    const error = validateCollateral(state, chainId, asset, value);
-    if (error) return showToast(error, 'error');
-    openModal({ type: 'bridge', chain: chainId, asset, amount: value });
-  };
-
-  const steps = [
-    { title: 'Collateral locked on Spoke', where: `${lifecycleChain.name} · SpokeGateway` },
-    { title: 'Wormhole message published', where: 'WormholeAdapter' },
-    { title: 'VaultManager state updated', where: 'Mezo Hub · VaultManager' },
-    { title: 'MUSD capacity available', where: 'Borrow MUSD on Mezo' },
-  ];
-
+  const { go } = useUi();
+  const deployedSpokes = SPOKES.filter((s) => s.deployment);
   return (
     <>
       <PageTitle
         eyebrow="CAPITAL / 02"
         title="Collateral, without the detour."
-        subtitle="Keep assets on an external Spoke. Send verified state to the Mezo Hub and borrow where the liquidity lives."
+        subtitle="Lock collateral in a SpokeGateway on Base or Ethereum Sepolia. A guardian-signed Wormhole message credits it on the Mezo Hub, where you borrow MUSD."
         right={
           <button className="button button--outline" onClick={() => go('borrow')}>
             <ArrowDownLeft size={15} /> Borrow MUSD
@@ -52,153 +35,287 @@ export function Crosschain() {
       <SummaryStrip
         snapshot={
           <>
-            HUB & SPOKE <i>/</i> WORMHOLE MESSAGING MODEL
+            HUB & SPOKE <i>/</i> WORMHOLE CORE MESSAGING
           </>
         }
-        time="Message route simulated"
+        time={`${deployedSpokes.length} spoke${deployedSpokes.length === 1 ? '' : 's'} live`}
         icon={Waves}
       />
-
+      {!HUB_DEPLOYED && <NotDeployed />}
       <div className="cross-layout">
-        <section className="panel bridge-config">
-          <PanelTitle label="Post cross-chain collateral" meta="SpokeGateway / mock flow" />
-          <div className="form-section">
-            <span className="field-label">01 / SOURCE CHAIN</span>
-            <div className="chain-options">
-              {CHAINS.map((item) => {
-                const selected = chainId === item.id;
-                return (
-                  <button key={item.id} className={`chain-option ${selected ? 'is-selected' : ''}`} onClick={() => setChainId(item.id)} aria-pressed={selected}>
-                    <span className="chain-disc" style={{ background: item.color }}>
-                      {item.short}
-                    </span>
-                    <span>
-                      <b>{item.name}</b>
-                      <small>{selected ? 'Selected · simulated' : 'Connected · simulated'}</small>
-                    </span>
-                    {selected && <Check size={16} />}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="form-section">
-            <span className="field-label">02 / COLLATERAL ASSET</span>
-            <div className="asset-select-row">
-              {ASSETS.map((item) => (
-                <button
-                  key={item}
-                  className={`asset-choice ${asset === item ? 'is-selected' : ''}`}
-                  onClick={() => setAsset(item)}
-                  aria-pressed={asset === item}
-                >
-                  <span className={`coin-mini ${item === 'wETH' ? 'coin-eth' : 'coin-usdc'}`}>{item === 'wETH' ? 'Ξ' : '$'}</span>
-                  <b>{item}</b>
-                  <span>{money(PRICES[item], 2)}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="form-section">
-            <label className="field-label" htmlFor="bridge-amount">
-              03 / AMOUNT{' '}
-              <span>
-                {chain.name} balance · {fmt(balance, asset === 'wETH' ? 4 : 2)} {asset}
-              </span>
-            </label>
-            <AmountInput id="bridge-amount" value={amount} onChange={setAmount} unit={asset} onMax={() => setAmount(String(balance))} />
-            <div className="amount-estimate">
-              Estimated value <b>{money((parsed ?? 0) * PRICES[asset], 2)}</b>
-            </div>
-          </div>
-          <button className="button button--dark button--wide" onClick={review} disabled={inFlight}>
-            {inFlight ? (
-              <>
-                <LoaderCircle size={15} className="spin" /> Message in flight…
-              </>
-            ) : (
-              <>
-                Review simulated deposit <ArrowRight size={15} />
-              </>
-            )}
-          </button>
-          <div className="small-disclosure">
-            <Shield size={14} /> Demo only. No wallet, bridge, or cross-chain message is connected.
-          </div>
-        </section>
-
+        <DepositPanel spokes={deployedSpokes} />
         <div className="bridge-side">
-          <section className="panel route-panel">
-            <PanelTitle label="Capital route" meta="External Spoke → Mezo Hub" />
-            <div className="route-visual">
-              <div className="route-endpoint">
-                <div className="route-orb" style={{ background: chain.color }}>
-                  <span>{chain.short}</span>
-                </div>
-                <b>{chain.name}</b>
-                <small>Spoke Gateway</small>
-                <em>{money(chainCollateral.usd)} posted here</em>
-              </div>
-              <div className="route-track">
-                <div className="track-line">
-                  <span className="track-pulse" />
-                </div>
-                <div className="route-protocol">
-                  <Waves size={16} />
-                  <b>WormholeAdapter</b>
-                  <small>message · verify · relay</small>
-                </div>
-                <div className="track-line">
-                  <span className="track-pulse track-pulse--right" />
-                </div>
-              </div>
-              <div className="route-endpoint">
-                <div className="route-orb orb-mezo">
-                  <span>M</span>
-                </div>
-                <b>Mezo</b>
-                <small>VaultManager</small>
-                <em>{money(summary.remoteCollateral)} total Spoke collateral</em>
-              </div>
-            </div>
-            <div className="route-note">
-              <span className="info-mark">i</span>
-              <p>
-                <b>Collateral stays on {chain.name}.</b> The Hub receives a verified state message, not the underlying principal. Borrowing and accounting
-                happen on Mezo.
-              </p>
-            </div>
-          </section>
-
-          <section className="panel timeline-panel">
-            <PanelTitle label="Message lifecycle" meta={inFlight ? 'IN FLIGHT · SIMULATED' : 'SIMULATED'} />
-            <ol className="message-steps" aria-live="polite">
-              {steps.map((step, index) => {
-                const done = bridgeStage > index && !(inFlight && bridgeStage === index + 1);
-                const current = inFlight && bridgeStage === index + 1;
-                return (
-                  <li className={`message-step ${done ? 'step-done' : ''} ${current ? 'step-current' : ''}`} key={step.title}>
-                    <span>{done ? <Check size={11} /> : current ? <LoaderCircle size={11} className="spin" /> : `0${index + 1}`}</span>
-                    <div>
-                      <b>{step.title}</b>
-                      <small>{step.where}</small>
-                    </div>
-                    {done && <BadgeCheck size={14} />}
-                  </li>
-                );
-              })}
-            </ol>
-            {!inFlight && bridgeStage >= BRIDGE_STEPS && <p className="lifecycle-done">Last message delivered · capacity {money(summary.available, 2)} MUSD</p>}
-            <button className="text-link" onClick={() => go('architecture')}>
-              View architecture <ArrowRight size={13} />
-            </button>
-          </section>
+          <FlightsPanel />
+          <WithdrawRemotePanel />
         </div>
       </div>
-
-      <DisclaimerBar title="Cross-chain flow is a product simulation." action="Recent messages" onAction={() => go('activity')}>
-        Wormhole messaging and SpokeGateway actions are not connected to a live network.
-      </DisclaimerBar>
+      <InfoBar title="How safety works." action="Architecture" onAction={() => go('architecture')}>
+        The hub only credits collateral from VAAs signed by Wormhole guardians and emitted by a registered SpokeGateway; each VAA can be used once. Withdrawals debit the hub before the spoke releases.
+      </InfoBar>
     </>
+  );
+}
+
+function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
+  const { address, isConnected } = useAccount();
+  const { addFlight } = useUi();
+  const { run, busy } = useTx();
+  const balances = useWalletBalances().data;
+  const prices = usePrices().data?.prices;
+  const [spokeName, setSpokeName] = useState(spokes[0]?.name);
+  const [asset, setAsset] = useState<Asset>('WETH');
+  const [amount, setAmount] = useState('');
+  const spoke = spokes.find((s) => s.name === spokeName) ?? spokes[0];
+  const client = usePublicClient({ chainId: spoke?.chain.id }) as PublicClient | undefined;
+
+  if (!spoke) {
+    return (
+      <section className="panel bridge-config">
+        <PanelTitle label="Post cross-chain collateral" meta="SpokeGateway" />
+        <p className="muted-note">No spoke gateway is deployed for this environment yet.</p>
+      </section>
+    );
+  }
+  const balance = balances?.spokes[spoke.name]?.[asset] ?? 0n;
+  let parsed: bigint | null = null;
+  try {
+    parsed = amount ? parseUnits(amount, DECIMALS[asset]) : null;
+  } catch {
+    parsed = null;
+  }
+  const invalid = !parsed || parsed <= 0n || parsed > balance;
+  const usd = parsed ? units(parsed, DECIMALS[asset]) * (prices?.[PRICE_SYMBOL[asset]] ?? 0) : 0;
+
+  const deposit = async () => {
+    if (!address || !client || !parsed) return;
+    const token = spoke.deployment!.tokens[asset];
+    const result = await run(`Lock ${asset} on ${spoke.label}`, spokeDepositSteps(address, spoke, client, token, asset, parsed));
+    if (!result.ok) return;
+    const receipt = result.receipts[result.receipts.length - 1];
+    const [event] = parseEventLogs({ abi: spokeGatewayAbi, logs: receipt.logs, eventName: 'Deposited' });
+    if (event) {
+      addFlight({
+        id: `${spoke.wormholeChainId}/${spoke.deployment!.contracts.spokeGateway.toLowerCase()}/${event.args.sequence}`,
+        direction: 'deposit',
+        source: spoke.name,
+        target: HUB.name,
+        emitterChain: spoke.wormholeChainId,
+        emitter: spoke.deployment!.contracts.spokeGateway,
+        sequence: event.args.sequence.toString(),
+        txHash: receipt.transactionHash,
+        label: `${fmt(units(parsed, DECIMALS[asset]), 4)} ${asset} from ${spoke.label}`,
+        createdAt: Date.now(),
+      });
+      setAmount('');
+    }
+  };
+
+  return (
+    <section className="panel bridge-config">
+      <PanelTitle label="Post cross-chain collateral" meta="SpokeGateway → WormholeAdapter → VaultManager" />
+      <div className="form-section">
+        <span className="field-label">01 / SOURCE CHAIN</span>
+        <div className="chain-options">
+          {spokes.map((s) => {
+            const selected = s.name === spoke.name;
+            return (
+              <button key={s.name} className={`chain-option ${selected ? 'is-selected' : ''}`} onClick={() => setSpokeName(s.name)} aria-pressed={selected}>
+                <span className="chain-disc" style={{ background: s.name.startsWith('base') ? '#3d66ad' : '#6b77bc' }}>
+                  {s.label[0]}
+                </span>
+                <span>
+                  <b>{s.label}</b>
+                  <small>Wormhole chain {s.wormholeChainId}</small>
+                </span>
+                {selected && <Check size={16} />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="form-section">
+        <span className="field-label">02 / COLLATERAL ASSET</span>
+        <div className="asset-select-row">
+          {(['WETH', 'USDC'] as const).map((a) => (
+            <button key={a} className={`asset-choice ${asset === a ? 'is-selected' : ''}`} onClick={() => setAsset(a)} aria-pressed={asset === a}>
+              <span className={`coin-mini ${a === 'WETH' ? 'coin-eth' : 'coin-usdc'}`}>{a === 'WETH' ? 'Ξ' : '$'}</span>
+              <b>{a}</b>
+              <span>{money(prices?.[PRICE_SYMBOL[a]] ?? 0, 2)}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="form-section">
+        <label className="field-label" htmlFor="bridge-amount">
+          03 / AMOUNT{' '}
+          <span>
+            {spoke.label} balance · {fmt(units(balance, DECIMALS[asset]), 4)} {asset}
+          </span>
+        </label>
+        <AmountInput id="bridge-amount" value={amount} onChange={setAmount} unit={asset} onMax={() => setAmount(units(balance, DECIMALS[asset]).toString())} />
+        <div className="amount-estimate">
+          Value <b>{money(usd, 2)}</b>
+        </div>
+      </div>
+      <ConnectGate connected={isConnected}>
+        <button className="button button--dark button--wide" onClick={deposit} disabled={invalid || Boolean(busy)}>
+          {busy ?? (
+            <>
+              Lock on {spoke.label} <ArrowRight size={15} />
+            </>
+          )}
+        </button>
+      </ConnectGate>
+      <div className="small-disclosure">
+        <Shield size={14} /> Two transactions on {spoke.label} (approve + lock). Your hub account is the same address.
+      </div>
+    </section>
+  );
+}
+
+function FlightRow({ flight }: { flight: Flight }) {
+  const { removeFlight } = useUi();
+  const { run, busy } = useTx();
+  const status = useFlightStatus(flight).data;
+  const stage = status?.stage ?? 1;
+  const queryClient = useQueryClient();
+  // Refresh balances and position the moment the message lands, instead of on the next poll.
+  useEffect(() => {
+    if (status?.delivered) void queryClient.invalidateQueries();
+  }, [status?.delivered, queryClient]);
+  const source = flight.source === HUB.name ? HUB : SPOKES.find((s) => s.name === flight.source)!;
+  const steps =
+    flight.direction === 'deposit'
+      ? ['Locked on spoke', 'Guardians signed VAA', 'Credited by VaultManager', 'Borrow capacity live']
+      : ['Debited on hub', 'Guardians signed VAA', 'Released on spoke', 'Tokens in wallet'];
+  const ageMin = (Date.now() - flight.createdAt) / 60_000;
+  const canSelfRelay = status?.vaa && !status.delivered && ageMin > 0.5;
+
+  const selfRelay = () => {
+    if (!status?.vaa) return;
+    const target = SPOKES.find((s) => s.name === flight.target);
+    void run('Deliver message', flight.direction === 'deposit' ? relayHubSteps(status.vaa) : relaySpokeSteps(target!, status.vaa));
+  };
+
+  return (
+    <div className="flight">
+      <div className="flight-head">
+        <b>{flight.label}</b>
+        <span>
+          <TxLink network={source} hash={flight.txHash} /> · {timeAgo(flight.createdAt)}
+          {status?.delivered && (
+            <button className="icon-button" onClick={() => removeFlight(flight.id)} aria-label="Dismiss">
+              <X size={13} />
+            </button>
+          )}
+        </span>
+      </div>
+      <ol className="message-steps" aria-live="polite">
+        {steps.map((label, i) => {
+          const done = stage > i || (stage === 4 && i === 3);
+          const current = !done && stage === i;
+          return (
+            <li className={`message-step ${done ? 'step-done' : ''} ${current ? 'step-current' : ''}`} key={label}>
+              <span>{done ? <Check size={11} /> : current ? <Spinner /> : `0${i + 1}`}</span>
+              <div>
+                <b>{label}</b>
+              </div>
+              {done && <BadgeCheck size={14} />}
+            </li>
+          );
+        })}
+      </ol>
+      {canSelfRelay && (
+        <button className="button button--outline" onClick={selfRelay} disabled={Boolean(busy)}>
+          {busy ?? 'Relay it yourself'}
+        </button>
+      )}
+      {!status?.delivered && <p className="muted-note">Relayer: {status?.relayer ?? '…'}</p>}
+    </div>
+  );
+}
+
+function FlightsPanel() {
+  const { flights } = useUi();
+  return (
+    <section className="panel timeline-panel">
+      <PanelTitle label="Message lifecycle" meta="Wormhole · live" />
+      {flights.length === 0 && <p className="muted-note">Messages you send appear here and are tracked until delivered.</p>}
+      {flights.slice(0, 4).map((f) => (
+        <FlightRow key={f.id} flight={f} />
+      ))}
+    </section>
+  );
+}
+
+function WithdrawRemotePanel() {
+  const { address, isConnected } = useAccount();
+  const hub = useHubClient();
+  const { addFlight } = useUi();
+  const { run, busy } = useTx();
+  const { valued, protocol } = useValuedPosition();
+  const remote = valued?.collateral.filter((c) => c.collateral.isRemote && c.balance > 0n) ?? [];
+  const [selected, setSelected] = useState<number | null>(null);
+  const [amount, setAmount] = useState('');
+  const row = remote.find((r) => r.collateral.id === selected) ?? remote[0];
+
+  if (!protocol) return null;
+  let parsed: bigint | null = null;
+  try {
+    parsed = row && amount ? parseUnits(amount, row.collateral.decimals) : null;
+  } catch {
+    parsed = null;
+  }
+  const invalid = !row || !parsed || parsed <= 0n || parsed > row.balance;
+
+  const withdraw = async () => {
+    if (!address || !hub || !row || !parsed) return;
+    const spoke = spokeByWormholeChain(row.collateral.chainId);
+    const result = await run(`Release ${row.collateral.symbol}`, withdrawRemoteSteps({ account: address, hub }, row.collateral, parsed));
+    if (!result.ok || !spoke) return;
+    const receipt = result.receipts[0];
+    const [event] = parseEventLogs({ abi: wormholeAdapterAbi, logs: receipt.logs, eventName: 'ReleaseSent' });
+    if (event) {
+      addFlight({
+        id: `${HUB.wormholeChainId}/${HUB.deployment!.contracts.wormholeAdapter.toLowerCase()}/${event.args.sequence}`,
+        direction: 'release',
+        source: HUB.name,
+        target: spoke.name,
+        emitterChain: HUB.wormholeChainId,
+        emitter: HUB.deployment!.contracts.wormholeAdapter,
+        sequence: event.args.sequence.toString(),
+        txHash: receipt.transactionHash,
+        label: `${fmt(units(parsed, row.collateral.decimals), 4)} ${row.collateral.symbol} back to ${spoke.label}`,
+        createdAt: Date.now(),
+      });
+      setAmount('');
+    }
+  };
+
+  return (
+    <section className="panel route-panel">
+      <PanelTitle label="Withdraw to a spoke" meta="VaultManager.withdrawRemote" />
+      {remote.length === 0 ? (
+        <p className="muted-note">{isConnected ? 'No spoke collateral posted.' : 'Connect a wallet to manage spoke collateral.'}</p>
+      ) : (
+        <>
+          <div className="asset-select-row">
+            {remote.map((r) => (
+              <button key={r.collateral.id} className={`asset-choice ${row?.collateral.id === r.collateral.id ? 'is-selected' : ''}`} onClick={() => setSelected(r.collateral.id)}>
+                <b>{r.collateral.symbol}</b>
+                <span>
+                  {fmt(r.units, 4)} · {spokeByWormholeChain(r.collateral.chainId)?.label ?? `chain ${r.collateral.chainId}`}
+                </span>
+              </button>
+            ))}
+          </div>
+          <AmountInput id="withdraw-remote" value={amount} onChange={setAmount} unit={row?.collateral.symbol ?? ''} onMax={() => row && setAmount(units(row.balance, row.collateral.decimals).toString())} />
+          <button className="button button--light button--wide" onClick={withdraw} disabled={invalid || Boolean(busy)}>
+            {busy ?? 'Release on spoke'}
+          </button>
+          <p className="muted-note">Rejected if it would push your debt over the borrow limit.</p>
+        </>
+      )}
+    </section>
   );
 }

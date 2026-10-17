@@ -4760,3 +4760,76 @@ a.nav-link {
 .help-link svg:only-of-type {
   margin-left: 0;
 }
+
+/* ---- On-chain UI additions ---- */
+.network-tag i {
+  background: #6fa071;
+}
+.network-tag--devnet i {
+  background: #c3824e;
+}
+.connect-gate {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px dashed #d8d6ce;
+  border-radius: 7px;
+  background: #fbfaf7;
+  color: #6d6f7c;
+  font-size: 12.5px;
+}
+.connect-gate .button {
+  margin-left: auto;
+}
+.tx-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--indigo);
+  text-decoration: none;
+}
+.tx-link:hover {
+  text-decoration: underline;
+}
+.empty-state--panel {
+  margin-bottom: 13px;
+  padding: 26px 20px;
+  text-align: center;
+}
+.empty-state--panel code,
+.muted-note code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.flight {
+  border-top: 1px solid #efeee8;
+  padding: 12px 0 4px;
+}
+.flight-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.flight-head span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #9b9ca3;
+  font-size: 11.5px;
+}
+.flight .message-steps {
+  margin: 12px 0 10px;
+}
+.dot-off {
+  background: #c3824e !important;
+}
+.market-switch {
+  margin: 14px 0 12px;
+}
+.topbar-right [data-rk] button {
+  font-family: inherit;
+}

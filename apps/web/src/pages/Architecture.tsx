@@ -1,32 +1,41 @@
 import { useState } from 'react';
 import { ArrowRight, ArrowUpRight, Blocks, Check, Code2, Coins, GitBranch, Layers3, Network, Radio, Shield, Waves } from 'lucide-react';
-import { DisclaimerBar, PageTitle, SummaryStrip } from '../components/ui';
-import { useApp } from '../state/AppContext';
+import { AddressLink, InfoBar, PageTitle, SummaryStrip } from '../components/ui';
+import { HUB, SPOKES } from '../chain/env';
+import { useUi } from '../state/UiContext';
 
-const CONTRACTS = [
-  { name: 'VaultManager.sol', role: 'Global state', description: 'Cross-chain user state, LTV limits and health factors.', location: 'Mezo Hub' },
-  { name: 'MezodotPool.sol', role: 'Liquidity', description: 'MUSD / MEZO supply, borrows and utilization curves.', location: 'Mezo Hub' },
-  { name: 'pToken.sol', role: 'ERC-4626', description: 'Yield-bearing pMUSD and pMEZO receipt shares.', location: 'Mezo Hub' },
-  { name: 'WormholeAdapter.sol', role: 'Messaging', description: 'Encodes spoke collateral state and verifies messages.', location: 'Hub ↔ Spoke' },
-  { name: 'LeverageManager.sol', role: 'Leverage', description: 'Atomic flash-loan looping route.', location: 'Mezo Hub' },
-  { name: 'KeeperGateway.sol', role: 'Automation', description: 'Access-controlled liquidation and rebalance surface.', location: 'Agent layer' },
-];
+type Row = { name: string; role: string; description: string; location: string; address?: string; network?: (typeof SPOKES)[number] | typeof HUB };
 
-type Tab = 'flow' | 'contracts';
+function contractRows(): Row[] {
+  const c = HUB.deployment?.contracts;
+  const rows: Row[] = [
+    { name: 'VaultManager.sol', role: 'Global state', description: 'Cross-chain positions, LTV limits, health factors, liquidations.', location: 'Mezo Hub', address: c?.vaultManager, network: HUB },
+    { name: 'PToken.sol (pMUSD)', role: 'ERC-4626 + MezodotPool', description: 'MUSD vault & lending pool: kinked rates, reserves, flash loans.', location: 'Mezo Hub', address: c?.pMUSD, network: HUB },
+    { name: 'PToken.sol (pMEZO)', role: 'ERC-4626 + MezodotPool', description: 'MEZO vault & lending pool.', location: 'Mezo Hub', address: c?.pMEZO, network: HUB },
+    { name: 'OracleRouter.sol', role: 'Prices', description: 'Pyth pull prices with staleness and confidence checks.', location: 'Mezo Hub', address: c?.oracleRouter, network: HUB },
+    { name: 'WormholeAdapter.sol', role: 'Messaging', description: 'Verifies spoke DEPOSIT VAAs, publishes RELEASE messages.', location: 'Mezo Hub', address: c?.wormholeAdapter, network: HUB },
+    { name: 'LeverageManager.sol', role: 'Leverage', description: 'One-transaction flash-loan loop and unwind.', location: 'Mezo Hub', address: c?.leverageManager, network: HUB },
+    { name: 'KeeperGateway.sol', role: 'Agent layer', description: 'Permissionless liquidations and relays; keeper KPI.', location: 'Mezo Hub', address: c?.keeperGateway, network: HUB },
+  ];
+  for (const s of SPOKES) {
+    rows.push({ name: 'SpokeGateway.sol', role: 'Collateral vault', description: 'Locks WETH/USDC, emits DEPOSIT, executes hub RELEASE.', location: s.label, address: s.deployment?.contracts.spokeGateway, network: s });
+  }
+  return rows;
+}
 
 export function Architecture() {
-  const { go } = useApp();
-  const [tab, setTab] = useState<Tab>('flow');
+  const { go } = useUi();
+  const [tab, setTab] = useState<'flow' | 'contracts'>('flow');
 
   return (
     <>
       <PageTitle
         eyebrow="INTELLIGENCE / 06"
         title="Designed as one market."
-        subtitle="A central Mezo Hub. External Spokes that keep collateral local. A protocol state model that connects them."
+        subtitle="A Mezo Hub that holds liquidity and accounting. Spokes that keep collateral on its home chain. Wormhole Core messages, verified on-chain, connecting them."
         right={
           <span className="security-pill">
-            <Blocks size={14} /> PROTOCOL MAP · MOCK
+            <Blocks size={14} /> {HUB.deployment ? 'DEPLOYED CONTRACTS' : 'CONTRACT MAP'}
           </span>
         }
       />
@@ -36,7 +45,7 @@ export function Architecture() {
             HUB & SPOKE <i>/</i> SYSTEM MAP
           </>
         }
-        time="Wormhole messaging model"
+        time="Wormhole chain ids: Mezo 50 · Eth Sepolia 10002 · Base Sepolia 10004"
         icon={Network}
       />
 
@@ -54,7 +63,7 @@ export function Architecture() {
             {(
               [
                 ['flow', 'Capital flow'],
-                ['contracts', 'Contract map'],
+                ['contracts', 'Contracts'],
               ] as const
             ).map(([key, label]) => (
               <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? 'is-active' : ''} onClick={() => setTab(key)}>
@@ -67,27 +76,27 @@ export function Architecture() {
         {tab === 'flow' ? (
           <div className="topology" role="tabpanel">
             <div className="topology-spoke">
-              <div className="topology-label">EXTERNAL SPOKES / ARBITRUM · ETHEREUM</div>
+              <div className="topology-label">EXTERNAL SPOKES</div>
               <div className="spoke-chain">
-                <span className="chain-disc chain-disc--arb">A</span>
+                <span className="chain-disc chain-disc--arb">B</span>
                 <div>
-                  <b>Arbitrum</b>
+                  <b>{SPOKES.map((s) => s.label).join(' · ')}</b>
                   <small>Collateral source</small>
                 </div>
               </div>
               <div className="spoke-assets">
-                <span>wETH</span>
+                <span>WETH</span>
                 <span>USDC</span>
               </div>
               <div className="spoke-contract">
                 <GitBranch size={14} />
                 <span>
                   <b>SpokeGateway</b>
-                  <small>locks collateral · emits state</small>
+                  <small>locks collateral · emits DEPOSIT</small>
                 </span>
               </div>
               <div className="spoke-capability">
-                <Check size={12} /> Principal stays on-chain
+                <Check size={12} /> Principal stays on its chain
               </div>
             </div>
             <div className="topology-bridge">
@@ -99,7 +108,7 @@ export function Architecture() {
               </div>
               <div className="topology-bridge-label">WORMHOLE</div>
               <small>
-                verified message
+                guardian-signed VAA
                 <br />
                 not a token bridge
               </small>
@@ -116,7 +125,7 @@ export function Architecture() {
                 <div className="hub-vault">
                   <Coins size={17} />
                   <span>
-                    <b>MUSD Pool</b>
+                    <b>MezodotPool</b>
                     <small>liquidity & rates</small>
                   </span>
                 </div>
@@ -137,7 +146,7 @@ export function Architecture() {
               </div>
               <div className="hub-borrow-row">
                 <span>Borrow from Hub</span>
-                <b>MUSD → wallet</b>
+                <b>MUSD / MEZO → wallet</b>
                 <ArrowUpRight size={15} />
               </div>
             </div>
@@ -146,11 +155,11 @@ export function Architecture() {
                 <Radio size={17} />
               </div>
               <span className="topology-label">AGENT LAYER</span>
-              <b>Keeper / MCP</b>
+              <b>KeeperGateway / MCP</b>
               <small>
-                risk · liquidation
+                liquidation · relay
                 <br />
-                rebalance proposal
+                risk analytics
               </small>
             </div>
             <div className="topology-connector topology-connector--agent" />
@@ -158,9 +167,9 @@ export function Architecture() {
           </div>
         ) : (
           <div className="contract-map-list" role="tabpanel">
-            {CONTRACTS.map((c, i) => (
-              <div className="contract-row" key={c.name}>
-                <span className="contract-index">0{i + 1}</span>
+            {contractRows().map((c, i) => (
+              <div className="contract-row" key={`${c.name}-${c.location}`}>
+                <span className="contract-index">{String(i + 1).padStart(2, '0')}</span>
                 <span className="contract-hex">
                   <Code2 size={16} />
                 </span>
@@ -169,7 +178,7 @@ export function Architecture() {
                   <small>{c.role}</small>
                 </span>
                 <span className="contract-description">{c.description}</span>
-                <span className="contract-location">{c.location}</span>
+                <span className="contract-location">{c.address && c.network ? <AddressLink network={c.network} address={c.address} /> : `${c.location} · not deployed`}</span>
               </div>
             ))}
           </div>
@@ -180,25 +189,23 @@ export function Architecture() {
         <article className="panel arch-note">
           <span className="arch-note-id">01 / HUB</span>
           <h3>One place to account.</h3>
-          <p>
-            The Mezo Hub holds core MUSD/MEZO liquidity and the global position view. VaultManager reconciles verified collateral state from external Spokes.
-          </p>
+          <p>MUSD and MEZO liquidity, debt and every position live on Mezo. VaultManager values all collateral with Pyth prices and enforces one health factor.</p>
         </article>
         <article className="panel arch-note">
           <span className="arch-note-id">02 / SPOKE</span>
           <h3>Collateral stays put.</h3>
-          <p>A SpokeGateway accepts eligible collateral on its home chain. Wormhole messaging carries state to the Hub without moving the user's principal.</p>
+          <p>Deposits lock first, then credit. Withdrawals debit the hub first, then release. Hub credit can never exceed tokens locked on the spoke — an invariant the tests fuzz.</p>
         </article>
         <article className="panel arch-note">
           <span className="arch-note-id">03 / COMPOSABLE</span>
           <h3>Capital stays productive.</h3>
-          <p>ERC-4626-style pTokens capture yield, while LeverageManager and KeeperGateway describe optional automation paths.</p>
+          <p>pMUSD and pMEZO are standard ERC-4626 shares that keep earning while posted as collateral, and plug into any Mezo DEX or vault.</p>
         </article>
       </div>
 
-      <DisclaimerBar title="Architecture is a product concept." action="Agent risk view" onAction={() => go('agents')}>
-        Contract names and responsibilities reflect the PRD; no deployment is represented by this UI.
-      </DisclaimerBar>
+      <InfoBar title="Open source and tested." action="Agent risk view" onAction={() => go('agents')}>
+        Foundry unit, fuzz and invariant tests cover pools, liquidation, flash-loan accounting and cross-chain replay protection.
+      </InfoBar>
     </>
   );
 }

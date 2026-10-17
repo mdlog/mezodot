@@ -33,9 +33,9 @@
             "0x677eddee4c23d94caa11d7d6d9dd71d7b460d1ab155b263814e7fb94559169ae"
           ],
           "data": "0x000000000000000000000000e6e340d132b5f46d1e472debcd681b2abc16e57e",
-          "blockHash": "0xc2b0ea82481c1f75c8d39e93c3a9da18dda4b53e01d1f605073192cb06fa6929",
+          "blockHash": "0x9256298d3d2489b875148eaa715c6a42cb110b15c974d07b1b26733a21f93abe",
           "blockNumber": "0x11",
-          "blockTimestamp": "0x6ad3673a",
+          "blockTimestamp": "0x6ad36fd8",
           "transactionHash": "0x1f374e1faeb62da253c81640cf661ae624960e0004b1fdde7cfa58003e9ef7a9",
           "transactionIndex": "0x0",
           "logIndex": "0x0",
@@ -46,7 +46,7 @@
       "type": "0x2",
       "transactionHash": "0x1f374e1faeb62da253c81640cf661ae624960e0004b1fdde7cfa58003e9ef7a9",
       "transactionIndex": "0x0",
-      "blockHash": "0xc2b0ea82481c1f75c8d39e93c3a9da18dda4b53e01d1f605073192cb06fa6929",
+      "blockHash": "0x9256298d3d2489b875148eaa715c6a42cb110b15c974d07b1b26733a21f93abe",
       "blockNumber": "0x11",
       "gasUsed": "0xb833",
       "effectiveGasPrice": "0x7463e29",
@@ -59,7 +59,7 @@
   "libraries": [],
   "pending": [],
   "returns": {},
-  "timestamp": 1792239418440,
+  "timestamp": 1792241624343,
   "chain": 31338,
-  "commit": "655395d"
+  "commit": "eb91f32"
 }

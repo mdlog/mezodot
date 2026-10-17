@@ -1,35 +1,33 @@
 import { useMemo, useState } from 'react';
-import { Activity as ActivityIcon, ArrowDownToLine, ArrowRight, ChevronRight, CircleHelp, Clock3, Filter } from 'lucide-react';
-import { EventIcon, PageTitle, PanelTitle, StatusBadge, SummaryStrip, assetDigits } from '../components/ui';
-import { ACTIVITY_KINDS, type ActivityKind } from '../data/mock';
-import { fmt, money, timeAgo } from '../lib/format';
-import { useApp } from '../state/AppContext';
+import { Activity as ActivityIcon, ArrowDownToLine, Clock3, Filter } from 'lucide-react';
+import { useAccount } from 'wagmi';
+import { ConnectGate, EventIcon, PageTitle, PanelTitle, SummaryStrip, TxLink } from '../components/ui';
+import { HUB, SPOKES } from '../chain/env';
+import { useActivity, type ActivityItem, type ActivityKind } from '../data/activity';
+import { fmt, timeAgo, units } from '../lib/format';
+import { useUi } from '../state/UiContext';
 
-type FilterValue = 'All activity' | ActivityKind;
-const FILTERS: FilterValue[] = ['All activity', ...ACTIVITY_KINDS];
+const KINDS: ('All activity' | ActivityKind)[] = ['All activity', 'Supply', 'Withdraw', 'Collateral in', 'Collateral out', 'Cross-chain', 'Release', 'Borrow', 'Repay', 'Loop', 'Unwind', 'Liquidation'];
+const networkOf = (item: ActivityItem) => (item.network === HUB.name ? HUB : SPOKES.find((s) => s.name === item.network)!);
 
 export function Activity() {
-  const { state, setSelectedActivity, showToast } = useApp();
-  const [filter, setFilter] = useState<FilterValue>('All activity');
-  const activities = state.activities;
-  const filtered = useMemo(() => activities.filter((item) => filter === 'All activity' || item.kind === filter), [activities, filter]);
+  const { isConnected } = useAccount();
+  const { showToast } = useUi();
+  const { data = [], isLoading } = useActivity();
+  const [filter, setFilter] = useState<(typeof KINDS)[number]>('All activity');
+  const filtered = useMemo(() => data.filter((i) => filter === 'All activity' || i.kind === filter), [data, filter]);
 
   const exportCsv = () => {
-    const header = ['id', 'kind', 'asset', 'amount', 'value_usd', 'source', 'destination', 'status', 'time', 'ref', 'detail'];
-    const escape = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
-    const rows = filtered.map((a) =>
-      [a.id, a.kind, a.asset, a.amount, a.value.toFixed(2), a.source, a.destination, a.status, new Date(a.at).toISOString(), a.tx, a.detail]
-        .map(escape)
-        .join(','),
-    );
-    const blob = new Blob([[header.join(','), ...rows].join('\n')], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
+    const header = ['time', 'kind', 'network', 'asset', 'amount', 'detail', 'tx'];
+    const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
+    const rows = filtered.map((a) => [a.timestamp ? new Date(a.timestamp).toISOString() : '', a.kind, a.network, a.asset, units(a.amount, a.decimals), a.detail, a.txHash].map(esc).join(','));
+    const url = URL.createObjectURL(new Blob([[header.join(','), ...rows].join('\n')], { type: 'text/csv' }));
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'mezodot-demo-activity.csv';
+    link.download = 'mezodot-activity.csv';
     link.click();
     URL.revokeObjectURL(url);
-    showToast(`Exported ${filtered.length} simulated records`);
+    showToast(`Exported ${filtered.length} records`);
   };
 
   return (
@@ -37,7 +35,7 @@ export function Activity() {
       <PageTitle
         eyebrow="INTELLIGENCE / 07"
         title="Every move, accounted for."
-        subtitle="A unified event trail across Mezo Hub actions, external Spokes, yield, loops, and keeper simulations."
+        subtitle="Your on-chain history across the Mezo Hub and spoke chains, read directly from contract events."
         right={
           <button className="button button--outline" onClick={exportCsv} disabled={filtered.length === 0}>
             <ArrowDownToLine size={14} /> Export CSV
@@ -47,100 +45,75 @@ export function Activity() {
       <SummaryStrip
         snapshot={
           <>
-            ACTIVITY LEDGER <i>/</i> {activities.length} SAMPLE RECORDS
+            EVENT LEDGER <i>/</i> {data.length} RECORDS
           </>
         }
-        time="Local demo history"
+        time="Contract events"
         icon={Clock3}
       />
-
-      <section className="panel activity-ledger">
-        <div className="ledger-toolbar">
-          <PanelTitle label="Protocol activity" meta="Newest first" />
-          <div className="filter-controls">
-            <span>
-              <Filter size={13} />
-            </span>
-            <select aria-label="Filter activity" value={filter} onChange={(e) => setFilter(e.target.value as FilterValue)}>
-              {FILTERS.map((f) => (
-                <option key={f}>{f}</option>
-              ))}
-            </select>
+      <ConnectGate connected={isConnected} label="Connect a wallet to load your on-chain activity">
+        <section className="panel activity-ledger">
+          <div className="ledger-toolbar">
+            <PanelTitle label="Your activity" meta="Newest first" />
+            <div className="filter-controls">
+              <span>
+                <Filter size={13} />
+              </span>
+              <select aria-label="Filter activity" value={filter} onChange={(e) => setFilter(e.target.value as (typeof KINDS)[number])}>
+                {KINDS.map((k) => (
+                  <option key={k}>{k}</option>
+                ))}
+              </select>
+            </div>
           </div>
-        </div>
-        <div className="table-wrap">
-          <table className="ledger-table">
-            <thead>
-              <tr>
-                <th>EVENT</th>
-                <th>ASSET / AMOUNT</th>
-                <th>ROUTE</th>
-                <th>STATUS</th>
-                <th>WHEN</th>
-                <th>REF</th>
-                <th>
-                  <span className="sr-only">Details</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((item) => (
-                <tr key={item.id}>
-                  <td>
-                    <div className="event-cell">
-                      <EventIcon kind={item.kind} />
-                      <span>
-                        <b>{item.kind}</b>
-                        <small>{item.destination}</small>
-                      </span>
-                    </div>
-                  </td>
-                  <td>
-                    <b>
-                      {fmt(item.amount, assetDigits(item.asset))} {item.asset}
-                    </b>
-                    <small className="table-subline">{money(item.value, 2)}</small>
-                  </td>
-                  <td>
-                    <div className="route-cell">
-                      {item.source}
-                      <ArrowRight size={12} />
-                      {item.destination.split(' · ')[0]}
-                    </div>
-                  </td>
-                  <td>
-                    <StatusBadge status={item.status} />
-                  </td>
-                  <td>{timeAgo(item.at)}</td>
-                  <td>
-                    <code className="tx-code">{item.tx}</code>
-                  </td>
-                  <td>
-                    <button className="icon-button" onClick={() => setSelectedActivity(item)} aria-label={`View ${item.kind} details`}>
-                      <ChevronRight size={15} />
-                    </button>
-                  </td>
+          <div className="table-wrap">
+            <table className="ledger-table">
+              <thead>
+                <tr>
+                  <th>EVENT</th>
+                  <th>AMOUNT</th>
+                  <th>NETWORK</th>
+                  <th>WHEN</th>
+                  <th>TRANSACTION</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {filtered.length === 0 && (
-          <div className="empty-state">
-            <ActivityIcon size={23} />
-            <b>No events in this filter</b>
-            <span>Try another event type.</span>
+              </thead>
+              <tbody>
+                {filtered.map((item) => (
+                  <tr key={item.id}>
+                    <td>
+                      <div className="event-cell">
+                        <EventIcon kind={item.kind} />
+                        <span>
+                          <b>{item.kind}</b>
+                          <small>{item.detail}</small>
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <b>
+                        {fmt(units(item.amount, item.decimals), 4)} {item.asset}
+                      </b>
+                    </td>
+                    <td>{networkOf(item).label}</td>
+                    <td>{item.timestamp ? timeAgo(item.timestamp) : '—'}</td>
+                    <td>
+                      <TxLink network={networkOf(item)} hash={item.txHash} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        )}
-        <div className="ledger-foot">
-          <span>
-            Showing {filtered.length} of {activities.length} demo records
-          </span>
-          <span>
-            Transaction references are illustrative <CircleHelp size={13} />
-          </span>
-        </div>
-      </section>
+          {!isLoading && filtered.length === 0 && (
+            <div className="empty-state">
+              <ActivityIcon size={23} />
+              <b>No events{filter === 'All activity' ? ' yet' : ' in this filter'}</b>
+              <span>Supply, borrow or post collateral to see your history here.</span>
+            </div>
+          )}
+          {isLoading && <p className="muted-note">Reading events…</p>}
+        </section>
+      </ConnectGate>
     </>
   );
 }

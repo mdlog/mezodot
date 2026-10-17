@@ -11,16 +11,6 @@ export const pct = (ratio: number, digits = 1): string => `${fmt(ratio * 100, di
 /** Health factor with the "no debt" case rendered as an em dash. */
 export const fmtHealth = (hf: number): string => (Number.isFinite(hf) ? `${hf.toFixed(2)}×` : '—');
 
-const hex4 = () =>
-  Math.floor(Math.random() * 0x10000)
-    .toString(16)
-    .padStart(4, '0');
-
-/** Illustrative transaction reference (never a real hash). */
-export const fakeTxRef = (): string => `0x${hex4()}…${hex4()}`;
-
-export const uid = (): string => `act-${Date.now().toString(36)}-${hex4()}`;
-
 export const timeAgo = (at: number, now = Date.now()): string => {
   const minutes = Math.round((now - at) / 60_000);
   if (minutes < 1) return 'just now';
@@ -29,3 +19,13 @@ export const timeAgo = (at: number, now = Date.now()): string => {
   if (hours < 24) return `${hours}h ago`;
   return `${Math.round(hours / 24)}d ago`;
 };
+
+/** Token amount (bigint base units) as a JS number — for display only. */
+export const units = (value: bigint, decimals: number): number => Number(value) / 10 ** decimals;
+
+export const fmtToken = (value: bigint, decimals: number, digits = 2): string => fmt(units(value, decimals), digits);
+
+/** Annual rate (fraction) as a percentage string. */
+export const fmtApy = (rate: number, digits = 2): string => `${(rate * 100).toFixed(digits)}%`;
+
+export const shortAddress = (a: string): string => `${a.slice(0, 6)}…${a.slice(-4)}`;

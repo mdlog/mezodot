@@ -4,27 +4,21 @@ import {
   ArrowDownToLine,
   ArrowRight,
   ArrowUpRight,
-  ChevronRight,
-  Coins,
+  ExternalLink,
   GitBranch,
+  LockKeyhole,
   RefreshCw,
   Shield,
   ShieldAlert,
-  TrendingUp,
   Undo2,
+  Unlock,
+  Wallet,
   type LucideIcon,
 } from 'lucide-react';
-import { SPARKLINE, type Activity, type ActivityKind } from '../data/mock';
-import { fmt, money, timeAgo } from '../lib/format';
-
-export function Sparkline({ values = SPARKLINE, color = '#6157d6' }: { values?: readonly number[]; color?: string }) {
-  const points = values.map((value, index) => `${(index / (values.length - 1)) * 100},${34 - (value / 100) * 29}`).join(' ');
-  return (
-    <svg className="sparkline" viewBox="0 0 100 38" preserveAspectRatio="none" aria-hidden="true">
-      <polyline points={points} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
+import { ConnectButton } from '@rainbow-me/rainbowkit';
+import type { NetworkInfo } from '@mezodot/sdk';
+import { ENV_NAME, HUB, explorerAddress, explorerTx } from '../chain/env';
+import type { ActivityKind } from '../data/activity';
 
 export function Brand() {
   return (
@@ -43,10 +37,11 @@ export function Brand() {
   );
 }
 
-export function SimTag() {
+/** Network badge replacing the old "simulated data" tag: data on these pages is live. */
+export function NetworkTag() {
   return (
-    <span className="sim-tag">
-      <i /> SIMULATED DATA
+    <span className={`sim-tag network-tag network-tag--${ENV_NAME}`}>
+      <i /> {ENV_NAME === 'devnet' ? 'LOCAL DEVNET' : HUB.label.toUpperCase()}
     </span>
   );
 }
@@ -83,7 +78,7 @@ export function PanelTitle({ label, meta, action }: { label: string; meta?: stri
 export function SummaryStrip({ snapshot, time, icon: Icon }: { snapshot: ReactNode; time: string; icon: LucideIcon }) {
   return (
     <div className="summary-strip">
-      <SimTag />
+      <NetworkTag />
       <span className="snapshot">{snapshot}</span>
       <span className="snapshot-time">
         <Icon size={13} /> {time}
@@ -92,21 +87,7 @@ export function SummaryStrip({ snapshot, time, icon: Icon }: { snapshot: ReactNo
   );
 }
 
-export function StatCard({
-  label,
-  value,
-  change,
-  icon: Icon,
-  accent = false,
-  foot,
-}: {
-  label: string;
-  value: string;
-  change?: string;
-  icon: LucideIcon;
-  accent?: boolean;
-  foot: string;
-}) {
+export function StatCard({ label, value, change, icon: Icon, accent = false, foot }: { label: string; value: string; change?: string; icon: LucideIcon; accent?: boolean; foot: string }) {
   return (
     <article className={`stat-card ${accent ? 'stat-card--accent' : ''}`}>
       <div className="stat-top">
@@ -117,30 +98,27 @@ export function StatCard({
       </div>
       <div className="stat-value-row">
         <strong>{value}</strong>
-        {change && (
-          <span className="positive">
-            <TrendingUp size={12} /> {change}
-          </span>
-        )}
+        {change && <span className="positive">{change}</span>}
       </div>
       <div className="stat-foot">
         <span>{foot}</span>
-        <Sparkline color={accent ? '#bcb6ff' : '#635bd1'} />
       </div>
     </article>
   );
 }
 
-export function DisclaimerBar({ title, children, action, onAction }: { title: string; children: ReactNode; action: string; onAction: () => void }) {
+export function InfoBar({ title, children, action, onAction }: { title: string; children: ReactNode; action?: string; onAction?: () => void }) {
   return (
     <div className="disclaimer-bar">
       <Shield size={15} />
       <span>
         <b>{title}</b> {children}
       </span>
-      <button onClick={onAction}>
-        {action} <ArrowRight size={13} />
-      </button>
+      {action && onAction && (
+        <button onClick={onAction}>
+          {action} <ArrowRight size={13} />
+        </button>
+      )}
     </div>
   );
 }
@@ -152,17 +130,17 @@ export function AmountInput({
   unit,
   onMax,
   large = false,
-  max,
   autoFocus = false,
+  disabled = false,
 }: {
   id: string;
   value: string;
   onChange: (value: string) => void;
   unit: string;
-  onMax: () => void;
+  onMax?: () => void;
   large?: boolean;
-  max?: number;
   autoFocus?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <div className={`amount-input ${large ? 'amount-input--large' : ''}`}>
@@ -171,16 +149,72 @@ export function AmountInput({
         type="number"
         inputMode="decimal"
         min="0"
-        max={max}
         step="any"
         value={value}
+        disabled={disabled}
         data-autofocus={autoFocus || undefined}
         onChange={(e) => onChange(e.target.value)}
       />
       <span>{unit}</span>
-      <button type="button" onClick={onMax}>
-        MAX
-      </button>
+      {onMax && (
+        <button type="button" onClick={onMax} disabled={disabled}>
+          MAX
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function TxLink({ network, hash, label }: { network: NetworkInfo; hash: string; label?: string }) {
+  const url = explorerTx(network, hash);
+  const text = label ?? `${hash.slice(0, 8)}…${hash.slice(-4)}`;
+  if (!url) return <code className="tx-code">{text}</code>;
+  return (
+    <a className="tx-code tx-link" href={url} target="_blank" rel="noreferrer">
+      {text} <ExternalLink size={11} />
+    </a>
+  );
+}
+
+export function AddressLink({ network, address }: { network: NetworkInfo; address: string }) {
+  const url = explorerAddress(network, address);
+  const text = `${address.slice(0, 6)}…${address.slice(-4)}`;
+  if (!url) return <code className="tx-code">{text}</code>;
+  return (
+    <a className="tx-code tx-link" href={url} target="_blank" rel="noreferrer">
+      {text} <ExternalLink size={11} />
+    </a>
+  );
+}
+
+/** Shown in place of data when the hub has not been deployed on this network yet. */
+export function NotDeployed() {
+  return (
+    <div className="panel empty-state empty-state--panel">
+      <ShieldAlert size={23} />
+      <b>Contracts are not deployed on {HUB.label} yet</b>
+      <span>
+        Run the deployment in <code>docs/DEPLOY.md</code>, or start the local devnet (<code>scripts/devnet/start.sh</code>) and open the app with{' '}
+        <code>VITE_MEZODOT_ENV=devnet</code>.
+      </span>
+    </div>
+  );
+}
+
+/** Wraps an action area: prompts for a wallet when disconnected. */
+export function ConnectGate({ connected, children, label = 'Connect a wallet to continue' }: { connected: boolean; children: ReactNode; label?: string }) {
+  if (connected) return <>{children}</>;
+  return (
+    <div className="connect-gate">
+      <Wallet size={16} />
+      <span>{label}</span>
+      <ConnectButton.Custom>
+        {({ openConnectModal }) => (
+          <button className="button button--dark" onClick={openConnectModal}>
+            Connect wallet
+          </button>
+        )}
+      </ConnectButton.Custom>
     </div>
   );
 }
@@ -188,52 +222,26 @@ export function AmountInput({
 const EVENT_ICONS: Record<ActivityKind, LucideIcon> = {
   Supply: ArrowDownToLine,
   Withdraw: ArrowUpRight,
+  'Collateral in': LockKeyhole,
+  'Collateral out': Unlock,
   'Cross-chain': GitBranch,
+  Release: GitBranch,
   Borrow: ArrowDownLeft,
   Repay: Undo2,
   Loop: RefreshCw,
-  Interest: Coins,
+  Unwind: Undo2,
   Liquidation: ShieldAlert,
-  Rebalance: RefreshCw,
 };
 
 export function EventIcon({ kind }: { kind: ActivityKind }) {
   const Icon = EVENT_ICONS[kind];
   return (
-    <span className={`event-icon event-${kind.toLowerCase().replace('-', '')}`}>
+    <span className={`event-icon event-${kind.toLowerCase().replace(/[^a-z]/g, '')}`}>
       <Icon size={15} />
     </span>
   );
 }
 
-export function StatusBadge({ status }: { status: Activity['status'] }) {
-  return (
-    <span className={`status-badge status-${status.toLowerCase()}`}>
-      <i />
-      {status}
-    </span>
-  );
-}
-
-/** Decimal places that make sense for an amount of the given asset. */
-export const assetDigits = (asset: string): number => (asset === 'wETH' ? 2 : asset === 'MEZO' ? 2 : 0);
-
-export function ActivityRow({ item, onClick }: { item: Activity; onClick: () => void }) {
-  return (
-    <button className="activity-row" onClick={onClick}>
-      <EventIcon kind={item.kind} />
-      <span className="activity-row-main">
-        <b>
-          {item.kind} {fmt(item.amount, assetDigits(item.asset))} {item.asset}
-        </b>
-        <small>
-          {item.source} <ArrowRight size={11} /> {item.destination}
-        </small>
-      </span>
-      <span className="activity-row-amount">{money(item.value, 2)}</span>
-      <StatusBadge status={item.status} />
-      <span className="activity-row-time">{timeAgo(item.at)}</span>
-      <ChevronRight size={14} />
-    </button>
-  );
+export function Spinner() {
+  return <RefreshCw size={13} className="spin" aria-hidden="true" />;
 }

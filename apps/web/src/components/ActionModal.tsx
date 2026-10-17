@@ -1,161 +1,150 @@
-import type { FormEvent } from 'react';
-import { ArrowRight, Coins, Shield, Wallet, Waves } from 'lucide-react';
-import { PRICES, PROTOCOL, RECEIPT_OF, RISK_PARAMS, chainOf, marketOf } from '../data/mock';
-import { borrow, marketStats, repay, supply, withdraw } from '../lib/engine';
-import { fmt, fmtHealth, money } from '../lib/format';
-import { healthFactor, parseAmount, sharesForAssets } from '../lib/protocol';
-import { useApp, type AmountAction, type ModalState } from '../state/AppContext';
+import { useMemo, useState, type FormEvent } from 'react';
+import { ArrowRight, Coins, Shield } from 'lucide-react';
+import { useAccount } from 'wagmi';
+import { parseUnits } from 'viem';
+import { healthStatus, perSecondToAnnual, symbolForPriceKey, type CollateralState, type MarketState } from '@mezodot/sdk';
+import { HUB } from '../chain/env';
+import { borrowSteps, postCollateralSteps, repaySteps, supplySteps, withdrawCollateralSteps, withdrawSteps } from '../chain/actions';
+import { useTx } from '../chain/tx';
+import { useHubClient, useValuedPosition, useWalletBalances } from '../data/hooks';
+import { fmt, fmtApy, fmtHealth, money, units } from '../lib/format';
+import { useUi, type AmountModal } from '../state/UiContext';
 import { Modal } from './Modal';
-import { AmountInput } from './ui';
+import { AmountInput, ConnectGate } from './ui';
 
-const TITLES: Record<ModalState['type'], string> = {
+const TITLES: Record<AmountModal['type'], string> = {
   supply: 'Supply',
   withdraw: 'Withdraw',
-  borrow: 'Borrow MUSD',
-  repay: 'Repay MUSD',
-  bridge: 'Review collateral message',
-  wallet: 'Connect demo wallet',
+  borrow: 'Borrow',
+  repay: 'Repay',
+  post: 'Use as collateral',
+  unpost: 'Remove collateral',
 };
 
+/** Shares ⇄ underlying conversion through the pToken exchange rate (bigint, floor). */
+const sharesFor = (m: MarketState, assets: bigint) => (assets * 10n ** BigInt(m.shareDecimals)) / (m.exchangeRate || 1n);
+const assetsFor = (m: MarketState, shares: bigint) => (shares * m.exchangeRate) / 10n ** BigInt(m.shareDecimals);
+
 export function ActionModal() {
-  const { modal, closeModal } = useApp();
+  const { modal, closeModal } = useUi();
   if (!modal) return null;
-  const title = modal.type === 'supply' || modal.type === 'withdraw' ? `${TITLES[modal.type]} ${modal.asset}` : TITLES[modal.type];
   return (
-    <Modal id="action-modal" overline="MEZODOT / DEMO ACTION" title={title} onClose={closeModal}>
-      {modal.type === 'wallet' && <WalletBody />}
-      {modal.type === 'bridge' && <BridgeBody {...modal} />}
-      {modal.type !== 'wallet' && modal.type !== 'bridge' && <AmountBody {...modal} />}
+    <Modal id="action-modal" overline="MEZODOT / MEZO HUB" title={TITLES[modal.type]} onClose={closeModal}>
+      <ActionBody modal={modal} />
     </Modal>
   );
 }
 
-function WalletBody() {
-  const { connect } = useApp();
-  return (
-    <>
-      <div className="modal-note">
-        <Wallet size={17} />
-        <div>
-          <b>Demo wallet preview</b>
-          <p>This UI does not request wallet permissions or connect to a provider. Continue to display a simulated account state.</p>
-        </div>
-      </div>
-      <div className="modal-account">
-        <span className="wallet-avatar">D</span>
-        <span>
-          <b>Demo account</b>
-          <small>
-            {PROTOCOL.demoAddress} · {PROTOCOL.network}
-          </small>
-        </span>
-        <span className="mock-label">MOCK</span>
-      </div>
-      <button className="button button--dark button--wide" onClick={connect} data-autofocus>
-        Use demo account <ArrowRight size={14} />
-      </button>
-    </>
-  );
-}
+function ActionBody({ modal }: { modal: AmountModal }) {
+  const { address, isConnected } = useAccount();
+  const hub = useHubClient();
+  const { closeModal } = useUi();
+  const { run, busy } = useTx();
+  const { valued, protocol, prices, position } = useValuedPosition();
+  const balances = useWalletBalances().data;
+  const [amount, setAmount] = useState(modal.preset ?? '');
+  const [useMax, setUseMax] = useState(false);
 
-function BridgeBody({ chain, asset, amount }: Extract<ModalState, { type: 'bridge' }>) {
-  const { startBridge } = useApp();
-  const name = chainOf(chain).name;
-  return (
-    <>
-      <div className="modal-note modal-note--bridge">
-        <Waves size={17} />
-        <div>
-          <b>
-            {asset} on {name} → Mezo Hub
-          </b>
-          <p>Principal remains on the external Spoke. A simulated collateral state message is applied to this local preview.</p>
-        </div>
-      </div>
-      <div className="bridge-review">
-        <span>
-          Collateral amount{' '}
-          <b>
-            {fmt(amount, asset === 'wETH' ? 4 : 2)} {asset}
-          </b>
-        </span>
-        <span>
-          Estimated value <b>{money(amount * PRICES[asset], 2)}</b>
-        </span>
-        <span>
-          Message fee <b>Illustrative</b>
-        </span>
-        <span>
-          Network action <b>None · simulation only</b>
-        </span>
-      </div>
-      <div className="message-warning">
-        <Shield size={14} /> No token transfer, signature, or Wormhole transaction will occur.
-      </div>
-      <button className="button button--dark button--wide" onClick={() => startBridge({ chain, asset, amount })} data-autofocus>
-        Confirm simulation <ArrowRight size={14} />
-      </button>
-    </>
-  );
-}
+  const isCollateral = modal.type === 'post' || modal.type === 'unpost';
+  const collateral: CollateralState | undefined = isCollateral ? protocol?.collaterals[modal.collateralId] : undefined;
+  const market: MarketState | undefined = isCollateral
+    ? protocol?.markets.find((m) => m.pool.toLowerCase() === collateral?.token.toLowerCase())
+    : protocol?.markets[(modal as { marketId: number }).marketId];
 
-const NOTES: Record<AmountAction, string> = {
-  supply: 'Estimate your receipt shares',
-  withdraw: 'Return assets to your wallet',
-  borrow: 'Borrow from the Mezo Hub',
-  repay: 'Reduce outstanding debt',
-};
+  const info = useMemo(() => {
+    if (!market || !protocol) return null;
+    const symbol = symbolForPriceKey(market.priceKey);
+    const price = symbol ? (prices?.[symbol] ?? 0) : 0;
+    const walletAsset = balances?.hub.tokens[market.symbol] ?? 0n;
+    const walletShares = balances?.hub.tokens[market.receiptSymbol] ?? 0n;
+    const debt = position?.debts.find((x) => x.marketId === market.id)?.amount ?? 0n;
+    const postedShares = collateral ? (position?.collateral.find((c) => c.id === collateral.id)?.balance ?? 0n) : 0n;
+    const availableUsd = valued?.availableUsd ?? 0;
+    const borrowMax = price > 0 ? parseUnits(Math.max(0, (availableUsd / price) * 0.999).toFixed(market.decimals > 6 ? 6 : market.decimals), market.decimals) : 0n;
 
-const SUBMIT: Record<AmountAction, string> = {
-  supply: 'Confirm supply',
-  withdraw: 'Confirm withdrawal',
-  borrow: 'Confirm borrow',
-  repay: 'Confirm repayment',
-};
+    // Max per action, in underlying units.
+    const max: Record<AmountModal['type'], bigint> = {
+      supply: walletAsset,
+      withdraw: assetsFor(market, walletShares) < market.cash ? assetsFor(market, walletShares) : market.cash,
+      borrow: borrowMax < market.cash ? borrowMax : market.cash,
+      repay: debt < walletAsset ? debt : walletAsset,
+      post: assetsFor(market, walletShares),
+      unpost: assetsFor(market, postedShares),
+    };
+    return { price, walletAsset, walletShares, debt, postedShares, max: max[modal.type] };
+  }, [market, protocol, prices, balances, position, collateral, valued, modal.type]);
 
-function AmountBody({ type, asset, amount }: Extract<ModalState, { type: AmountAction }>) {
-  const { state, summary, run, openModal, closeModal } = useApp();
-  const { account, rates } = state;
-  const receipt = RECEIPT_OF[asset];
-  const setAmount = (value: string) => openModal({ type, asset, amount: value });
-  const parsed = parseAmount(amount);
-  const value = parsed ?? 0;
+  if (!protocol || !market || !info) return <p className="muted-note">Loading on-chain data…</p>;
 
-  const max = {
-    supply: account.wallet[asset],
-    withdraw: summary.earn[asset],
-    borrow: Math.min(summary.available, marketStats('MUSD').liquidity),
-    repay: Math.min(account.debtMUSD, account.wallet.MUSD),
-  }[type];
-  // Round MAX down to cents so the value never exceeds the limit after string conversion.
-  const maxInput = Math.floor(max * 100) / 100;
-  const invalid = parsed === null || parsed > max + 1e-9;
+  let parsed: bigint | null = null;
+  try {
+    parsed = amount.trim() === '' ? null : parseUnits(amount, market.decimals);
+  } catch {
+    parsed = null;
+  }
+  const value = parsed ?? 0n;
+  const invalid = parsed === null || parsed <= 0n || parsed > info.max;
+  const usd = units(value, market.decimals) * info.price;
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (parsed === null) return;
-    const action = {
-      supply: (s: typeof state) => supply(s, asset, parsed),
-      withdraw: (s: typeof state) => withdraw(s, asset, parsed),
-      borrow: (s: typeof state) => borrow(s, parsed),
-      repay: (s: typeof state) => repay(s, parsed),
-    }[type];
-    if (run(action)) closeModal();
+  // Health factor preview with fresh prices.
+  const hfAfter = (() => {
+    if (!valued) return null;
+    let adjusted = valued.adjustedCollateralUsd;
+    let debt = valued.debtUsd;
+    if (modal.type === 'borrow') debt += usd;
+    if (modal.type === 'repay') debt = Math.max(0, debt - usd);
+    if (collateral && modal.type === 'post') adjusted += (usd * collateral.ltBps) / 10_000;
+    if (collateral && modal.type === 'unpost') adjusted -= (usd * collateral.ltBps) / 10_000;
+    return debt > 0 ? adjusted / debt : Infinity;
+  })();
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (invalid || !address || !hub) return;
+    const ctx = { account: address, hub };
+    const steps = (() => {
+      switch (modal.type) {
+        case 'supply':
+          return supplySteps(ctx, market, value);
+        case 'withdraw':
+          return withdrawSteps(ctx, market, value, useMax ? { shares: info.walletShares } : null);
+        case 'borrow':
+          return borrowSteps(ctx, market, value);
+        case 'repay':
+          return repaySteps(ctx, market, useMax && info.debt <= info.walletAsset ? info.debt : value, useMax && info.debt <= info.walletAsset);
+        case 'post':
+          return postCollateralSteps(ctx, collateral!, useMax ? info.walletShares : sharesFor(market, value));
+        case 'unpost':
+          return withdrawCollateralSteps(ctx, collateral!, useMax ? info.postedShares : sharesFor(market, value));
+      }
+    })();
+    const result = await run(`${TITLES[modal.type]} ${market.symbol}`, steps);
+    if (result.ok) closeModal();
   };
+
+  const rate = modal.type === 'borrow' || modal.type === 'repay' ? perSecondToAnnual(market.borrowRatePerSecond) : perSecondToAnnual(market.supplyRatePerSecond);
+  const tone = hfAfter === null ? 'ok' : healthStatus(hfAfter).tone;
 
   return (
     <form onSubmit={submit}>
       <div className="modal-note">
         <Coins size={17} />
         <div>
-          <b>{NOTES[type]}</b>
-          <p>Review the local demo values below. This will only update the preview state.</p>
+          <b>
+            {modal.type === 'supply' && `Deposit ${market.symbol}, receive ${market.receiptSymbol} (ERC-4626)`}
+            {modal.type === 'withdraw' && `Redeem ${market.receiptSymbol} for ${market.symbol}`}
+            {modal.type === 'borrow' && `Borrow ${market.symbol} on the Mezo Hub`}
+            {modal.type === 'repay' && `Repay ${market.symbol} debt`}
+            {modal.type === 'post' && `Escrow ${market.receiptSymbol} in VaultManager — it keeps earning`}
+            {modal.type === 'unpost' && `Return ${market.receiptSymbol} from VaultManager to your wallet`}
+          </b>
+          <p>{modal.type === 'borrow' || modal.type === 'unpost' ? 'Fresh Pyth prices are posted with the transaction (small BTC fee).' : 'Approval is requested only if your allowance is too low.'}</p>
         </div>
       </div>
       <label className="field-label" htmlFor="modal-amount">
         AMOUNT{' '}
         <span>
-          Max {fmt(maxInput, 2)} {asset}
+          Max {fmt(units(info.max, market.decimals), 4)} {market.symbol}
         </span>
       </label>
       <AmountInput
@@ -163,86 +152,56 @@ function AmountBody({ type, asset, amount }: Extract<ModalState, { type: AmountA
         large
         autoFocus
         value={amount}
-        onChange={setAmount}
-        unit={asset}
-        max={maxInput}
-        onMax={() => setAmount(String(maxInput))}
+        onChange={(v) => {
+          setAmount(v);
+          setUseMax(false);
+        }}
+        unit={market.symbol}
+        onMax={() => {
+          setAmount(units(info.max, market.decimals).toString());
+          setUseMax(true);
+        }}
       />
       <div className="modal-summary">
-        {type === 'supply' && (
-          <>
-            <span>
-              Receipt estimate
-              <b>
-                {fmt(sharesForAssets(value, rates[receipt]), 2)} {receipt}
-              </b>
-            </span>
-            <span>
-              Simulated supply APY<b>{marketStats(asset).totalSupplyApy.toFixed(2)}%</b>
-            </span>
-          </>
+        <span>
+          Value<b>{money(usd, 2)}</b>
+        </span>
+        <span>
+          {modal.type === 'borrow' || modal.type === 'repay' ? 'Borrow APY' : 'Supply APY'}
+          <b>{fmtApy(rate)}</b>
+        </span>
+        {modal.type === 'supply' && (
+          <span>
+            You receive<b>≈ {fmt(units(sharesFor(market, value), market.shareDecimals), 4)} {market.receiptSymbol}</b>
+          </span>
         )}
-        {type === 'withdraw' && (
-          <>
-            <span>
-              Your supplied balance
-              <b>
-                {fmt(summary.earn[asset], 2)} {asset}
-              </b>
-            </span>
-            <span>
-              Shares redeemed
-              <b>
-                {fmt(sharesForAssets(value, rates[receipt]), 2)} {receipt}
-              </b>
-            </span>
-          </>
-        )}
-        {type === 'borrow' && (
-          <>
-            <span>
-              Available collateral capacity<b>{money(summary.available, 2)}</b>
-            </span>
-            <span>
-              Borrow APY<b>{marketOf('MUSD').borrowApy.toFixed(2)}%</b>
-            </span>
-            <span>
-              Health factor
-              <b>
-                {fmtHealth(summary.healthFactor)} → {fmtHealth(healthFactor(summary.collateral, summary.debt + value, RISK_PARAMS.liquidationThreshold))}
-              </b>
-            </span>
-          </>
-        )}
-        {type === 'repay' && (
-          <>
-            <span>
-              Outstanding Hub debt<b>{money(account.debtMUSD, 2)}</b>
-            </span>
-            <span>
-              Remaining debt<b>{money(Math.max(0, account.debtMUSD - value), 2)}</b>
-            </span>
-            <span>
-              Health factor
-              <b>
-                {fmtHealth(summary.healthFactor)} →{' '}
-                {fmtHealth(healthFactor(summary.collateral, Math.max(0, summary.debt - value), RISK_PARAMS.liquidationThreshold))}
-              </b>
-            </span>
-          </>
+        {(modal.type === 'borrow' || modal.type === 'repay' || isCollateral) && valued && (
+          <span>
+            Health factor
+            <b className={`tone-${tone}`}>
+              {fmtHealth(valued.healthFactor)} → {hfAfter === null ? '—' : fmtHealth(hfAfter)}
+            </b>
+          </span>
         )}
       </div>
-      {parsed !== null && invalid && (
+      {parsed !== null && parsed > info.max && (
         <p className="inline-error" role="alert">
-          Amount exceeds the maximum of {fmt(maxInput, 2)} {asset}.
+          Amount exceeds the maximum available.
         </p>
       )}
       <div className="message-warning">
-        <Shield size={14} /> This is a local simulation. Nothing will be signed or sent.
+        <Shield size={14} /> Real transaction on {HUB.label}. Review it in your wallet before signing.
       </div>
-      <button type="submit" disabled={invalid} className="button button--dark button--wide">
-        {SUBMIT[type]} <ArrowRight size={14} />
-      </button>
+      <ConnectGate connected={isConnected}>
+        <button type="submit" disabled={invalid || Boolean(busy)} className="button button--dark button--wide">
+          {busy ?? (
+            <>
+              {TITLES[modal.type]} {market.symbol} <ArrowRight size={14} />
+            </>
+          )}
+        </button>
+      </ConnectGate>
+      {useMax && modal.type === 'repay' && info.debt > info.walletAsset && <p className="muted-note">Wallet balance is below the full debt; repaying what you hold.</p>}
     </form>
   );
 }

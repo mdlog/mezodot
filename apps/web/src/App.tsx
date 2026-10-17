@@ -3,9 +3,7 @@ import {
   Activity as ActivityIcon,
   ArrowDownLeft,
   BarChart3,
-  Bell,
   Check,
-  ChevronDown,
   ChevronRight,
   CircleHelp,
   ExternalLink,
@@ -14,17 +12,15 @@ import {
   Network,
   Radio,
   RefreshCw,
-  RotateCcw,
   Route,
   TriangleAlert,
-  Wallet,
   X,
   type LucideIcon,
 } from 'lucide-react';
+import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { ActionModal } from './components/ActionModal';
-import { ActivityDetailModal } from './components/ActivityDetailModal';
 import { Brand } from './components/ui';
-import { PROTOCOL } from './data/mock';
+import { ENV_NAME, HUB, HUB_DEPLOYED, SPOKES } from './chain/env';
 import type { View } from './hooks/useHashRoute';
 import { Activity } from './pages/Activity';
 import { Agents } from './pages/Agents';
@@ -34,7 +30,7 @@ import { Crosschain } from './pages/Crosschain';
 import { Dashboard } from './pages/Dashboard';
 import { Loop } from './pages/Loop';
 import { Markets } from './pages/Markets';
-import { AppProvider, useApp } from './state/AppContext';
+import { UiProvider, useUi } from './state/UiContext';
 
 type NavItem = { key: View; label: string; icon: LucideIcon; group: 'PROTOCOL' | 'CAPITAL' | 'INTELLIGENCE' };
 
@@ -62,7 +58,7 @@ const PAGES: Record<View, () => JSX.Element> = {
 };
 
 function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { view, go, showToast, reset } = useApp();
+  const { view, go } = useUi();
   return (
     <aside className={`sidebar ${open ? 'sidebar--open' : ''}`}>
       <div className="sidebar-brand">
@@ -71,16 +67,6 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
           <X size={17} />
         </button>
       </div>
-      <button className="workspace-switch" onClick={() => showToast('Mezodot Protocol demo workspace')}>
-        <span className="workspace-emblem">
-          <Network size={14} />
-        </span>
-        <span>
-          <b>Mezodot</b>
-          <small>Protocol workspace</small>
-        </span>
-        <ChevronDown size={14} />
-      </button>
       <nav className="side-nav" aria-label="Main navigation">
         {NAV_GROUPS.map((group) => (
           <div className="nav-group" key={group}>
@@ -99,34 +85,30 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
               >
                 <Icon size={16} />
                 <span>{label}</span>
-                {key === 'crosschain' && <i className="nav-link-indicator" />}
               </a>
             ))}
           </div>
         ))}
       </nav>
       <div className="sidebar-bottom">
-        <button className="help-link" onClick={reset}>
-          <RotateCcw size={15} /> Reset demo state
-        </button>
-        <button className="help-link" onClick={() => showToast('Help center is not connected in this prototype')}>
-          <CircleHelp size={15} /> Documentation <ExternalLink size={12} />
-        </button>
+        <a className="help-link" href="https://github.com/mezo-org" target="_blank" rel="noreferrer">
+          <CircleHelp size={15} /> Mezo developer docs <ExternalLink size={12} />
+        </a>
         <div className="sidebar-network">
           <div>
             <span className="network-icon">M</span>
             <span>
-              <b>{PROTOCOL.network}</b>
+              <b>{HUB.label}</b>
               <small>
-                <i /> {PROTOCOL.environment}
+                <i className={HUB_DEPLOYED ? '' : 'dot-off'} /> {HUB_DEPLOYED ? `Hub live · ${SPOKES.length} spoke${SPOKES.length === 1 ? '' : 's'}` : 'Not deployed yet'}
               </small>
             </span>
           </div>
         </div>
         <div className="sidebar-footer">
-          <span>MEZODOT UI</span>
+          <span>MEZODOT</span>
           <span>
-            v0.10.0 <i>·</i> DEMO
+            v1.0 <i>·</i> {ENV_NAME.toUpperCase()}
           </span>
         </div>
       </div>
@@ -135,7 +117,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
 }
 
 function Topbar({ onOpenMenu }: { onOpenMenu: () => void }) {
-  const { view, connected, openModal, showToast } = useApp();
+  const { view } = useUi();
   const label = NAV_ITEMS.find((item) => item.key === view)?.label ?? 'Overview';
   return (
     <header className="topbar">
@@ -150,39 +132,14 @@ function Topbar({ onOpenMenu }: { onOpenMenu: () => void }) {
         </div>
       </div>
       <div className="topbar-right">
-        <button className="network-selector network-selector--button" onClick={() => showToast(`Active network: ${PROTOCOL.network} · simulation only`)}>
-          <span className="network-icon">M</span>
-          <span>
-            Mezo <small>·</small> Hub
-          </span>
-          <ChevronDown size={12} />
-        </button>
-        <button className="icon-button notification-button" onClick={() => showToast('No new demo notifications')} aria-label="Notifications">
-          <Bell size={16} />
-          <i />
-        </button>
-        <button
-          className={`wallet-button ${connected ? 'wallet-button--connected' : ''}`}
-          onClick={() => (connected ? showToast(`Demo account · ${PROTOCOL.demoAddress}`) : openModal({ type: 'wallet' }))}
-        >
-          {connected ? (
-            <>
-              <span className="wallet-status-dot" />
-              {PROTOCOL.demoAddress}
-            </>
-          ) : (
-            <>
-              <Wallet size={15} /> Connect wallet
-            </>
-          )}
-        </button>
+        <ConnectButton chainStatus="icon" accountStatus="address" showBalance={false} />
       </div>
     </header>
   );
 }
 
 function ToastView() {
-  const { toast, dismissToast } = useApp();
+  const { toast, dismissToast } = useUi();
   if (!toast) return null;
   return (
     <div className={`toast toast--${toast.tone}`} role={toast.tone === 'error' ? 'alert' : 'status'}>
@@ -196,7 +153,7 @@ function ToastView() {
 }
 
 function Shell() {
-  const { view } = useApp();
+  const { view } = useUi();
   const [mobileMenu, setMobileMenu] = useState(false);
   const Page = PAGES[view];
 
@@ -211,10 +168,10 @@ function Shell() {
             <Page />
             <footer className="page-footer">
               <Brand />
-              <span>Productive capital, across chains.</span>
+              <span>Productive capital, across chains. Built on Mezo.</span>
               <div>
-                <span>TERMS</span>
-                <span>RISK DISCLOSURE</span>
+                <span>UNAUDITED</span>
+                <span>TESTNET ONLY</span>
                 <span>© 2026 MEZODOT</span>
               </div>
             </footer>
@@ -222,7 +179,6 @@ function Shell() {
         </div>
       </main>
       <ActionModal />
-      <ActivityDetailModal />
       <ToastView />
     </div>
   );
@@ -230,8 +186,8 @@ function Shell() {
 
 export default function App() {
   return (
-    <AppProvider>
+    <UiProvider>
       <Shell />
-    </AppProvider>
+    </UiProvider>
   );
 }
