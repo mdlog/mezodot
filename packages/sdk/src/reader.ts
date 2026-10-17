@@ -1,5 +1,5 @@
 import { erc20Abi, keccak256, toHex, type Address, type Hex, type PublicClient } from 'viem';
-import { oracleRouterAbi, pTokenAbi, vaultManagerAbi, keeperGatewayAbi } from './abis';
+import { pTokenAbi, vaultManagerAbi, keeperGatewayAbi } from './abis';
 import type { HubDeployment } from './deployments';
 
 export const PRICE_SYMBOLS = ['MUSD', 'MEZO', 'ETH', 'USDC'] as const;
@@ -48,13 +48,10 @@ export type CollateralState = {
   symbol: string;
 };
 
-export type PriceState = { price: bigint; publishTime: bigint };
-
+/** Markets and collateral config. Prices live in the oracle state (see readOracle in oracle.ts). */
 export type ProtocolState = {
   markets: MarketState[];
   collaterals: CollateralState[];
-  /** WAD USD prices at last on-chain update (may be stale; use Hermes for fresh previews). */
-  prices: Partial<Record<PriceSymbol, PriceState>>;
   keeperCount: bigint;
   blockNumber: bigint;
 };
@@ -179,24 +176,7 @@ export async function readProtocol(client: PublicClient, hub: HubDeployment): Pr
     }),
   );
 
-  const prices: ProtocolState['prices'] = {};
-  await Promise.all(
-    PRICE_SYMBOLS.map(async (s) => {
-      try {
-        const [price, publishTime] = await client.readContract({
-          address: hub.contracts.oracleRouter,
-          abi: oracleRouterAbi,
-          functionName: 'getPriceUnsafe',
-          args: [PRICE_KEYS[s]],
-        });
-        prices[s] = { price, publishTime };
-      } catch {
-        // Feed never updated on-chain yet.
-      }
-    }),
-  );
-
-  return { markets, collaterals, prices, keeperCount, blockNumber };
+  return { markets, collaterals, keeperCount, blockNumber };
 }
 
 export async function readPosition(client: PublicClient, hub: HubDeployment, protocol: ProtocolState, account: Address): Promise<PositionState> {

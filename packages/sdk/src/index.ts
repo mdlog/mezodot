@@ -4,6 +4,7 @@ export * from './deployments';
 export * from './math';
 export * from './payload';
 export * from './pyth';
+export * from './oracle';
 export * from './wormhole';
 export * from './reader';
 export * from './valuation';

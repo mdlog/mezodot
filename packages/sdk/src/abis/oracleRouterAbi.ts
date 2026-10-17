@@ -4,27 +4,64 @@ export const oracleRouterAbi = [
     type: 'constructor',
     inputs: [
       {
-        name: 'pyth_',
-        type: 'address',
-        internalType: 'contract IPyth',
-      },
-      {
-        name: 'maxAge_',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-      {
-        name: 'maxConfBps_',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-      {
         name: 'owner_',
         type: 'address',
         internalType: 'address',
       },
     ],
     stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'CROSS_CHECK_WINDOW',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'MAX_AGE_CAP',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'uint32',
+        internalType: 'uint32',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'MAX_CONF_CAP_BPS',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'uint16',
+        internalType: 'uint16',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'MAX_DIVERGENCE_CAP_BPS',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'uint16',
+        internalType: 'uint16',
+      },
+    ],
+    stateMutability: 'view',
   },
   {
     type: 'function',
@@ -45,9 +82,65 @@ export const oracleRouterAbi = [
     ],
     outputs: [
       {
-        name: 'priceId',
-        type: 'bytes32',
-        internalType: 'bytes32',
+        name: '',
+        type: 'tuple',
+        internalType: 'struct OracleRouter.Feed',
+        components: [
+          {
+            name: 'primary',
+            type: 'tuple',
+            internalType: 'struct OracleRouter.Leg',
+            components: [
+              {
+                name: 'source',
+                type: 'uint8',
+                internalType: 'uint8',
+              },
+              {
+                name: 'maxAge',
+                type: 'uint32',
+                internalType: 'uint32',
+              },
+              {
+                name: 'id',
+                type: 'bytes32',
+                internalType: 'bytes32',
+              },
+            ],
+          },
+          {
+            name: 'secondary',
+            type: 'tuple',
+            internalType: 'struct OracleRouter.Leg',
+            components: [
+              {
+                name: 'source',
+                type: 'uint8',
+                internalType: 'uint8',
+              },
+              {
+                name: 'maxAge',
+                type: 'uint32',
+                internalType: 'uint32',
+              },
+              {
+                name: 'id',
+                type: 'bytes32',
+                internalType: 'bytes32',
+              },
+            ],
+          },
+          {
+            name: 'maxConfBps',
+            type: 'uint16',
+            internalType: 'uint16',
+          },
+          {
+            name: 'maxDivergenceBps',
+            type: 'uint16',
+            internalType: 'uint16',
+          },
+        ],
       },
     ],
     stateMutability: 'view',
@@ -73,6 +166,35 @@ export const oracleRouterAbi = [
   },
   {
     type: 'function',
+    name: 'getPriceInfo',
+    inputs: [
+      {
+        name: 'key',
+        type: 'bytes32',
+        internalType: 'bytes32',
+      },
+    ],
+    outputs: [
+      {
+        name: 'ok',
+        type: 'bool',
+        internalType: 'bool',
+      },
+      {
+        name: 'priceWad',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+      {
+        name: 'validUntil',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
     name: 'getPriceUnsafe',
     inputs: [
       {
@@ -89,32 +211,6 @@ export const oracleRouterAbi = [
       },
       {
         name: 'publishTime',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-    ],
-    stateMutability: 'view',
-  },
-  {
-    type: 'function',
-    name: 'maxAge',
-    inputs: [],
-    outputs: [
-      {
-        name: '',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-    ],
-    stateMutability: 'view',
-  },
-  {
-    type: 'function',
-    name: 'maxConfBps',
-    inputs: [],
-    outputs: [
-      {
-        name: '',
         type: 'uint256',
         internalType: 'uint256',
       },
@@ -149,19 +245,6 @@ export const oracleRouterAbi = [
   },
   {
     type: 'function',
-    name: 'pyth',
-    inputs: [],
-    outputs: [
-      {
-        name: '',
-        type: 'address',
-        internalType: 'contract IPyth',
-      },
-    ],
-    stateMutability: 'view',
-  },
-  {
-    type: 'function',
     name: 'renounceOwnership',
     inputs: [],
     outputs: [],
@@ -177,13 +260,106 @@ export const oracleRouterAbi = [
         internalType: 'bytes32',
       },
       {
-        name: 'priceId',
-        type: 'bytes32',
-        internalType: 'bytes32',
+        name: 'f',
+        type: 'tuple',
+        internalType: 'struct OracleRouter.Feed',
+        components: [
+          {
+            name: 'primary',
+            type: 'tuple',
+            internalType: 'struct OracleRouter.Leg',
+            components: [
+              {
+                name: 'source',
+                type: 'uint8',
+                internalType: 'uint8',
+              },
+              {
+                name: 'maxAge',
+                type: 'uint32',
+                internalType: 'uint32',
+              },
+              {
+                name: 'id',
+                type: 'bytes32',
+                internalType: 'bytes32',
+              },
+            ],
+          },
+          {
+            name: 'secondary',
+            type: 'tuple',
+            internalType: 'struct OracleRouter.Leg',
+            components: [
+              {
+                name: 'source',
+                type: 'uint8',
+                internalType: 'uint8',
+              },
+              {
+                name: 'maxAge',
+                type: 'uint32',
+                internalType: 'uint32',
+              },
+              {
+                name: 'id',
+                type: 'bytes32',
+                internalType: 'bytes32',
+              },
+            ],
+          },
+          {
+            name: 'maxConfBps',
+            type: 'uint16',
+            internalType: 'uint16',
+          },
+          {
+            name: 'maxDivergenceBps',
+            type: 'uint16',
+            internalType: 'uint16',
+          },
+        ],
       },
     ],
     outputs: [],
     stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'setSource',
+    inputs: [
+      {
+        name: 'tag',
+        type: 'uint8',
+        internalType: 'uint8',
+      },
+      {
+        name: 'source',
+        type: 'address',
+        internalType: 'contract IPriceSource',
+      },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'sources',
+    inputs: [
+      {
+        name: 'tag',
+        type: 'uint8',
+        internalType: 'uint8',
+      },
+    ],
+    outputs: [
+      {
+        name: '',
+        type: 'address',
+        internalType: 'contract IPriceSource',
+      },
+    ],
+    stateMutability: 'view',
   },
   {
     type: 'function',
@@ -234,7 +410,7 @@ export const oracleRouterAbi = [
     ],
     outputs: [
       {
-        name: '',
+        name: 'fee',
         type: 'uint256',
         internalType: 'uint256',
       },
@@ -271,10 +447,66 @@ export const oracleRouterAbi = [
         internalType: 'bytes32',
       },
       {
-        name: 'priceId',
-        type: 'bytes32',
+        name: 'feed',
+        type: 'tuple',
         indexed: false,
-        internalType: 'bytes32',
+        internalType: 'struct OracleRouter.Feed',
+        components: [
+          {
+            name: 'primary',
+            type: 'tuple',
+            internalType: 'struct OracleRouter.Leg',
+            components: [
+              {
+                name: 'source',
+                type: 'uint8',
+                internalType: 'uint8',
+              },
+              {
+                name: 'maxAge',
+                type: 'uint32',
+                internalType: 'uint32',
+              },
+              {
+                name: 'id',
+                type: 'bytes32',
+                internalType: 'bytes32',
+              },
+            ],
+          },
+          {
+            name: 'secondary',
+            type: 'tuple',
+            internalType: 'struct OracleRouter.Leg',
+            components: [
+              {
+                name: 'source',
+                type: 'uint8',
+                internalType: 'uint8',
+              },
+              {
+                name: 'maxAge',
+                type: 'uint32',
+                internalType: 'uint32',
+              },
+              {
+                name: 'id',
+                type: 'bytes32',
+                internalType: 'bytes32',
+              },
+            ],
+          },
+          {
+            name: 'maxConfBps',
+            type: 'uint16',
+            internalType: 'uint16',
+          },
+          {
+            name: 'maxDivergenceBps',
+            type: 'uint16',
+            internalType: 'uint16',
+          },
+        ],
       },
     ],
     anonymous: false,
@@ -318,13 +550,37 @@ export const oracleRouterAbi = [
     anonymous: false,
   },
   {
+    type: 'event',
+    name: 'SourceSet',
+    inputs: [
+      {
+        name: 'tag',
+        type: 'uint8',
+        indexed: true,
+        internalType: 'uint8',
+      },
+      {
+        name: 'source',
+        type: 'address',
+        indexed: false,
+        internalType: 'address',
+      },
+    ],
+    anonymous: false,
+  },
+  {
     type: 'error',
     name: 'InsufficientFee',
     inputs: [],
   },
   {
     type: 'error',
-    name: 'InvalidPrice',
+    name: 'InvalidConfig',
+    inputs: [],
+  },
+  {
+    type: 'error',
+    name: 'InvalidUpdate',
     inputs: [],
   },
   {
@@ -351,8 +607,25 @@ export const oracleRouterAbi = [
   },
   {
     type: 'error',
-    name: 'PriceUncertain',
-    inputs: [],
+    name: 'PriceDiverged',
+    inputs: [
+      {
+        name: 'key',
+        type: 'bytes32',
+        internalType: 'bytes32',
+      },
+    ],
+  },
+  {
+    type: 'error',
+    name: 'PriceUnavailable',
+    inputs: [
+      {
+        name: 'key',
+        type: 'bytes32',
+        internalType: 'bytes32',
+      },
+    ],
   },
   {
     type: 'error',
@@ -363,5 +636,16 @@ export const oracleRouterAbi = [
     type: 'error',
     name: 'UnknownFeed',
     inputs: [],
+  },
+  {
+    type: 'error',
+    name: 'UnknownSource',
+    inputs: [
+      {
+        name: 'tag',
+        type: 'uint8',
+        internalType: 'uint8',
+      },
+    ],
   },
 ] as const;

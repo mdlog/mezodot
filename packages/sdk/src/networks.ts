@@ -37,14 +37,13 @@ export type NetworkInfo = {
   wormholeChainId: number;
   /** Wormholescan API base for signed VAAs; null on the local devnet (self-signed VAAs). */
   wormholescanApi: string | null;
-  /** Pyth Hermes-compatible price service. */
-  hermesUrl: string;
+  /** Supra DORA `get_proof` endpoint for pull prices on the hub; null where the agent mocks it (devnet) or on spokes. */
+  supraProofUrl: string | null;
 };
 
-const HERMES = 'https://hermes.pyth.network';
 const WORMHOLESCAN_TESTNET = 'https://api.testnet.wormholescan.io';
-/** Devnet price service served by the agent (mimics the Hermes API with MockPyth payloads). */
-export const DEVNET_HERMES = 'http://127.0.0.1:8787/hermes';
+/** Supra DORA testnet proofs (keyless). Mezo testnet's pull contract only accepts testnet committee signatures. */
+export const SUPRA_TESTNET_PROOF_URL = 'https://rpc-testnet-dora-2.supra.com/get_proof';
 
 export const NETWORKS: Record<NetworkName, NetworkInfo> = {
   'mezo-testnet': {
@@ -54,7 +53,7 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     chain: mezoTestnet,
     wormholeChainId: 50,
     wormholescanApi: WORMHOLESCAN_TESTNET,
-    hermesUrl: HERMES,
+    supraProofUrl: SUPRA_TESTNET_PROOF_URL,
   },
   'base-sepolia': {
     name: 'base-sepolia',
@@ -63,7 +62,7 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     chain: baseSepolia,
     wormholeChainId: 10004,
     wormholescanApi: WORMHOLESCAN_TESTNET,
-    hermesUrl: HERMES,
+    supraProofUrl: null,
   },
   'eth-sepolia': {
     name: 'eth-sepolia',
@@ -72,7 +71,7 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     chain: sepolia,
     wormholeChainId: 10002,
     wormholescanApi: WORMHOLESCAN_TESTNET,
-    hermesUrl: HERMES,
+    supraProofUrl: null,
   },
   'devnet-hub': {
     name: 'devnet-hub',
@@ -81,7 +80,7 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     chain: devnetHub,
     wormholeChainId: 50,
     wormholescanApi: null,
-    hermesUrl: DEVNET_HERMES,
+    supraProofUrl: null,
   },
   'devnet-spoke': {
     name: 'devnet-spoke',
@@ -90,7 +89,7 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     chain: devnetSpoke,
     wormholeChainId: 10004,
     wormholescanApi: null,
-    hermesUrl: DEVNET_HERMES,
+    supraProofUrl: null,
   },
 };
 

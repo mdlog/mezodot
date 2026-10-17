@@ -28,8 +28,9 @@ export const pTokenUnits = (market: MarketState, shares: bigint): number =>
   toNumber(shares, market.shareDecimals) * toNumber(market.exchangeRate, market.decimals);
 
 /**
- * Values a position with off-chain (fresh) prices using the same rules as VaultManager:
- * pToken collateral through the exchange rate, remote collateral by token units.
+ * Values a position using the same rules as VaultManager: pToken collateral through the exchange rate,
+ * remote collateral by token units. Pass `usablePrices(...)` so that collateral without an acceptable
+ * price counts as zero, as VaultManager does for borrow and withdraw limits.
  */
 export function valuePosition(protocol: ProtocolState, position: PositionState, prices: UsdPrices): ValuedPosition {
   const collateral = protocol.collaterals.map((c): ValuedCollateral => {
@@ -61,16 +62,6 @@ export function valuePosition(protocol: ProtocolState, position: PositionState, 
     debts,
     remoteCollateralUsd: collateral.filter((r) => r.collateral.isRemote).reduce((s, r) => s + r.valueUsd, 0),
   };
-}
-
-/** Converts Hermes prices keyed by feed id into prices keyed by symbol. */
-export function pricesBySymbol(feeds: Record<PriceSymbol, `0x${string}`>, byId: Record<string, { price: number }>): UsdPrices {
-  const out: UsdPrices = {};
-  for (const [symbol, id] of Object.entries(feeds) as [PriceSymbol, string][]) {
-    const p = byId[id.toLowerCase()];
-    if (p) out[symbol] = p.price;
-  }
-  return out;
 }
 
 /**

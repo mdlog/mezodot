@@ -22,7 +22,10 @@ export type HubDeployment = {
     pMUSD: Address;
     pMEZO: Address;
     wormhole: Address;
+    /** Pyth Core used by the router's Pyth source. */
     pyth: Address;
+    /** Supra DORA pull contract behind the router's Supra source (zero address when not configured). */
+    supraPull: Address;
   };
   tokens: { MUSD: Address; MEZO: Address };
   priceFeeds: { MUSD: Hex; MEZO: Hex; ETH: Hex; USDC: Hex };

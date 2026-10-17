@@ -21,13 +21,23 @@ type HermesResponse = {
 
 const with0x = (s: string): Hex => (s.startsWith('0x') ? s : `0x${s}`) as Hex;
 
+/** Pyth Hermes. Every request needs a Pyth API key since the 2026-08-26 Pyth Core cutover. */
+export const PYTH_HERMES_URL = 'https://hermes.pyth.network';
+
 /**
- * Fetches the latest signed price updates from a Hermes-compatible service
- * (real Pyth Hermes on testnet, the agent's mock Hermes on the devnet).
+ * Fetches the latest signed Pyth updates from Hermes. Server-side only: the API key must never reach a
+ * browser bundle (VITE_* values are public), and the browser app never calls Hermes.
+ * Updates are untagged Pyth payloads; tag them with SOURCE_TAG.PYTH before passing them to OracleRouter.
  */
-export async function fetchPriceUpdate(hermesUrl: string, ids: Hex[], fetchImpl: typeof fetch = fetch): Promise<PriceUpdate> {
+export async function fetchPriceUpdate(
+  hermesUrl: string,
+  ids: Hex[],
+  fetchImpl: typeof fetch = fetch,
+  opts: { accessToken?: string } = {},
+): Promise<PriceUpdate> {
   const query = ids.map((id) => `ids[]=${id}`).join('&');
-  const res = await fetchImpl(`${hermesUrl}/v2/updates/price/latest?${query}&encoding=hex&parsed=true`);
+  const headers: Record<string, string> = opts.accessToken ? { authorization: `Bearer ${opts.accessToken}` } : {};
+  const res = await fetchImpl(`${hermesUrl}/v2/updates/price/latest?${query}&encoding=hex&parsed=true`, { headers });
   if (!res.ok) throw new Error(`Price service error ${res.status}`);
   const body = (await res.json()) as HermesResponse;
   const prices: Record<string, PythPrice> = {};
@@ -46,7 +56,7 @@ const PRICE = [
   { name: 'publishTime', type: 'uint256' },
 ] as const;
 
-/** Same bytes as MockPyth.createPriceFeedUpdateData (devnet only). */
+/** Same bytes as MockPyth.createPriceFeedUpdateData (devnet and tests only). */
 export function encodeMockPythUpdate(id: Hex, price: bigint, conf: bigint, expo: number, publishTime: bigint): Hex {
   const p = { price, conf, expo, publishTime };
   return encodeAbiParameters(
