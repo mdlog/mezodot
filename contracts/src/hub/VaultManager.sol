@@ -1,0 +1,539 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.28;
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Ownable, Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {PToken} from "./PToken.sol";
+import {OracleRouter} from "./OracleRouter.sol";
+
+interface IReleaseSender {
+    function sendRelease(uint16 chainId, bytes32 token, bytes32 recipient, uint256 amount)
+        external
+        payable
+        returns (uint64 sequence);
+    function messageFee() external view returns (uint256);
+}
+
+/// @title VaultManager
+/// @notice Source of truth for Mezodot positions across chains: collateral held on the hub
+///         (escrowed pTokens) and on external spokes (credited via verified Wormhole messages),
+///         debt in every hub market, LTV limits, health factors and liquidations.
+/// @dev Health factor = Σ(collateral value × liquidation threshold) / Σ debt value.
+///      New debt and withdrawals require Σ(collateral value × LTV) ≥ debt afterwards.
+///      All USD values are WAD. Risk-checked entrypoints accept Pyth price updates and refund unused BTC.
+contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
+    uint256 internal constant WAD = 1e18;
+    uint256 internal constant BPS = 10_000;
+    uint256 public constant CLOSE_FACTOR_BPS = 5_000;
+    uint256 public constant MAX_COLLATERALS = 16;
+    uint256 public constant MAX_MARKETS = 8;
+
+    struct CollateralConfig {
+        bool enabled;
+        bool isRemote;
+        /// Local pToken address (hub collateral) or zero for remote collateral.
+        address token;
+        /// Wormhole chain id of the spoke (remote only).
+        uint16 chainId;
+        /// Spoke token address in universal 32-byte form (remote only).
+        bytes32 remoteToken;
+        /// Decimals of the priced unit: underlying decimals for local pTokens, token decimals for remote.
+        uint8 decimals;
+        bytes32 priceKey;
+        uint16 ltvBps;
+        uint16 ltBps;
+        uint16 bonusBps;
+        /// Maximum total balance in collateral units (shares for local, token units for remote).
+        uint256 cap;
+    }
+
+    struct Market {
+        PToken pool;
+        bytes32 priceKey;
+        uint8 decimals;
+        bool enabled;
+    }
+
+    struct RiskSnapshot {
+        uint256 collateralValue;
+        /// Σ value × liquidation threshold.
+        uint256 adjustedCollateral;
+        /// Σ value × LTV.
+        uint256 borrowLimit;
+        uint256 debtValue;
+        /// WAD; type(uint256).max when there is no debt.
+        uint256 healthFactor;
+    }
+
+    OracleRouter public immutable oracle;
+    address public adapter;
+
+    CollateralConfig[] internal _collaterals;
+    Market[] internal _markets;
+
+    mapping(address account => mapping(uint256 collateralId => uint256)) public collateralBalance;
+    mapping(uint256 collateralId => uint256) public totalCollateral;
+    mapping(address account => mapping(address operator => bool)) public isOperator;
+    mapping(uint16 chainId => mapping(bytes32 token => uint256 idPlusOne)) public remoteCollateralId;
+    mapping(address token => bool) internal _localListed;
+
+    event CollateralAdded(uint256 indexed id, CollateralConfig config);
+    event CollateralParamsSet(uint256 indexed id, uint16 ltvBps, uint16 ltBps, uint16 bonusBps, uint256 cap, bool enabled);
+    event MarketAdded(uint256 indexed marketId, address pool, bytes32 priceKey);
+    event AdapterSet(address adapter);
+    event OperatorSet(address indexed account, address indexed operator, bool approved);
+    event CollateralDeposited(address indexed account, uint256 indexed id, uint256 amount, address from);
+    event CollateralWithdrawn(address indexed account, uint256 indexed id, uint256 amount, address to);
+    event RemoteCredited(address indexed account, uint256 indexed id, uint256 amount);
+    event RemoteWithdrawRequested(address indexed account, uint256 indexed id, uint256 amount, bytes32 recipient, uint64 sequence);
+    event Borrowed(address indexed account, uint256 indexed marketId, uint256 amount, address receiver);
+    event Repaid(address indexed account, uint256 indexed marketId, uint256 amount, address payer);
+    event Liquidated(
+        address indexed account,
+        address indexed liquidator,
+        uint256 indexed marketId,
+        uint256 collateralId,
+        uint256 repaid,
+        uint256 seized
+    );
+
+    error InvalidParams();
+    error InvalidCollateral();
+    error InvalidMarket();
+    error CapExceeded();
+    error InsufficientCollateral();
+    error InsufficientBalance();
+    error NotOperator();
+    error NotAdapter();
+    error NothingToRepay();
+    error PositionHealthy();
+    error SlippageExceeded();
+    error ZeroAmount();
+    error InsufficientValue();
+    error RefundFailed();
+
+    modifier onlyAdapter() {
+        if (msg.sender != adapter) revert NotAdapter();
+        _;
+    }
+
+    modifier onlyOperatorOf(address account) {
+        if (msg.sender != account && !isOperator[account][msg.sender]) revert NotOperator();
+        _;
+    }
+
+    constructor(OracleRouter oracle_, address owner_) Ownable(owner_) {
+        oracle = oracle_;
+    }
+
+    // =========================================================================
+    // Admin
+    // =========================================================================
+
+    function addCollateral(CollateralConfig calldata c) external onlyOwner returns (uint256 id) {
+        if (_collaterals.length >= MAX_COLLATERALS) revert InvalidParams();
+        _validateParams(c.ltvBps, c.ltBps, c.bonusBps);
+        if (c.isRemote) {
+            if (c.chainId == 0 || c.remoteToken == bytes32(0) || c.token != address(0)) revert InvalidCollateral();
+            if (remoteCollateralId[c.chainId][c.remoteToken] != 0) revert InvalidCollateral();
+        } else {
+            if (c.token == address(0) || _localListed[c.token]) revert InvalidCollateral();
+            _localListed[c.token] = true;
+        }
+        id = _collaterals.length;
+        _collaterals.push(c);
+        if (c.isRemote) remoteCollateralId[c.chainId][c.remoteToken] = id + 1;
+        emit CollateralAdded(id, c);
+    }
+
+    function setCollateralParams(uint256 id, uint16 ltvBps, uint16 ltBps, uint16 bonusBps, uint256 cap, bool enabled)
+        external
+        onlyOwner
+    {
+        _validateParams(ltvBps, ltBps, bonusBps);
+        CollateralConfig storage c = _collateral(id);
+        c.ltvBps = ltvBps;
+        c.ltBps = ltBps;
+        c.bonusBps = bonusBps;
+        c.cap = cap;
+        c.enabled = enabled;
+        emit CollateralParamsSet(id, ltvBps, ltBps, bonusBps, cap, enabled);
+    }
+
+    function addMarket(PToken pool, bytes32 priceKey) external onlyOwner returns (uint256 marketId) {
+        if (_markets.length >= MAX_MARKETS || address(pool) == address(0)) revert InvalidParams();
+        for (uint256 i = 0; i < _markets.length; i++) {
+            if (_markets[i].pool == pool) revert InvalidMarket();
+        }
+        marketId = _markets.length;
+        _markets.push(Market(pool, priceKey, IERC20Decimals(pool.asset()).decimals(), true));
+        emit MarketAdded(marketId, address(pool), priceKey);
+    }
+
+    function setAdapter(address adapter_) external onlyOwner {
+        adapter = adapter_;
+        emit AdapterSet(adapter_);
+    }
+
+    /// @notice Blocks new collateral deposits and borrows. Repay, withdraw and liquidation stay open.
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
+    function _validateParams(uint16 ltvBps, uint16 ltBps, uint16 bonusBps) internal pure {
+        // Liquidation must stay profitable before the position becomes insolvent: lt × (1 + bonus) ≤ 100%.
+        if (ltvBps > ltBps || ltBps > 9_500 || bonusBps > 2_000 || uint256(ltBps) * (BPS + bonusBps) > BPS * BPS) {
+            revert InvalidParams();
+        }
+    }
+
+    // =========================================================================
+    // User actions
+    // =========================================================================
+
+    function setOperator(address operator, bool approved) external {
+        isOperator[msg.sender][operator] = approved;
+        emit OperatorSet(msg.sender, operator, approved);
+    }
+
+    /// @notice Posts pToken shares held by the caller as collateral.
+    function depositCollateral(uint256 id, uint256 shares) external nonReentrant whenNotPaused {
+        _depositLocal(msg.sender, id, shares);
+    }
+
+    /// @notice Posts the caller's pToken shares as collateral for `account` (e.g. LeverageManager).
+    function depositCollateralFor(address account, uint256 id, uint256 shares) external nonReentrant whenNotPaused {
+        _depositLocal(account, id, shares);
+    }
+
+    function withdrawCollateral(uint256 id, uint256 shares, address to, bytes[] calldata priceUpdate)
+        external
+        payable
+        nonReentrant
+    {
+        uint256 spent = _pushPrices(priceUpdate);
+        _withdrawLocal(msg.sender, id, shares, to);
+        _refund(spent);
+    }
+
+    function withdrawCollateralFor(address account, uint256 id, uint256 shares, address to, bytes[] calldata priceUpdate)
+        external
+        payable
+        nonReentrant
+        onlyOperatorOf(account)
+    {
+        uint256 spent = _pushPrices(priceUpdate);
+        _withdrawLocal(account, id, shares, to);
+        _refund(spent);
+    }
+
+    /// @notice Releases collateral held on a spoke to `recipient` there, via a Wormhole RELEASE message.
+    /// @dev The hub balance is debited before the message is sent, so the spoke can never release
+    ///      more than the hub has accounted for. msg.value must cover price updates + Wormhole fee.
+    function withdrawRemote(uint256 id, uint256 amount, bytes32 recipient, bytes[] calldata priceUpdate)
+        external
+        payable
+        nonReentrant
+    {
+        CollateralConfig storage c = _collateral(id);
+        if (!c.isRemote || recipient == bytes32(0)) revert InvalidCollateral();
+        if (amount == 0) revert ZeroAmount();
+        uint256 spent = _pushPrices(priceUpdate);
+        _debit(msg.sender, id, amount);
+        _requireWithinLimit(msg.sender, 0, 0);
+        uint256 fee = IReleaseSender(adapter).messageFee();
+        uint64 sequence =
+            IReleaseSender(adapter).sendRelease{value: fee}(c.chainId, c.remoteToken, recipient, amount);
+        emit RemoteWithdrawRequested(msg.sender, id, amount, recipient, sequence);
+        _refund(spent + fee);
+    }
+
+    function borrow(uint256 marketId, uint256 amount, bytes[] calldata priceUpdate)
+        external
+        payable
+        nonReentrant
+        whenNotPaused
+    {
+        uint256 spent = _pushPrices(priceUpdate);
+        _borrow(msg.sender, marketId, amount, msg.sender);
+        _refund(spent);
+    }
+
+    function borrowFor(address account, uint256 marketId, uint256 amount, address receiver, bytes[] calldata priceUpdate)
+        external
+        payable
+        nonReentrant
+        whenNotPaused
+        onlyOperatorOf(account)
+    {
+        uint256 spent = _pushPrices(priceUpdate);
+        _borrow(account, marketId, amount, receiver);
+        _refund(spent);
+    }
+
+    /// @notice Repays debt of `onBehalfOf` from the caller's tokens. `type(uint256).max` repays everything.
+    function repay(uint256 marketId, uint256 amount, address onBehalfOf)
+        external
+        nonReentrant
+        returns (uint256 applied)
+    {
+        applied = _repay(onBehalfOf, marketId, amount, msg.sender);
+    }
+
+    /// @notice Liquidates an account with health factor < 1.
+    /// @param repayAmount Debt to repay, capped by the 50% close factor and by available collateral.
+    /// @param minSeize Minimum collateral units to receive (slippage guard).
+    /// @param localReceiver Receives seized pTokens (local collateral).
+    /// @param remoteReceiver Receives seized tokens on the spoke (remote collateral).
+    function liquidate(
+        address account,
+        uint256 marketId,
+        uint256 repayAmount,
+        uint256 collateralId,
+        uint256 minSeize,
+        address localReceiver,
+        bytes32 remoteReceiver,
+        bytes[] calldata priceUpdate
+    ) external payable nonReentrant returns (uint256 seized) {
+        uint256 spent = _pushPrices(priceUpdate);
+        _accrueAll();
+        Market storage m = _market(marketId);
+        CollateralConfig storage c = _collateral(collateralId);
+        if (collateralBalance[account][collateralId] == 0) revert InsufficientBalance();
+        {
+            (,,, uint256 debtValue, uint256 hf) = _position(account, true);
+            if (debtValue == 0 || hf >= WAD) revert PositionHealthy();
+        }
+
+        uint256 owed = m.pool.borrowBalanceStored(account);
+        uint256 repaid = Math.min(repayAmount, owed * CLOSE_FACTOR_BPS / BPS);
+        if (repaid == 0) revert ZeroAmount();
+        (seized, repaid) = _seizeAmount(account, m, c, collateralId, repaid);
+        if (seized < minSeize || seized == 0) revert SlippageExceeded();
+
+        _debit(account, collateralId, seized);
+        IERC20(m.pool.asset()).safeTransferFrom(msg.sender, address(m.pool), repaid);
+        m.pool.notifyRepay(account, repaid);
+
+        uint256 fee;
+        if (c.isRemote) {
+            if (remoteReceiver == bytes32(0)) revert InvalidParams();
+            fee = IReleaseSender(adapter).messageFee();
+            IReleaseSender(adapter).sendRelease{value: fee}(c.chainId, c.remoteToken, remoteReceiver, seized);
+        } else {
+            IERC20(c.token).safeTransfer(localReceiver, seized);
+        }
+        emit Liquidated(account, msg.sender, marketId, collateralId, repaid, seized);
+        _refund(spent + fee);
+    }
+
+    /// @notice Credits spoke collateral after the adapter verified a Wormhole DEPOSIT message.
+    /// @dev Not pausable and ignores `enabled`/`cap`: the tokens are already locked on the spoke
+    ///      (which enforces its own caps), so refusing the credit would strand user funds.
+    function creditRemote(address account, uint256 id, uint256 amount) external onlyAdapter {
+        CollateralConfig storage c = _collateral(id);
+        if (!c.isRemote) revert InvalidCollateral();
+        collateralBalance[account][id] += amount;
+        totalCollateral[id] += amount;
+        emit RemoteCredited(account, id, amount);
+    }
+
+    // =========================================================================
+    // Views
+    // =========================================================================
+
+    function getRiskSnapshot(address account) external view returns (RiskSnapshot memory s) {
+        (s.collateralValue, s.adjustedCollateral, s.borrowLimit, s.debtValue, s.healthFactor) = _position(account, false);
+    }
+
+    function collaterals(uint256 id) external view returns (CollateralConfig memory) {
+        return _collateral(id);
+    }
+
+    function markets(uint256 marketId) external view returns (Market memory) {
+        return _market(marketId);
+    }
+
+    function collateralCount() external view returns (uint256) {
+        return _collaterals.length;
+    }
+
+    function marketCount() external view returns (uint256) {
+        return _markets.length;
+    }
+
+    /// @notice USD value (WAD) of `account`'s balance in collateral `id`, at last known prices.
+    function collateralValue(address account, uint256 id) external view returns (uint256) {
+        return _valueOf(_collaterals[id], collateralBalance[account][id], false);
+    }
+
+    // =========================================================================
+    // Internals
+    // =========================================================================
+
+    function _collateral(uint256 id) internal view returns (CollateralConfig storage) {
+        if (id >= _collaterals.length) revert InvalidCollateral();
+        return _collaterals[id];
+    }
+
+    function _market(uint256 marketId) internal view returns (Market storage) {
+        if (marketId >= _markets.length) revert InvalidMarket();
+        return _markets[marketId];
+    }
+
+    function _depositLocal(address account, uint256 id, uint256 shares) internal {
+        CollateralConfig storage c = _collateral(id);
+        if (c.isRemote || !c.enabled) revert InvalidCollateral();
+        if (shares == 0) revert ZeroAmount();
+        if (totalCollateral[id] + shares > c.cap) revert CapExceeded();
+        collateralBalance[account][id] += shares;
+        totalCollateral[id] += shares;
+        IERC20(c.token).safeTransferFrom(msg.sender, address(this), shares);
+        emit CollateralDeposited(account, id, shares, msg.sender);
+    }
+
+    function _withdrawLocal(address account, uint256 id, uint256 shares, address to) internal {
+        CollateralConfig storage c = _collateral(id);
+        if (c.isRemote) revert InvalidCollateral();
+        if (shares == 0) revert ZeroAmount();
+        _debit(account, id, shares);
+        _requireWithinLimit(account, 0, 0);
+        IERC20(c.token).safeTransfer(to, shares);
+        emit CollateralWithdrawn(account, id, shares, to);
+    }
+
+    function _debit(address account, uint256 id, uint256 amount) internal {
+        uint256 balance = collateralBalance[account][id];
+        if (amount > balance) revert InsufficientBalance();
+        collateralBalance[account][id] = balance - amount;
+        totalCollateral[id] -= amount;
+    }
+
+    function _borrow(address account, uint256 marketId, uint256 amount, address receiver) internal {
+        Market storage m = _market(marketId);
+        if (!m.enabled) revert InvalidMarket();
+        if (amount == 0) revert ZeroAmount();
+        // Check the post-borrow position before any tokens move.
+        _requireWithinLimit(account, marketId, amount);
+        m.pool.borrow(account, amount, receiver);
+        emit Borrowed(account, marketId, amount, receiver);
+    }
+
+    function _repay(address account, uint256 marketId, uint256 amount, address payer) internal returns (uint256 applied) {
+        Market storage m = _market(marketId);
+        m.pool.accrueInterest();
+        uint256 owed = m.pool.borrowBalanceStored(account);
+        if (owed == 0) revert NothingToRepay();
+        applied = Math.min(amount, owed);
+        IERC20(m.pool.asset()).safeTransferFrom(payer, address(m.pool), applied);
+        m.pool.notifyRepay(account, applied);
+        emit Repaid(account, marketId, applied, payer);
+    }
+
+    /// @dev Reverts unless Σ value × LTV ≥ debt (+ `extraAmount` of market `extraMarket`).
+    function _requireWithinLimit(address account, uint256 extraMarket, uint256 extraAmount) internal {
+        _accrueAll();
+        (,, uint256 limit, uint256 debtValue,) = _position(account, true);
+        if (extraAmount > 0) {
+            Market storage m = _markets[extraMarket];
+            debtValue += _usd(extraAmount, oracle.getPrice(m.priceKey), m.decimals);
+        }
+        if (debtValue > limit) revert InsufficientCollateral();
+    }
+
+    function _accrueAll() internal {
+        for (uint256 i = 0; i < _markets.length; i++) {
+            _markets[i].pool.accrueInterest();
+        }
+    }
+
+    /// @param strict Use freshness-checked prices (state-changing paths) or last known prices (views).
+    function _position(address account, bool strict)
+        internal
+        view
+        returns (uint256 value, uint256 adjusted, uint256 limit, uint256 debtValue, uint256 hf)
+    {
+        for (uint256 id = 0; id < _collaterals.length; id++) {
+            uint256 balance = collateralBalance[account][id];
+            if (balance == 0) continue;
+            CollateralConfig storage c = _collaterals[id];
+            uint256 v = _valueOf(c, balance, strict);
+            value += v;
+            adjusted += v * c.ltBps / BPS;
+            limit += v * c.ltvBps / BPS;
+        }
+        for (uint256 i = 0; i < _markets.length; i++) {
+            Market storage m = _markets[i];
+            // Views include interest pending since the last accrual; mutating paths accrue first.
+            uint256 debt = strict ? m.pool.borrowBalanceStored(account) : m.pool.borrowBalanceView(account);
+            if (debt == 0) continue;
+            debtValue += _usd(debt, _price(m.priceKey, strict), m.decimals);
+        }
+        hf = debtValue == 0 ? type(uint256).max : adjusted * WAD / debtValue;
+    }
+
+    function _valueOf(CollateralConfig storage c, uint256 balance, bool strict) internal view returns (uint256) {
+        if (balance == 0) return 0;
+        uint256 units = c.isRemote ? balance : PToken(c.token).convertToAssets(balance);
+        return _usd(units, _price(c.priceKey, strict), c.decimals);
+    }
+
+    function _seizeAmount(address account, Market storage m, CollateralConfig storage c, uint256 collateralId, uint256 repaid)
+        internal
+        view
+        returns (uint256 seized, uint256 actualRepaid)
+    {
+        uint256 repayValue = _usd(repaid, oracle.getPrice(m.priceKey), m.decimals);
+        uint256 seizeValue = repayValue * (BPS + c.bonusBps) / BPS;
+        uint256 price = oracle.getPrice(c.priceKey);
+        uint256 seizeUnits = seizeValue * 10 ** c.decimals / price;
+
+        uint256 balance = collateralBalance[account][collateralId];
+        uint256 balanceUnits = c.isRemote ? balance : PToken(c.token).convertToAssets(balance);
+        if (seizeUnits >= balanceUnits) {
+            // Not enough collateral: take all of it and scale the repayment down proportionally.
+            return (balance, Math.mulDiv(repaid, balanceUnits, seizeUnits, Math.Rounding.Ceil));
+        }
+        seized = c.isRemote ? seizeUnits : PToken(c.token).convertToShares(seizeUnits);
+        actualRepaid = repaid;
+    }
+
+    function _price(bytes32 key, bool strict) internal view returns (uint256 price) {
+        if (strict) return oracle.getPrice(key);
+        (price,) = oracle.getPriceUnsafe(key);
+    }
+
+    function _usd(uint256 amount, uint256 priceWad, uint8 decimals) internal pure returns (uint256) {
+        return Math.mulDiv(amount, priceWad, 10 ** decimals);
+    }
+
+    function _pushPrices(bytes[] calldata updates) internal returns (uint256 fee) {
+        if (updates.length == 0) return 0;
+        fee = oracle.updateFee(updates);
+        if (msg.value < fee) revert InsufficientValue();
+        oracle.updatePrices{value: fee}(updates);
+    }
+
+    /// @dev Returns `msg.value - spent` to the caller.
+    function _refund(uint256 spent) internal {
+        if (msg.value < spent) revert InsufficientValue();
+        uint256 refund = msg.value - spent;
+        if (refund == 0) return;
+        (bool ok,) = msg.sender.call{value: refund}("");
+        if (!ok) revert RefundFailed();
+    }
+}
+
+interface IERC20Decimals {
+    function decimals() external view returns (uint8);
+}
