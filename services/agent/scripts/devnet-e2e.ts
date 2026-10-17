@@ -3,8 +3,8 @@
  * full cross-chain lifecycle without manual help.
  *
  *   1. user locks 1 WETH on the spoke            → agent relays DEPOSIT → hub credits collateral
- *   2. user borrows 2,300 MUSD (limit 2,400)
- *   3. ETH drops $3,200 → $2,800 (mock Hermes)   → HF ≈ 0.97
+ *   2. user borrows up to $100 below the 75% LTV limit
+ *   3. ETH drops $3,200 → $2,800 (mock Hermes)   → HF < 1
  *   4. agent liquidator repays half the debt via KeeperGateway, seizing WETH with a 7% bonus
  *   5. agent relays the RELEASE                  → keeper receives the WETH on the spoke
  *
@@ -21,6 +21,7 @@ import {
   getHubDeployment,
   getSpokeDeployment,
   oracleRouterAbi,
+  pTokenAbi,
   spokeGatewayAbi,
   toBytes32,
   vaultManagerAbi,
@@ -72,15 +73,19 @@ async function main() {
   });
   log('agent relayed DEPOSIT → hub credited 1 WETH');
 
-  // 2. Borrow close to the limit (75% × $3,200 = $2,400).
+  // 2. Borrow up to just below the limit at $3,200 (75% LTV), whatever the account already owes,
+  //    so the script is repeatable on the same account.
+  const weth = await hubClient.readContract({ address: hub!.contracts.vaultManager, abi: vaultManagerAbi, functionName: 'collateralBalance', args: [user.address, BigInt(wethId)] });
+  const owed = await hubClient.readContract({ address: hub!.contracts.pMUSD, abi: pTokenAbi, functionName: 'borrowBalanceView', args: [user.address] });
+  const borrowAmount = (weth * 3_200n * 75n) / 100n - owed - parseUnits('100', 18);
   const update = await fetchPriceUpdate(DEVNET_HERMES, Object.values(hub!.priceFeeds));
   const fee = await hubClient.readContract({ address: hub!.contracts.oracleRouter, abi: oracleRouterAbi, functionName: 'updateFee', args: [update.updates] });
-  await hubClient.waitForTransactionReceipt({ hash: await hubWallet.writeContract({ address: hub!.contracts.vaultManager, abi: vaultManagerAbi, functionName: 'borrow', args: [0n, parseUnits('2300', 18), update.updates], value: fee }) });
-  log('user borrowed 2,300 MUSD');
+  await hubClient.waitForTransactionReceipt({ hash: await hubWallet.writeContract({ address: hub!.contracts.vaultManager, abi: vaultManagerAbi, functionName: 'borrow', args: [0n, borrowAmount, update.updates], value: fee }) });
+  log(`user borrowed ${(Number(borrowAmount) / 1e18).toFixed(2)} MUSD (debt now ${(Number(owed + borrowAmount) / 1e18).toFixed(2)})`);
 
   // 3. Crash ETH.
   await setPrice({ ETH: 2_800 });
-  log('ETH price set to $2,800 → health factor ≈ 0.97');
+  log('ETH price set to $2,800 → health factor < 1');
 
   // 4. Agent liquidates.
   const keeperWethBefore = await spokeClient.readContract({ address: spoke!.tokens.WETH, abi: erc20Abi, functionName: 'balanceOf', args: [KEEPER] });
