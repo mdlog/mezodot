@@ -10,7 +10,8 @@
     "start": "tsx src/index.ts",
     "mcp": "tsx src/mcp/stdio.ts",
     "test": "vitest run",
-    "check": "tsc --noEmit && vitest run"
+    "check": "tsc --noEmit && vitest run",
+    "devnet:e2e": "tsx scripts/devnet-e2e.ts"
   },
   "dependencies": {
     "@mezodot/sdk": "workspace:*",

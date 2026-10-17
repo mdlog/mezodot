@@ -9,9 +9,15 @@
     "test:contracts": "forge test --root contracts",
     "check": "pnpm -r check && pnpm test:contracts",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "devnet": "scripts/devnet/start.sh",
+    "devnet:stop": "scripts/devnet/stop.sh",
+    "devnet:agent": "pnpm --filter @mezodot/agent start",
+    "devnet:e2e": "pnpm --filter @mezodot/agent devnet:e2e",
+    "e2e:ui": "node scripts/e2e/ui-flows.mjs"
   },
   "devDependencies": {
-    "prettier": "^3.9.10"
+    "prettier": "^3.9.10",
+    "playwright-core": "^1.56.0"
   }
 }
