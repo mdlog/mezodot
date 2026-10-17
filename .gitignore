@@ -11,3 +11,4 @@ contracts/broadcast/*/31337/
 services/agent/.state/
 .superpowers/
 services/agent/.env
+.worktrees/
