@@ -64,7 +64,6 @@ const protocol: ProtocolState = {
       symbol: 'WETH',
     },
   ],
-  prices: {},
   keeperCount: 0n,
   blockNumber: 0n,
 };
@@ -124,6 +123,16 @@ describe('evaluateAccount', () => {
 
   it('skips accounts when a price is unavailable', () => {
     const e = evaluateAccount(protocol, position(E18, 2_350n * E18), { MUSD: 1 });
+    expect(e.plan).toBeNull();
+    expect(e.symbols).toEqual(['MUSD', 'ETH']);
+    expect(e.unpriced).toEqual(['ETH']); // VaultManager prices liquidations strictly: it would revert
+  });
+
+  it('no plan when any held asset is unpriced, even if another pair looks profitable', () => {
+    // pMEZO alone would be seizable, but the WETH price is missing: the strict valuation reverts.
+    const shares = 6_000_000n * 10n ** 24n;
+    const e = evaluateAccount(protocol, position(20n * E18, 55_000n * E18, shares), { MEZO: 0.004764, MUSD: 1 });
+    expect(e.unpriced).toEqual(['ETH']);
     expect(e.plan).toBeNull();
   });
 });

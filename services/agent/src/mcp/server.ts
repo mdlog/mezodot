@@ -27,11 +27,23 @@ export function createMcpServer(services: Services, opts: ToolOptions): McpServe
     'get_position',
     {
       title: 'Position',
-      description: 'Cross-chain collateral, debts and health factor of an account, valued with fresh Pyth prices.',
+      description:
+        'Cross-chain collateral, debts and health factor of an account, valued at the prices the protocol would accept now (Pyth on Mezo, Supra pull for ETH/USDC).',
       inputSchema: { address: z.string().describe('EVM address of the account') },
       annotations: readOnly,
     },
     async (args) => text(await tools.get_position(args)),
+  );
+
+  server.registerTool(
+    'get_oracle_health',
+    {
+      title: 'Oracle health',
+      description:
+        'Per price feed: sources (Pyth push / Supra pull), age, how long it stays valid, and whether risk checks touching it would pass, need a pull update, or revert.',
+      annotations: readOnly,
+    },
+    async () => text(await tools.get_oracle_health()),
   );
 
   server.registerTool(

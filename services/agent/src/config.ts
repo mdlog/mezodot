@@ -1,7 +1,7 @@
-import { ENVIRONMENTS, NETWORKS, type EnvironmentName, type NetworkName } from '@mezodot/sdk';
+import { ENVIRONMENTS, NETWORKS, PYTH_HERMES_URL, type EnvironmentName, type NetworkName } from '@mezodot/sdk';
 import type { Hex } from 'viem';
 
-export type Module = 'relayer' | 'liquidator' | 'risk' | 'http';
+export type Module = 'relayer' | 'liquidator' | 'risk' | 'http' | 'oracle';
 
 export type AgentConfig = {
   env: EnvironmentName;
@@ -26,6 +26,12 @@ export type AgentConfig = {
   mcpAllowedOrigins: string[];
   /** Minimum liquidation profit in USD before the liquidator sends a transaction. */
   minProfitUsd: number;
+  /** Oracle watchdog (and optional pusher) interval. */
+  oracleWatchMs: number;
+  /** Optional Pyth API key (PYTH_API_KEY): enables the server-side Pyth pusher. Never sent to browsers. */
+  pythApiKey: string | null;
+  /** Hermes base URL used with pythApiKey. */
+  hermesUrl: string;
 };
 
 const hex = (v: string | undefined): Hex | null => (v && /^0x[0-9a-fA-F]{64}$/.test(v) ? (v as Hex) : null);
@@ -45,7 +51,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     rpc[n] = env[key] ?? NETWORKS[n].chain.rpcUrls.default.http[0];
   }
   const modules = new Set(
-    (env.AGENT_MODULES ?? 'relayer,liquidator,risk,http')
+    (env.AGENT_MODULES ?? 'relayer,liquidator,risk,http,oracle')
       .split(',')
       .map((m) => m.trim())
       .filter(Boolean) as Module[],
@@ -66,5 +72,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     mcpAllowedHosts: csv(env.MCP_ALLOWED_HOSTS),
     mcpAllowedOrigins: csv(env.MCP_ALLOWED_ORIGINS),
     minProfitUsd: Number(env.MIN_PROFIT_USD ?? 1),
+    oracleWatchMs: Number(env.ORACLE_WATCH_MS ?? 30_000),
+    pythApiKey: env.PYTH_API_KEY ? env.PYTH_API_KEY : null,
+    hermesUrl: (env.HERMES_URL ?? PYTH_HERMES_URL).replace(/\/$/, ''),
   };
 }

@@ -1,5 +1,14 @@
 import { formatUnits, getAddress, isAddress, type Address } from 'viem';
-import { perSecondToAnnual, planLoop, readPosition, readProtocol, symbolForPriceKey, type ProtocolState } from '@mezodot/sdk';
+import {
+  perSecondToAnnual,
+  planLoop,
+  positionSymbols,
+  readPosition,
+  readProtocol,
+  riskCheckSymbols,
+  symbolForPriceKey,
+  type ProtocolState,
+} from '@mezodot/sdk';
 import { evaluateAccount } from '../liquidator';
 import type { Services } from '../services';
 
@@ -62,8 +71,10 @@ export function createTools(s: Services, opts: ToolOptions) {
 
     async get_position({ address }: { address: string }) {
       const account = addr(address);
-      const [p, { prices }] = await Promise.all([protocol(), s.liquidator.freshPrices()]);
+      const p = await protocol();
       const position = await readPosition(ctx.hub.client, ctx.hub.deployment, p, account);
+      // Price everything the account holds, as a transaction sent now would see it.
+      const { prices, unpriced } = await s.oracle.pricing(positionSymbols(p, position));
       const evaluation = evaluateAccount(p, position, prices);
       return {
         account,
@@ -78,7 +89,12 @@ export function createTools(s: Services, opts: ToolOptions) {
           .map((d) => ({ market: p.markets[d.marketId].symbol, amount: formatUnits(d.amount, p.markets[d.marketId].decimals) })),
         liquidation: evaluation.plan,
         pricesUsed: prices,
+        unpriced,
       };
+    },
+
+    async get_oracle_health() {
+      return s.watchdog.report() ?? (await s.watchdog.check());
     },
 
     async get_risk_report() {
@@ -100,17 +116,22 @@ export function createTools(s: Services, opts: ToolOptions) {
 
     async simulate_borrow({ address, market, amount }: { address: string; market: string; amount: number }) {
       const account = addr(address);
-      const [p, { prices }] = await Promise.all([protocol(), s.liquidator.freshPrices()]);
+      const p = await protocol();
       const m = p.markets.find((x) => x.symbol === market.toUpperCase());
       if (!m) throw new Error(`Unknown market ${market}`);
       const position = await readPosition(ctx.hub.client, ctx.hub.deployment, p, account);
-      const current = evaluateAccount(p, position, prices);
       const priceSymbol = symbolForPriceKey(m.priceKey);
-      const addedUsd = amount * (priceSymbol ? (prices[priceSymbol] ?? 0) : 0);
+      const { prices, unpriced } = await s.oracle.pricing(riskCheckSymbols(p, position, priceSymbol));
+      const current = evaluateAccount(p, position, prices);
+      const debtPrice = priceSymbol ? prices[priceSymbol] : undefined;
+      const addedUsd = amount * (debtPrice ?? 0);
       const debtAfterUsd = current.debtUsd + addedUsd;
       const healthFactorAfter = debtAfterUsd > 0 ? current.adjustedUsd / debtAfterUsd : null;
+      // Debt is priced strictly: without a price for every debt asset the borrow reverts.
+      const debtUnpriced = unpriced.filter((u) => u === priceSymbol || p.markets.some((x) => symbolForPriceKey(x.priceKey) === u));
       return {
-        allowed: debtAfterUsd <= current.borrowLimitUsd,
+        allowed: debtUnpriced.length === 0 && debtAfterUsd <= current.borrowLimitUsd,
+        unpriced,
         healthFactorBefore: Number.isFinite(current.healthFactor) ? current.healthFactor : null,
         healthFactorAfter,
         borrowLimitUsd: current.borrowLimitUsd,
@@ -129,10 +150,15 @@ export function createTools(s: Services, opts: ToolOptions) {
 
     async trigger_liquidation({ address, dry_run = true, force = false }: { address: string; dry_run?: boolean; force?: boolean }) {
       const account = addr(address);
-      const { protocol: p, evaluations, update } = await s.liquidator.evaluateAll();
-      const e =
-        evaluations.find((x) => x.account.toLowerCase() === account.toLowerCase()) ??
-        evaluateAccount(p, await readPosition(ctx.hub.client, ctx.hub.deployment, p, account), (await s.liquidator.freshPrices()).prices);
+      const { protocol: p, evaluations } = await s.liquidator.evaluateAll();
+      let e = evaluations.find((x) => x.account.toLowerCase() === account.toLowerCase());
+      if (!e) {
+        const position = await readPosition(ctx.hub.client, ctx.hub.deployment, p, account);
+        e = evaluateAccount(p, position, (await s.oracle.pricing(riskCheckSymbols(p, position))).prices);
+      }
+      if (e.unpriced.length > 0) {
+        return { executed: false, reason: `No acceptable price for ${e.unpriced.join(', ')}: a liquidation would revert`, healthFactor: e.healthFactor };
+      }
       if (!e.plan) return { executed: false, reason: 'Account is not liquidatable', healthFactor: e.healthFactor };
       if (!force && e.plan.profitUsd < ctx.config.minProfitUsd) {
         return {
@@ -143,7 +169,7 @@ export function createTools(s: Services, opts: ToolOptions) {
       }
       const execute = !dry_run && opts.allowWrite;
       if (!ctx.hub.wallet) return { executed: false, reason: 'No keeper key configured; returning plan only', plan: e.plan };
-      const result = await s.liquidator.execute(p, e, update.updates, !execute);
+      const result = await s.liquidator.execute(p, e, await s.liquidator.updatesFor(e), !execute);
       return {
         executed: execute,
         reason: execute ? 'sent' : dry_run ? 'dry run (pass dry_run=false to execute)' : 'writes disabled (MCP_ALLOW_WRITE=true, and MCP_TOKEN over HTTP)',

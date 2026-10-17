@@ -2,8 +2,8 @@ import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { PRICE_SYMBOLS, type PriceSymbol } from '@mezodot/sdk';
 import { createMcpServer } from './mcp/server';
-import { MockHermes } from './mockHermes';
 import type { AgentConfig } from './config';
 import { toJson, type Services } from './services';
 
@@ -35,9 +35,19 @@ function send(res: ServerResponse, status: number, body: unknown, cors = true) {
   res.end(toJson(body));
 }
 
+/** `?symbols=ETH,USDC` → known symbols in canonical order; null when empty or unknown. */
+function parseSymbols(raw: string | null): PriceSymbol[] | null {
+  const asked = (raw ?? '')
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+  if (asked.length === 0 || asked.some((s) => !(PRICE_SYMBOLS as readonly string[]).includes(s))) return null;
+  return PRICE_SYMBOLS.filter((s) => asked.includes(s));
+}
+
 /**
- * Read-only JSON API for the web app (CORS open), the MCP Streamable HTTP endpoint and, on the
- * devnet, a mock Hermes price service. Binds to 127.0.0.1 unless HTTP_HOST is set.
+ * Read-only JSON API for the web app (CORS open), the oracle relay (signed Supra proofs; nothing secret),
+ * and the MCP Streamable HTTP endpoint. Binds to 127.0.0.1 unless HTTP_HOST is set.
  *
  * /mcp is never exposed to browsers: no CORS preflight, DNS-rebinding protection (Host and Origin
  * allowlists) and, when MCP_TOKEN is set, a bearer token on every request. Write tools over HTTP
@@ -45,12 +55,16 @@ function send(res: ServerResponse, status: number, body: unknown, cors = true) {
  */
 export function startHttp(s: Services, host = process.env.HTTP_HOST ?? '127.0.0.1') {
   const config = s.ctx.config;
-  const hermes = config.env === 'devnet' ? new MockHermes(s.ctx.hub.deployment) : null;
   const allowWrite = mcpWriteAllowed(config);
   if (config.mcpAllowWrite && !allowWrite) s.ctx.log('http', 'MCP write tools disabled over HTTP: set MCP_TOKEN (>= 16 chars)');
 
   const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? '/', 'http://localhost');
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', 'http://localhost');
+    } catch {
+      return send(res, 400, { error: 'Bad request target' }); // an uncaught throw here would kill the agent
+    }
     try {
       if (url.pathname === '/mcp') {
         if (req.method === 'OPTIONS') {
@@ -87,11 +101,20 @@ export function startHttp(s: Services, host = process.env.HTTP_HOST ?? '127.0.0.
 
       if (req.method === 'OPTIONS') return send(res, 204, '');
 
-      if (hermes && url.pathname === '/hermes/v2/updates/price/latest') {
-        return send(res, 200, hermes.latest(url.searchParams.getAll('ids[]')));
+      if (url.pathname === '/oracle/update') {
+        const symbols = parseSymbols(url.searchParams.get('symbols'));
+        if (!symbols) return send(res, 400, { error: `symbols must be a comma-separated subset of ${PRICE_SYMBOLS.join(',')}` });
+        try {
+          return send(res, 200, await s.oracle.update(symbols));
+        } catch (err) {
+          return send(res, 502, { error: err instanceof Error ? err.message.split('\n')[0] : String(err) });
+        }
       }
-      if (hermes && url.pathname === '/hermes/admin/prices' && req.method === 'POST') {
-        return send(res, 200, hermes.set(JSON.parse(await readBody(req))));
+      if (url.pathname === '/oracle/health') {
+        return send(res, 200, s.watchdog.report() ?? (await s.watchdog.check()));
+      }
+      if (config.env === 'devnet' && url.pathname === '/oracle/admin/prices' && req.method === 'POST') {
+        return send(res, 200, s.oracle.setMockPrices(JSON.parse(await readBody(req))));
       }
 
       switch (url.pathname) {

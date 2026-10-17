@@ -3,22 +3,25 @@ import { erc20Abi, maxUint256, type Address, type Hex } from 'viem';
 import {
   CLOSE_FACTOR_BPS,
   BPS,
-  fetchPriceUpdate,
+  PRICE_SYMBOLS,
   keeperGatewayAbi,
   oracleRouterAbi,
   readPosition,
   readProtocol,
-  pricesBySymbol,
+  riskCheckSymbols,
+  usablePrices,
   valuePosition,
   type UsdPrices,
   vaultManagerAbi,
   wormholeAdapterAbi,
   blockRanges,
-  NETWORKS,
+  type OracleState,
   type PositionState,
+  type PriceSymbol,
   type ProtocolState,
 } from '@mezodot/sdk';
 import type { Context } from './context';
+import { OracleRelay } from './oracle/relay';
 import { JsonStore } from './store';
 
 export type { UsdPrices };
@@ -47,15 +50,22 @@ export type AccountEvaluation = {
   /** Σ value × liquidation threshold at fresh prices. */
   adjustedUsd: number;
   debtUsd: number;
+  /** Price symbols VaultManager reads (strictly) to liquidate this account. */
+  symbols: PriceSymbol[];
+  /** Symbols in `symbols` without an acceptable price: a liquidation would revert, so there is no plan. */
+  unpriced: PriceSymbol[];
   plan: LiquidationPlan | null;
 };
 
 const SLIPPAGE_BPS = 200;
 const toNumber = (v: bigint, decimals: number) => Number(v) / 10 ** decimals;
+const errorLine = (err: unknown): string => (err instanceof Error ? err.message.split('\n')[0] : String(err));
 
 /**
- * Values a position with fresh off-chain prices and, if HF < 1, picks the largest debt and the
- * largest collateral, repaying up to the 50% close factor (capped by keeper inventory).
+ * Values a position with the prices VaultManager would accept (see OracleRelay.pricing) and, if HF < 1,
+ * picks the most profitable (debt, collateral) pair, repaying up to the 50% close factor (capped by
+ * keeper inventory). Without a price for every held asset there is no plan: VaultManager prices
+ * liquidations strictly and would revert.
  */
 export function evaluateAccount(
   protocol: ProtocolState,
@@ -67,6 +77,8 @@ export function evaluateAccount(
   const collateralRows = valued.collateral.map((r) => ({ c: r.collateral, balance: r.balance, units: r.units, price: r.price, valueUsd: r.valueUsd }));
   const debtRows = valued.debts.map((d) => ({ m: d.market, amount: d.amount, price: d.price, valueUsd: d.valueUsd }));
   const summary = valued;
+  const symbols = riskCheckSymbols(protocol, position);
+  const unpriced = symbols.filter((s) => !((prices[s] ?? 0) > 0));
 
   const base = {
     account: position.account,
@@ -76,8 +88,10 @@ export function evaluateAccount(
     borrowLimitUsd: summary.borrowLimitUsd,
     adjustedUsd: summary.adjustedCollateralUsd,
     debtUsd: summary.debtUsd,
+    symbols,
+    unpriced,
   };
-  if (!(summary.healthFactor < 1)) return { ...base, plan: null };
+  if (!(summary.healthFactor < 1) || unpriced.length > 0) return { ...base, plan: null };
 
   // Try every (debt market, collateral) pair; bonuses differ per collateral and the scaled branch
   // caps what a small collateral can pay, so the largest collateral is not always the best.
@@ -150,16 +164,9 @@ export class Liquidator {
 
   constructor(
     private readonly ctx: Context,
-    private readonly fetchImpl: typeof fetch = fetch,
+    readonly relay: OracleRelay = new OracleRelay(ctx),
   ) {
     this.store = new JsonStore<LiquidatorState>(join(ctx.config.stateDir, `liquidator-${ctx.config.env}.json`), { cursor: null, accounts: [] });
-  }
-
-  async freshPrices() {
-    const feeds = this.ctx.hub.deployment.priceFeeds;
-    const update = await fetchPriceUpdate(NETWORKS[this.ctx.hub.network].hermesUrl, Object.values(feeds), this.fetchImpl);
-    const prices = pricesBySymbol(feeds, update.prices);
-    return { update, prices };
   }
 
   /**
@@ -188,20 +195,40 @@ export class Liquidator {
     return this.store.get().accounts;
   }
 
-  async evaluateAll(): Promise<{
-    protocol: ProtocolState;
-    evaluations: AccountEvaluation[];
-    update: Awaited<ReturnType<Liquidator['freshPrices']>>['update'];
-  }> {
+  /**
+   * Values every indexed borrower. One failing position read skips that account for this tick instead
+   * of aborting the whole tick; pull prices are fetched once for the union of symbols the accounts need.
+   */
+  async evaluateAll(): Promise<{ protocol: ProtocolState; evaluations: AccountEvaluation[]; oracle: OracleState }> {
     const { client, deployment } = this.ctx.hub;
-    const [accounts, protocol, { update, prices }] = await Promise.all([this.syncAccounts(), readProtocol(client, deployment), this.freshPrices()]);
-    const inventory = await this.inventory(protocol);
-    const evaluations = await Promise.all(
-      accounts.map(async (a) => evaluateAccount(protocol, await readPosition(client, deployment, protocol, a), prices, inventory)),
-    );
+    const [accounts, protocol] = await Promise.all([this.syncAccounts(), readProtocol(client, deployment)]);
+    const [inventory, reads] = await Promise.all([
+      this.inventory(protocol),
+      Promise.allSettled(accounts.map((a) => readPosition(client, deployment, protocol, a))),
+    ]);
+    const positions: PositionState[] = [];
+    reads.forEach((r, i) => {
+      if (r.status === 'fulfilled') positions.push(r.value);
+      else this.ctx.log('liquidator', 'position read failed', { account: accounts[i], error: errorLine(r.reason) });
+    });
+    const symbols = PRICE_SYMBOLS.filter((s) => positions.some((p) => riskCheckSymbols(protocol, p).includes(s)));
+    const { oracle, prices } = await this.relay.pricing(symbols).catch(async (err: unknown) => {
+      // Pull prices down (e.g. Supra unreachable): keep going with what the router already accepts.
+      this.ctx.log('liquidator', 'pull prices unavailable', { error: errorLine(err) });
+      const oracle = await this.relay.oracle();
+      return { oracle, prices: usablePrices(oracle) };
+    });
+    const evaluations = positions.map((p) => evaluateAccount(protocol, p, prices, inventory));
     this.lastEvaluations = evaluations;
     this.lastRun = Date.now();
-    return { protocol, evaluations, update };
+    return { protocol, evaluations, oracle };
+  }
+
+  /** Pull updates a liquidation of `e` must attach right now (cached by the relay for a few seconds). */
+  async updatesFor(e: AccountEvaluation): Promise<Hex[]> {
+    const { update, unpriced } = await this.relay.pricing(e.symbols);
+    if (unpriced.length > 0) throw new Error(`No acceptable price for ${unpriced.join(', ')}`);
+    return update.updates;
   }
 
   private async inventory(protocol: ProtocolState): Promise<Record<number, bigint>> {
@@ -220,12 +247,12 @@ export class Liquidator {
   }
 
   async tick(): Promise<void> {
-    const { protocol, evaluations, update } = await this.evaluateAll();
+    const { protocol, evaluations } = await this.evaluateAll();
     for (const e of evaluations) {
       if (!e.plan || e.plan.profitUsd < this.ctx.config.minProfitUsd) continue;
-      await this.execute(protocol, e, update.updates).catch((err: unknown) =>
-        this.ctx.log('liquidator', 'liquidation failed', { account: e.account, error: err instanceof Error ? err.message.split('\n')[0] : String(err) }),
-      );
+      await this.updatesFor(e)
+        .then((updates) => this.execute(protocol, e, updates))
+        .catch((err: unknown) => this.ctx.log('liquidator', 'liquidation failed', { account: e.account, error: errorLine(err) }));
     }
   }
 

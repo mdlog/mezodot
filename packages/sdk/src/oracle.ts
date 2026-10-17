@@ -72,16 +72,11 @@ export async function readOracle(client: PublicClient, hub: HubDeployment): Prom
   return Object.fromEntries(rows.map((r) => [r.symbol, r])) as OracleState;
 }
 
-/**
- * Price symbols VaultManager reads in a risk-checked call by `position`'s account (borrow, withdraw,
- * loop, unwind, liquidation): every debt and every held collateral, plus `borrowSymbol` for new debt.
- * A debt-free account that borrows nothing needs no prices at all.
- */
-export function riskCheckSymbols(protocol: ProtocolState, position: PositionState | null, borrowSymbol?: PriceSymbol): PriceSymbol[] {
-  const wanted = new Set<PriceSymbol>(borrowSymbol ? [borrowSymbol] : []);
-  const debts = position?.debts.filter((d) => d.amount > 0n) ?? [];
-  if (debts.length === 0 && !borrowSymbol) return [];
-  for (const d of debts) {
+/** Price symbols of every collateral `position` holds and every debt it owes. */
+export function positionSymbols(protocol: ProtocolState, position: PositionState | null): PriceSymbol[] {
+  const wanted = new Set<PriceSymbol>();
+  for (const d of position?.debts ?? []) {
+    if (d.amount === 0n) continue;
     const symbol = symbolForPriceKey(protocol.markets.find((m) => m.id === d.marketId)?.priceKey ?? '0x');
     if (symbol) wanted.add(symbol);
   }
@@ -91,6 +86,18 @@ export function riskCheckSymbols(protocol: ProtocolState, position: PositionStat
     if (symbol) wanted.add(symbol);
   }
   return PRICE_SYMBOLS.filter((s) => wanted.has(s));
+}
+
+/**
+ * Price symbols VaultManager reads in a risk-checked call by `position`'s account (borrow, withdraw,
+ * loop, unwind, liquidation): every debt and every held collateral, plus `borrowSymbol` for new debt.
+ * A debt-free account that borrows nothing needs no prices at all.
+ */
+export function riskCheckSymbols(protocol: ProtocolState, position: PositionState | null, borrowSymbol?: PriceSymbol): PriceSymbol[] {
+  const hasDebt = position?.debts.some((d) => d.amount > 0n) ?? false;
+  if (!hasDebt && !borrowSymbol) return [];
+  const held = positionSymbols(protocol, position);
+  return PRICE_SYMBOLS.filter((s) => s === borrowSymbol || held.includes(s));
 }
 
 /** Symbols whose strict price is unavailable now or expires within `marginSec`. */

@@ -8,6 +8,7 @@ import {
   fetchOracleUpdate,
   fetchPriceUpdate,
   fetchSupraProof,
+  positionSymbols,
   riskCheckSymbols,
   staleSymbols,
   tagUpdate,
@@ -187,5 +188,6 @@ describe('price selection', () => {
     const p = position([[2, 5n]], []);
     expect(riskCheckSymbols(protocol, p)).toEqual([]);
     expect(riskCheckSymbols(protocol, p, 'MUSD')).toEqual(['MUSD', 'ETH']);
+    expect(positionSymbols(protocol, p)).toEqual(['ETH']); // what it holds, for display
   });
 });

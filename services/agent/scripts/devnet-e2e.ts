@@ -4,9 +4,12 @@
  *
  *   1. user locks 1 WETH on the spoke            → agent relays DEPOSIT → hub credits collateral
  *   2. user borrows up to $100 below the 75% LTV limit
- *   3. ETH drops $3,200 → $2,800 (mock Hermes)   → HF < 1
+ *   3. ETH drops $3,200 → $2,800 (agent mock oracle) → HF < 1
  *   4. agent liquidator repays half the debt via KeeperGateway, seizing WETH with a 7% bonus
  *   5. agent relays the RELEASE                  → keeper receives the WETH on the spoke
+ *
+ * Prices follow the testnet path: the borrow attaches only the pull updates its risk check needs
+ * (a Supra-format proof for ETH, a Pyth payload for MUSD) fetched from the agent's /oracle/update relay.
  *
  * Prereqs: scripts/devnet/start.sh, then the agent with KEEPER_PRIVATE_KEY (anvil #1) and
  * DEVNET_GUARDIAN_KEY. Run: pnpm --filter @mezodot/agent devnet:e2e
@@ -14,15 +17,19 @@
 import { createPublicClient, createWalletClient, erc20Abi, http, parseEther, parseUnits, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import {
-  DEVNET_HERMES,
   devnetHub,
   devnetSpoke,
-  fetchPriceUpdate,
+  fetchOracleUpdate,
   getHubDeployment,
   getSpokeDeployment,
   oracleRouterAbi,
   pTokenAbi,
+  readOracle,
+  readPosition,
+  readProtocol,
+  riskCheckSymbols,
   spokeGatewayAbi,
+  staleSymbols,
   toBytes32,
   vaultManagerAbi,
 } from '@mezodot/sdk';
@@ -30,6 +37,7 @@ import {
 const USER_KEY: Hex = '0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6'; // anvil #3
 const KEEPER: Address = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8'; // anvil #1 (agent keeper)
 const TIMEOUT_MS = 90_000;
+const AGENT = (process.env.AGENT_URL ?? 'http://127.0.0.1:8787').replace(/\/$/, '');
 
 const hub = getHubDeployment('devnet-hub');
 const spoke = getSpokeDeployment('devnet-spoke');
@@ -55,7 +63,7 @@ async function until<T>(what: string, probe: () => Promise<T | null | undefined 
 }
 
 const setPrice = (prices: Record<string, number>) =>
-  fetch(`${DEVNET_HERMES}/admin/prices`, { method: 'POST', body: JSON.stringify(prices) }).then((r) => r.json());
+  fetch(`${AGENT}/oracle/admin/prices`, { method: 'POST', body: JSON.stringify(prices) }).then((r) => r.json());
 
 async function main() {
   await setPrice({ ETH: 3_200 });
@@ -105,7 +113,14 @@ async function main() {
   });
   const owed = await hubClient.readContract({ address: hub!.contracts.pMUSD, abi: pTokenAbi, functionName: 'borrowBalanceView', args: [user.address] });
   const borrowAmount = (weth * 3_200n * 75n) / 100n - owed - parseUnits('100', 18);
-  const update = await fetchPriceUpdate(DEVNET_HERMES, Object.values(hub!.priceFeeds));
+  // Same selection as the web app: the symbols this risk check reads, minus those still fresh on-chain.
+  const protocol = await readProtocol(hubClient, hub!);
+  const position = await readPosition(hubClient, hub!, protocol, user.address);
+  const oracle = await readOracle(hubClient, hub!);
+  const needed = staleSymbols(oracle, riskCheckSymbols(protocol, position, 'MUSD'), Math.floor(Date.now() / 1000));
+  const update = await fetchOracleUpdate(AGENT, needed);
+  if (update.missing.length > 0) throw new Error(`Relay cannot update ${update.missing.join(', ')}`);
+  log(`attaching pull updates for ${needed.join(', ') || 'nothing'} (${update.updates.length} payloads)`);
   const fee = await hubClient.readContract({ address: hub!.contracts.oracleRouter, abi: oracleRouterAbi, functionName: 'updateFee', args: [update.updates] });
   await hubClient.waitForTransactionReceipt({
     hash: await hubWallet.writeContract({

@@ -53,6 +53,7 @@ describe('MCP server', () => {
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
       'get_markets',
+      'get_oracle_health',
       'get_position',
       'get_risk_report',
       'list_liquidatable',
