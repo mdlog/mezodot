@@ -45,7 +45,12 @@ export function describeCollaterals(protocol: ProtocolState) {
   }));
 }
 
-export function createTools(s: Services) {
+export type ToolOptions = {
+  /** Whether write tools may execute (dry_run=false). Decided by the transport: see http.ts / stdio.ts. */
+  allowWrite: boolean;
+};
+
+export function createTools(s: Services, opts: ToolOptions) {
   const { ctx } = s;
   const protocol = () => readProtocol(ctx.hub.client, ctx.hub.deployment);
 
@@ -122,19 +127,26 @@ export function createTools(s: Services) {
       return s.relayer.pending().map(({ vaa: _vaa, ...m }) => m);
     },
 
-    async trigger_liquidation({ address, dry_run = true }: { address: string; dry_run?: boolean }) {
+    async trigger_liquidation({ address, dry_run = true, force = false }: { address: string; dry_run?: boolean; force?: boolean }) {
       const account = addr(address);
       const { protocol: p, evaluations, update } = await s.liquidator.evaluateAll();
       const e =
         evaluations.find((x) => x.account.toLowerCase() === account.toLowerCase()) ??
         evaluateAccount(p, await readPosition(ctx.hub.client, ctx.hub.deployment, p, account), (await s.liquidator.freshPrices()).prices);
       if (!e.plan) return { executed: false, reason: 'Account is not liquidatable', healthFactor: e.healthFactor };
-      const execute = !dry_run && ctx.config.mcpAllowWrite;
+      if (!force && e.plan.profitUsd < ctx.config.minProfitUsd) {
+        return {
+          executed: false,
+          reason: `Expected profit $${e.plan.profitUsd.toFixed(2)} is below MIN_PROFIT_USD (pass force=true to override)`,
+          plan: e.plan,
+        };
+      }
+      const execute = !dry_run && opts.allowWrite;
       if (!ctx.hub.wallet) return { executed: false, reason: 'No keeper key configured; returning plan only', plan: e.plan };
       const result = await s.liquidator.execute(p, e, update.updates, !execute);
       return {
         executed: execute,
-        reason: execute ? 'sent' : dry_run ? 'dry run (pass dry_run=false to execute)' : 'writes disabled (set MCP_ALLOW_WRITE=true)',
+        reason: execute ? 'sent' : dry_run ? 'dry run (pass dry_run=false to execute)' : 'writes disabled (MCP_ALLOW_WRITE=true, and MCP_TOKEN over HTTP)',
         plan: e.plan,
         simulatedSeize: result.simulated,
         txHash: result.txHash,
@@ -144,9 +156,9 @@ export function createTools(s: Services) {
     async relay_message({ id, dry_run = true }: { id: string; dry_run?: boolean }) {
       const m = s.relayer.messages().find((x) => x.id === id);
       if (!m) throw new Error(`Unknown message ${id}`);
-      if (dry_run || !ctx.config.mcpAllowWrite) {
+      if (dry_run || !opts.allowWrite) {
         const { vaa: _vaa, ...rest } = m;
-        return { executed: false, reason: dry_run ? 'dry run' : 'writes disabled (set MCP_ALLOW_WRITE=true)', message: rest };
+        return { executed: false, reason: dry_run ? 'dry run' : 'writes disabled (MCP_ALLOW_WRITE=true, and MCP_TOKEN over HTTP)', message: rest };
       }
       const { vaa: _vaa, ...after } = await s.relayer.relay(id);
       return { executed: true, message: after };

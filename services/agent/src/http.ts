@@ -1,8 +1,20 @@
+import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpServer } from './mcp/server';
 import { MockHermes } from './mockHermes';
+import type { AgentConfig } from './config';
 import { toJson, type Services } from './services';
+
+/** Write tools over HTTP need both the explicit opt-in and a bearer token (fail closed). */
+export const mcpWriteAllowed = (c: AgentConfig): boolean => c.mcpAllowWrite && c.mcpToken !== null;
+
+function bearerMatches(header: string | undefined, token: string): boolean {
+  const expected = Buffer.from(`Bearer ${token}`);
+  const given = Buffer.from(header ?? '');
+  return given.length === expected.length && timingSafeEqual(given, expected);
+}
 
 const readBody = (req: IncomingMessage): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -24,22 +36,45 @@ function send(res: ServerResponse, status: number, body: unknown, cors = true) {
 }
 
 /**
- * Read-only JSON API for the web app (CORS open), the MCP Streamable HTTP endpoint (/mcp,
- * same-origin only) and, on the devnet, a mock Hermes price service.
- * Binds to 127.0.0.1 unless HTTP_HOST is set (e.g. 0.0.0.0 inside Docker).
+ * Read-only JSON API for the web app (CORS open), the MCP Streamable HTTP endpoint and, on the
+ * devnet, a mock Hermes price service. Binds to 127.0.0.1 unless HTTP_HOST is set.
+ *
+ * /mcp is never exposed to browsers: no CORS preflight, DNS-rebinding protection (Host and Origin
+ * allowlists) and, when MCP_TOKEN is set, a bearer token on every request. Write tools over HTTP
+ * additionally require MCP_ALLOW_WRITE=true *and* a token.
  */
 export function startHttp(s: Services, host = process.env.HTTP_HOST ?? '127.0.0.1') {
-  const hermes = s.ctx.config.env === 'devnet' ? new MockHermes(s.ctx.hub.deployment) : null;
+  const config = s.ctx.config;
+  const hermes = config.env === 'devnet' ? new MockHermes(s.ctx.hub.deployment) : null;
+  const allowWrite = mcpWriteAllowed(config);
+  if (config.mcpAllowWrite && !allowWrite) s.ctx.log('http', 'MCP write tools disabled over HTTP: set MCP_TOKEN (>= 16 chars)');
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     try {
-      if (req.method === 'OPTIONS') return send(res, 204, '');
-
       if (url.pathname === '/mcp') {
+        if (req.method === 'OPTIONS') {
+          res.writeHead(405).end(); // no CORS: browsers cannot be granted access to MCP
+          return;
+        }
+        // Browsers always send Origin; native MCP clients do not. The SDK skips its Origin check when the
+        // allowlist is empty, so enforce it here: no listed origin means no browser access at all.
+        const origin = req.headers.origin;
+        if (origin && !config.mcpAllowedOrigins.includes(origin)) {
+          return send(res, 403, { error: 'Origin not allowed' }, false);
+        }
+        if (config.mcpToken && !bearerMatches(req.headers.authorization, config.mcpToken)) {
+          return send(res, 401, { error: 'Unauthorized' }, false);
+        }
+        const port = (server.address() as AddressInfo).port;
         // Stateless mode: a fresh server/transport per request.
-        const mcp = createMcpServer(s);
-        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        const mcp = createMcpServer(s, { allowWrite });
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+          enableDnsRebindingProtection: true,
+          allowedHosts: [`127.0.0.1:${port}`, `localhost:${port}`, ...config.mcpAllowedHosts],
+          allowedOrigins: config.mcpAllowedOrigins,
+        });
         res.on('close', () => {
           void transport.close();
           void mcp.close();
@@ -49,6 +84,8 @@ export function startHttp(s: Services, host = process.env.HTTP_HOST ?? '127.0.0.
         await transport.handleRequest(req, res, body);
         return;
       }
+
+      if (req.method === 'OPTIONS') return send(res, 204, '');
 
       if (hermes && url.pathname === '/hermes/v2/updates/price/latest') {
         return send(res, 200, hermes.latest(url.searchParams.getAll('ids[]')));
@@ -106,6 +143,6 @@ export function startHttp(s: Services, host = process.env.HTTP_HOST ?? '127.0.0.
     }
   });
 
-  server.listen(s.ctx.config.httpPort, host, () => s.ctx.log('http', 'listening', { host, port: s.ctx.config.httpPort }));
+  server.listen(config.httpPort, host, () => s.ctx.log('http', 'listening', { host, port: (server.address() as AddressInfo).port }));
   return server;
 }

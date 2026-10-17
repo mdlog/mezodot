@@ -137,3 +137,81 @@ describe('mergeAccounts', () => {
     expect(mergeAccounts([a], [a, b])).toEqual([a, b]);
   });
 });
+
+describe('liquidator against RPC limits and fees (final review I4 / M3 / M8)', () => {
+  it('picks the most profitable collateral, not the largest', () => {
+    // WETH is the largest collateral ($40,000, 7% bonus) but pMEZO ($28,584, 10% bonus) pays more:
+    // repay 27,500 → pMEZO seize scaled to all $28,584 → profit $2,598.5; WETH profit $1,925.
+    const shares = 6_000_000n * 10n ** 24n;
+    const e = evaluateAccount(protocol, position(20n * E18, 55_000n * E18, shares), { MEZO: 0.004764, MUSD: 1, ETH: 2_000 });
+    expect(e.healthFactor).toBeLessThan(1);
+    expect(e.plan!.collateralId).toBe(0);
+    expect(e.plan!.profitUsd).toBeCloseTo(28_584 * (1 - 1 / 1.1), 4);
+  });
+
+  it('indexes borrowers in chunks under the RPC block-range cap, advancing the cursor', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const borrowAt = new Map<bigint, `0x${string}`>([
+      [3n, '0x00000000000000000000000000000000000000a1'],
+      [14_000n, '0x00000000000000000000000000000000000000b2'],
+      [24_999n, '0x00000000000000000000000000000000000000c3'],
+    ]);
+    const calls: [bigint, bigint][] = [];
+    const client = {
+      getBlockNumber: async () => 25_000n,
+      getContractEvents: async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) => {
+        if (toBlock - fromBlock >= 10_000n) throw new Error('maximum [from, to] blocks distance: 10000');
+        calls.push([fromBlock, toBlock]);
+        return [...borrowAt].filter(([b]) => b >= fromBlock && b <= toBlock).map(([, account]) => ({ args: { account } }));
+      },
+    };
+    const ctx = {
+      config: { stateDir: mkdtempSync(join(tmpdir(), 'mezodot-liq-')), env: 'devnet' },
+      hub: { network: 'devnet-hub', client, wallet: null, deployment: { startBlock: 0, contracts: { vaultManager: '0x0000000000000000000000000000000000000001' } } },
+      spokes: [],
+      log: () => {},
+    };
+    const liq = new Liquidator(ctx as never);
+    const accounts = await liq.syncAccounts();
+    expect(accounts).toHaveLength(3);
+    expect(calls.length).toBeGreaterThan(2);
+    expect(liq.store.get().cursor).toBe(25_001n);
+  });
+
+  it('pays the Wormhole message fee when seizing remote collateral', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    let simulatedValue: bigint | undefined;
+    const client = {
+      readContract: async ({ functionName }: { functionName: string }) =>
+        functionName === 'updateFee' ? 4n : functionName === 'messageFee' ? 1_000n : functionName === 'allowance' ? 10n ** 30n : 0n,
+      simulateContract: async ({ value }: { value: bigint }) => {
+        simulatedValue = value;
+        return { result: 1n, request: {} };
+      },
+    };
+    const ctx = {
+      config: { stateDir: mkdtempSync(join(tmpdir(), 'mezodot-liq-')), env: 'devnet' },
+      hub: {
+        network: 'devnet-hub',
+        client,
+        wallet: { account: { address: '0x00000000000000000000000000000000000000ee' } },
+        deployment: { startBlock: 0, contracts: { keeperGateway: '0x0000000000000000000000000000000000000002', oracleRouter: '0x0000000000000000000000000000000000000003', wormholeAdapter: '0x0000000000000000000000000000000000000004' } },
+      },
+      spokes: [],
+      log: () => {},
+    };
+    const liq = new Liquidator(ctx as never);
+    const e = evaluateAccount(protocol, position(E18, 2_350n * E18), { ETH: 2_800, MUSD: 1 });
+    await liq.execute(protocol, e, ['0x01'], true);
+    expect(simulatedValue).toBe(4n + 1_000n);
+    const local = evaluateAccount(protocol, position(0n, 3_900n * E18, 1_000_000n * 10n ** 24n), { MEZO: 0.004764, MUSD: 1, ETH: 3_000 });
+    await liq.execute(protocol, local, ['0x01'], true);
+    expect(simulatedValue).toBe(4n);
+  });
+});

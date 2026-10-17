@@ -15,6 +15,7 @@ import type { Context, Wallet } from './context';
 import { JsonStore } from './store';
 
 export type Direction = 'deposit' | 'release';
+/** 'failed' only appears in state files written by older versions; such messages are retried. */
 export type MessageStatus = 'waiting_vaa' | 'ready' | 'delivered' | 'failed';
 
 export type RelayMessage = {
@@ -28,8 +29,11 @@ export type RelayMessage = {
   txHash: Hex;
   blockNumber: bigint;
   status: MessageStatus;
+  /** Consecutive failed delivery attempts (drives the backoff). */
   attempts: number;
   lastError?: string;
+  /** Epoch ms before which the message is not retried. */
+  nextAttemptAt?: number;
   vaa?: Hex;
   deliveredTx?: Hex;
   observedAt: number;
@@ -38,7 +42,13 @@ export type RelayMessage = {
 type RelayState = { cursors: Partial<Record<NetworkName, bigint>>; messages: Record<string, RelayMessage> };
 
 const MAX_BLOCK_RANGE = 2_000n;
-const MAX_ATTEMPTS = 8;
+export const RETRY_BASE_MS = 5_000;
+export const RETRY_MAX_MS = 10 * 60_000;
+/** Pause between Wormholescan polls for a VAA that guardians have not signed yet. */
+const VAA_POLL_MS = 10_000;
+
+/** Exponential backoff for the n-th consecutive failure (n >= 1), capped. Messages are never abandoned. */
+export const retryDelayMs = (attempts: number): number => Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1));
 
 export const messageId = (emitterChain: number, emitter: Address, sequence: bigint) => `${emitterChain}/${emitter.toLowerCase()}/${sequence}`;
 
@@ -57,6 +67,7 @@ export class Relayer {
   constructor(
     private readonly ctx: Context,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly now: () => number = Date.now,
   ) {
     this.store = new JsonStore<RelayState>(join(ctx.config.stateDir, `relayer-${ctx.config.env}.json`), { cursors: {}, messages: {} });
   }
@@ -70,10 +81,14 @@ export class Relayer {
   }
 
   async tick(): Promise<void> {
-    await this.scanSpokes();
-    await this.scanHub();
+    // Each source is scanned independently: one unreachable RPC must not stall the others.
+    for (const spoke of this.ctx.spokes) {
+      await this.scanSpoke(spoke).catch((err: unknown) => this.scanFailed(spoke.network, err));
+    }
+    await this.scanHub().catch((err: unknown) => this.scanFailed(this.ctx.hub.network, err));
+    const now = this.now();
     for (const m of this.pending()) {
-      if (m.status === 'failed') continue;
+      if ((m.nextAttemptAt ?? 0) > now) continue;
       await this.advance(m).catch((err: unknown) => this.fail(m, err));
     }
   }
@@ -88,33 +103,31 @@ export class Relayer {
     return [from, to];
   }
 
-  private async scanSpokes(): Promise<void> {
-    for (const spoke of this.ctx.spokes) {
-      const r = await this.range(spoke.network, spoke.client, spoke.deployment.startBlock);
-      if (!r) continue;
-      const logs = await spoke.client.getContractEvents({
-        address: spoke.deployment.contracts.spokeGateway,
-        abi: spokeGatewayAbi,
-        eventName: 'Deposited',
-        fromBlock: r[0],
-        toBlock: r[1],
-      });
-      this.store.update((s) => {
-        for (const log of logs) {
-          this.observe(s, {
-            direction: 'deposit',
-            source: spoke.network,
-            target: this.ctx.hub.network,
-            emitterChain: spoke.deployment.wormholeChainId,
-            emitter: spoke.deployment.contracts.spokeGateway,
-            sequence: log.args.sequence!,
-            txHash: log.transactionHash,
-            blockNumber: log.blockNumber,
-          });
-        }
-        s.cursors[spoke.network] = r[1] + 1n;
-      });
-    }
+  private async scanSpoke(spoke: Context['spokes'][number]): Promise<void> {
+    const r = await this.range(spoke.network, spoke.client, spoke.deployment.startBlock);
+    if (!r) return;
+    const logs = await spoke.client.getContractEvents({
+      address: spoke.deployment.contracts.spokeGateway,
+      abi: spokeGatewayAbi,
+      eventName: 'Deposited',
+      fromBlock: r[0],
+      toBlock: r[1],
+    });
+    this.store.update((s) => {
+      for (const log of logs) {
+        this.observe(s, {
+          direction: 'deposit',
+          source: spoke.network,
+          target: this.ctx.hub.network,
+          emitterChain: spoke.deployment.wormholeChainId,
+          emitter: spoke.deployment.contracts.spokeGateway,
+          sequence: log.args.sequence!,
+          txHash: log.transactionHash,
+          blockNumber: log.blockNumber,
+        });
+      }
+      s.cursors[spoke.network] = r[1] + 1n;
+    });
   }
 
   private async scanHub(): Promise<void> {
@@ -150,7 +163,7 @@ export class Relayer {
   private observe(s: RelayState, m: Omit<RelayMessage, 'id' | 'status' | 'attempts' | 'observedAt'>): void {
     const id = messageId(m.emitterChain, m.emitter, m.sequence);
     if (s.messages[id]) return;
-    s.messages[id] = { ...m, id, status: 'waiting_vaa', attempts: 0, observedAt: Date.now() };
+    s.messages[id] = { ...m, id, status: 'waiting_vaa', attempts: 0, observedAt: this.now() };
     this.ctx.log('relayer', 'observed', { id, direction: m.direction });
   }
 
@@ -158,7 +171,11 @@ export class Relayer {
 
   private async advance(m: RelayMessage): Promise<void> {
     const vaa = m.vaa ?? (await this.obtainVaa(m));
-    if (!vaa) return; // guardians have not signed yet
+    if (!vaa) {
+      // Guardians have not signed yet: poll again later without counting a failure.
+      this.patch(m.id, { nextAttemptAt: this.now() + VAA_POLL_MS });
+      return;
+    }
     this.patch(m.id, { vaa, status: 'ready' });
 
     const hash = vaaHash(vaa);
@@ -171,7 +188,7 @@ export class Relayer {
     if (!wallet) return; // read-only agent: report as pending
     const txHash = await this.submit(m, vaa, wallet);
     await this.clientFor(m.target).waitForTransactionReceipt({ hash: txHash });
-    this.patch(m.id, { status: 'delivered', deliveredTx: txHash });
+    this.patch(m.id, { status: 'delivered', deliveredTx: txHash, attempts: 0, lastError: undefined, nextAttemptAt: undefined });
     this.ctx.log('relayer', 'delivered', { id: m.id, txHash });
   }
 
@@ -263,7 +280,13 @@ export class Relayer {
   private fail(m: RelayMessage, err: unknown): void {
     const attempts = m.attempts + 1;
     const message = err instanceof Error ? err.message.split('\n')[0] : String(err);
-    this.patch(m.id, { attempts, lastError: message, status: attempts >= MAX_ATTEMPTS ? 'failed' : m.status });
-    this.ctx.log('relayer', 'attempt failed', { id: m.id, attempts, error: message });
+    const status = m.status === 'failed' ? (m.vaa ? 'ready' : 'waiting_vaa') : m.status;
+    const delay = retryDelayMs(attempts);
+    this.patch(m.id, { attempts, lastError: message, status, nextAttemptAt: this.now() + delay });
+    this.ctx.log('relayer', 'attempt failed', { id: m.id, attempts, retryInMs: delay, error: message });
+  }
+
+  private scanFailed(network: NetworkName, err: unknown): void {
+    this.ctx.log('relayer', 'scan failed', { network, error: err instanceof Error ? err.message.split('\n')[0] : String(err) });
   }
 }

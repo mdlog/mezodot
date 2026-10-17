@@ -2,13 +2,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { NETWORKS } from '@mezodot/sdk';
 import { toJson, type Services } from '../services';
-import { createTools } from './tools';
+import { createTools, type ToolOptions } from './tools';
 
 const text = (value: unknown) => ({ content: [{ type: 'text' as const, text: toJson(value) }] });
 
 /** MCP server exposing Mezodot market data, risk analytics and keeper actions to AI agents. */
-export function createMcpServer(services: Services): McpServer {
-  const tools = createTools(services);
+export function createMcpServer(services: Services, opts: ToolOptions): McpServer {
+  const tools = createTools(services, opts);
   const server = new McpServer({ name: 'mezodot', version: '0.1.0' });
   const readOnly = { readOnlyHint: true, openWorldHint: true } as const;
   const write = { readOnlyHint: false, destructiveHint: false, openWorldHint: true } as const;
@@ -88,7 +88,7 @@ export function createMcpServer(services: Services): McpServer {
       title: 'Trigger liquidation',
       description:
         'Liquidate an unhealthy account via KeeperGateway. Dry-run by default; executes only with dry_run=false and MCP_ALLOW_WRITE=true on the agent.',
-      inputSchema: { address: z.string(), dry_run: z.boolean().default(true) },
+      inputSchema: { address: z.string(), dry_run: z.boolean().default(true), force: z.boolean().default(false).describe('ignore MIN_PROFIT_USD') },
       annotations: write,
     },
     async (args) => text(await tools.trigger_liquidation(args)),

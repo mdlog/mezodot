@@ -12,6 +12,8 @@ import {
   valuePosition,
   type UsdPrices,
   vaultManagerAbi,
+  wormholeAdapterAbi,
+  blockRanges,
   NETWORKS,
   type PositionState,
   type ProtocolState,
@@ -77,14 +79,30 @@ export function evaluateAccount(
   };
   if (!(summary.healthFactor < 1)) return { ...base, plan: null };
 
-  const debt = debtRows.filter((d) => d.amount > 0n && d.price > 0).sort((a, b) => b.valueUsd - a.valueUsd)[0];
-  const coll = collateralRows.filter((r) => r.balance > 0n && r.price > 0).sort((a, b) => b.valueUsd - a.valueUsd)[0];
-  if (!debt || !coll) return { ...base, plan: null };
+  // Try every (debt market, collateral) pair; bonuses differ per collateral and the scaled branch
+  // caps what a small collateral can pay, so the largest collateral is not always the best.
+  let best: LiquidationPlan | null = null;
+  for (const debt of debtRows) {
+    if (debt.amount === 0n || debt.price <= 0) continue;
+    for (const coll of collateralRows) {
+      if (coll.balance === 0n || coll.price <= 0) continue;
+      const plan = planPair(debt, coll, inventory[debt.m.id]);
+      if (!plan) continue;
+      const better = !best || plan.profitUsd > best.profitUsd + 1e-9 || (Math.abs(plan.profitUsd - best.profitUsd) <= 1e-9 && best.isRemote && !plan.isRemote);
+      if (better) best = plan;
+    }
+  }
+  return { ...base, plan: best };
+}
 
+type DebtRow = { m: ProtocolState['markets'][number]; amount: bigint; price: number; valueUsd: number };
+type CollateralRow = { c: ProtocolState['collaterals'][number]; balance: bigint; units: number; price: number; valueUsd: number };
+
+/** Mirrors VaultManager.liquidate/_seizeAmount for one pair: 50% close factor, bonus, scaled branch. */
+function planPair(debt: DebtRow, coll: CollateralRow, available: bigint | undefined): LiquidationPlan | null {
   let repayAmount = (debt.amount * BigInt(CLOSE_FACTOR_BPS)) / BigInt(BPS);
-  const available = inventory[debt.m.id];
   if (available !== undefined && available < repayAmount) repayAmount = available;
-  if (repayAmount === 0n) return { ...base, plan: null };
+  if (repayAmount === 0n) return null;
 
   let repayUsd = toNumber(repayAmount, debt.m.decimals) * debt.price;
   let seizeUsd = (repayUsd * (BPS + coll.c.bonusBps)) / BPS;
@@ -98,19 +116,15 @@ export function evaluateAccount(
   const seizeFraction = coll.valueUsd > 0 ? seizeUsd / coll.valueUsd : 0;
   const expectedSeize = BigInt(Math.floor(Number(coll.balance) * seizeFraction));
   const minSeize = (expectedSeize * BigInt(BPS - SLIPPAGE_BPS)) / BigInt(BPS);
-
   return {
-    ...base,
-    plan: {
-      marketId: debt.m.id,
-      collateralId: coll.c.id,
-      repayAmount,
-      minSeize,
-      repayUsd,
-      seizeUsd,
-      profitUsd: seizeUsd - repayUsd,
-      isRemote: coll.c.isRemote,
-    },
+    marketId: debt.m.id,
+    collateralId: coll.c.id,
+    repayAmount,
+    minSeize,
+    repayUsd,
+    seizeUsd,
+    profitUsd: seizeUsd - repayUsd,
+    isRemote: coll.c.isRemote,
   };
 }
 
@@ -148,24 +162,27 @@ export class Liquidator {
     return { update, prices };
   }
 
-  private async indexAccounts(): Promise<Address[]> {
+  /**
+   * Indexes borrowers from VaultManager.Borrowed in chunks below the RPC block-range cap, persisting
+   * the cursor after every chunk so a restart (or a long outage) resumes instead of failing forever.
+   */
+  async syncAccounts(): Promise<Address[]> {
     const { client, deployment } = this.ctx.hub;
     const latest = await client.getBlockNumber();
     const from = this.store.get().cursor ?? BigInt(deployment.startBlock);
-    if (from <= latest) {
+    for (const range of blockRanges(from, latest)) {
       const logs = await client.getContractEvents({
         address: deployment.contracts.vaultManager,
         abi: vaultManagerAbi,
         eventName: 'Borrowed',
-        fromBlock: from,
-        toBlock: latest,
+        ...range,
       });
       this.store.update((s) => {
         s.accounts = mergeAccounts(
           s.accounts,
           logs.flatMap((l) => (l.args.account ? [l.args.account] : [])),
         );
-        s.cursor = latest + 1n;
+        s.cursor = range.toBlock + 1n;
       });
     }
     return this.store.get().accounts;
@@ -177,7 +194,7 @@ export class Liquidator {
     update: Awaited<ReturnType<Liquidator['freshPrices']>>['update'];
   }> {
     const { client, deployment } = this.ctx.hub;
-    const [accounts, protocol, { update, prices }] = await Promise.all([this.indexAccounts(), readProtocol(client, deployment), this.freshPrices()]);
+    const [accounts, protocol, { update, prices }] = await Promise.all([this.syncAccounts(), readProtocol(client, deployment), this.freshPrices()]);
     const inventory = await this.inventory(protocol);
     const evaluations = await Promise.all(
       accounts.map(async (a) => evaluateAccount(protocol, await readPosition(client, deployment, protocol, a), prices, inventory)),
@@ -226,7 +243,17 @@ export class Liquidator {
       const tx = await wallet.writeContract({ address: market.asset, abi: erc20Abi, functionName: 'approve', args: [gateway, maxUint256] });
       await client.waitForTransactionReceipt({ hash: tx });
     }
-    const fee = await client.readContract({ address: deployment.contracts.oracleRouter, abi: oracleRouterAbi, functionName: 'updateFee', args: [updates] });
+    const oracleFee = await client.readContract({
+      address: deployment.contracts.oracleRouter,
+      abi: oracleRouterAbi,
+      functionName: 'updateFee',
+      args: [updates],
+    });
+    // Remote collateral is released on its spoke by a Wormhole message, which VaultManager pays for.
+    const wormholeFee = plan.isRemote
+      ? await client.readContract({ address: deployment.contracts.wormholeAdapter, abi: wormholeAdapterAbi, functionName: 'messageFee' })
+      : 0n;
+    const fee = oracleFee + wormholeFee;
     const { result, request } = await client.simulateContract({
       account: wallet.account,
       address: gateway,

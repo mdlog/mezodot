@@ -16,13 +16,24 @@ export type AgentConfig = {
   pollMs: number;
   stateDir: string;
   httpPort: number;
-  /** MCP write tools execute only when true; otherwise they dry-run. */
+  /** MCP write tools execute only when true; otherwise they dry-run. Over HTTP also requires mcpToken. */
   mcpAllowWrite: boolean;
+  /** Bearer token required on every /mcp HTTP request when set (MCP_TOKEN). */
+  mcpToken: string | null;
+  /** Extra Host headers accepted on /mcp, e.g. "agent.example.com" (MCP_ALLOWED_HOSTS, comma-separated). */
+  mcpAllowedHosts: string[];
+  /** Browser origins allowed to call /mcp (MCP_ALLOWED_ORIGINS, comma-separated; default none). */
+  mcpAllowedOrigins: string[];
   /** Minimum liquidation profit in USD before the liquidator sends a transaction. */
   minProfitUsd: number;
 };
 
 const hex = (v: string | undefined): Hex | null => (v && /^0x[0-9a-fA-F]{64}$/.test(v) ? (v as Hex) : null);
+const csv = (v: string | undefined): string[] =>
+  (v ?? '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
   const name = (env.MEZODOT_ENV ?? 'devnet') as EnvironmentName;
@@ -51,6 +62,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     stateDir: env.STATE_DIR ?? '.state',
     httpPort: Number(env.HTTP_PORT ?? 8787),
     mcpAllowWrite: env.MCP_ALLOW_WRITE === 'true',
+    mcpToken: env.MCP_TOKEN && env.MCP_TOKEN.length >= 16 ? env.MCP_TOKEN : null,
+    mcpAllowedHosts: csv(env.MCP_ALLOWED_HOSTS),
+    mcpAllowedOrigins: csv(env.MCP_ALLOWED_ORIGINS),
     minProfitUsd: Number(env.MIN_PROFIT_USD ?? 1),
   };
 }

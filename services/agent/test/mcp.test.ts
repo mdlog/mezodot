@@ -45,7 +45,7 @@ function fakeServices(allowWrite: boolean, relayed: string[] = []): Services {
 
 describe('MCP server', () => {
   it('exposes the documented tools with read/write annotations', async () => {
-    const server = createMcpServer(fakeServices(false));
+    const server = createMcpServer(fakeServices(false), { allowWrite: false });
     const [a, b] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'test', version: '1' });
     await Promise.all([server.connect(a), client.connect(b)]);
@@ -74,19 +74,19 @@ describe('MCP server', () => {
 
   it('write tools dry-run by default and require MCP_ALLOW_WRITE', async () => {
     const relayed: string[] = [];
-    const locked = createTools(fakeServices(false, relayed));
+    const locked = createTools(fakeServices(false, relayed), { allowWrite: false });
     expect((await locked.relay_message({ id: message.id })).executed).toBe(false);
-    expect((await locked.relay_message({ id: message.id, dry_run: false })).reason).toMatch(/MCP_ALLOW_WRITE/);
+    expect((await locked.relay_message({ id: message.id, dry_run: false })).reason).toMatch(/writes disabled/);
     expect(relayed).toEqual([]);
 
-    const open = createTools(fakeServices(true, relayed));
+    const open = createTools(fakeServices(true, relayed), { allowWrite: true });
     expect((await open.relay_message({ id: message.id, dry_run: true })).executed).toBe(false);
     expect((await open.relay_message({ id: message.id, dry_run: false })).executed).toBe(true);
     expect(relayed).toEqual([message.id]);
   });
 
   it('rejects invalid addresses', async () => {
-    const tools = createTools(fakeServices(false));
+    const tools = createTools(fakeServices(false), { allowWrite: false });
     await expect(tools.get_position({ address: 'not-an-address' })).rejects.toThrow(/Invalid address/);
   });
 });
@@ -99,7 +99,7 @@ const devnetUp = await createPublicClient({ chain: devnetHub, transport: http() 
 
 describe.skipIf(!devnetUp)('MCP tools on the devnet', () => {
   it('get_markets and simulate_loop read live contracts', async () => {
-    const tools = createTools(fakeServices(false));
+    const tools = createTools(fakeServices(false), { allowWrite: false });
     const { markets, collaterals } = await tools.get_markets();
     expect(markets.map((m) => m.market)).toEqual(['MUSD', 'MEZO']);
     expect(collaterals.map((c) => c.symbol)).toEqual(['pMUSD', 'pMEZO', 'WETH', 'USDC']);
@@ -108,3 +108,62 @@ describe.skipIf(!devnetUp)('MCP tools on the devnet', () => {
     expect(plan.healthFactor).toBeCloseTo((3_000 * 0.85) / 2_001.8, 9);
   });
 });
+
+describe('MCP over HTTP is not reachable from arbitrary web pages (final review M2)', () => {
+  async function serve(env: Record<string, string>) {
+    const { startHttp } = await import('../src/http');
+    const ctx = createContext(loadConfig({ MEZODOT_ENV: 'devnet', STATE_DIR: '/tmp/mezodot-test-state', HTTP_PORT: '0', ...env }));
+    const services = { ctx, relayer: { messages: () => [], pending: () => [] }, liquidator: { lastEvaluations: [], lastRun: null }, risk: { report: () => null, lastError: () => null } } as unknown as Services;
+    const server = startHttp(services, '127.0.0.1');
+    await new Promise<void>((r) => server.once('listening', () => r()));
+    const port = (server.address() as { port: number }).port;
+    return { server, base: `http://127.0.0.1:${port}` };
+  }
+  const listTools = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+  const mcpHeaders = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
+
+  it('answers CORS preflight for read endpoints but not for /mcp', async () => {
+    const { server, base } = await serve({});
+    try {
+      const health = await fetch(`${base}/health`, { method: 'OPTIONS', headers: { origin: 'https://evil.example' } });
+      expect(health.headers.get('access-control-allow-origin')).toBe('*');
+      const mcp = await fetch(`${base}/mcp`, { method: 'OPTIONS', headers: { origin: 'https://evil.example', 'access-control-request-method': 'POST' } });
+      expect(mcp.headers.get('access-control-allow-origin')).toBeNull();
+      expect(mcp.status).toBe(405);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('rejects cross-origin and rebinding requests to /mcp', async () => {
+    const { server, base } = await serve({});
+    try {
+      const evil = await fetch(`${base}/mcp`, { method: 'POST', headers: { ...mcpHeaders, origin: 'https://evil.example' }, body: listTools });
+      expect(evil.status).toBe(403);
+      const ok = await fetch(`${base}/mcp`, { method: 'POST', headers: mcpHeaders, body: listTools });
+      expect(ok.status).toBe(200);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('requires the bearer token when MCP_TOKEN is set', async () => {
+    const { server, base } = await serve({ MCP_TOKEN: 'a-long-random-test-token-123' });
+    try {
+      expect((await fetch(`${base}/mcp`, { method: 'POST', headers: mcpHeaders, body: listTools })).status).toBe(401);
+      expect((await fetch(`${base}/mcp`, { method: 'POST', headers: { ...mcpHeaders, authorization: 'Bearer wrong-token-of-same-size-12' }, body: listTools })).status).toBe(401);
+      const ok = await fetch(`${base}/mcp`, { method: 'POST', headers: { ...mcpHeaders, authorization: 'Bearer a-long-random-test-token-123' }, body: listTools });
+      expect(ok.status).toBe(200);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('keeps HTTP writes disabled unless a token is configured', async () => {
+    const { mcpWriteAllowed } = await import('../src/http');
+    expect(mcpWriteAllowed(loadConfig({ MEZODOT_ENV: 'devnet', MCP_ALLOW_WRITE: 'true' }))).toBe(false);
+    expect(mcpWriteAllowed(loadConfig({ MEZODOT_ENV: 'devnet', MCP_ALLOW_WRITE: 'true', MCP_TOKEN: 'a-long-random-test-token-123' }))).toBe(true);
+    expect(mcpWriteAllowed(loadConfig({ MEZODOT_ENV: 'devnet', MCP_TOKEN: 'a-long-random-test-token-123' }))).toBe(false);
+  });
+});
+
