@@ -6,7 +6,7 @@ import {IWormhole} from "../src/interfaces/IWormhole.sol";
 import {SpokeGateway} from "../src/spoke/SpokeGateway.sol";
 
 /// @notice Deploys a SpokeGateway on an external chain and allowlists WETH + USDC.
-/// Env: NETWORK, WORMHOLE, WORMHOLE_CHAIN_ID (this spoke), WETH, USDC,
+/// Env: NETWORK, WORMHOLE, WETH, USDC, WORMHOLE_CHAIN_ID (optional cross-check; the id is read from Wormhole Core),
 ///      HUB_CHAIN_ID (default 50), CONSISTENCY_LEVEL (default 1), WETH_CAP, USDC_CAP (default unlimited).
 /// Writes packages/sdk/src/deployments/<NETWORK>.json.
 contract DeploySpoke is Script {
@@ -15,6 +15,10 @@ contract DeploySpoke is Script {
         address weth = vm.envAddress("WETH");
         address usdc = vm.envAddress("USDC");
         uint256 startBlock = block.number;
+        // The spoke's identity comes from Wormhole Core itself, never from hand-typed config.
+        uint16 wormholeChainId = IWormhole(vm.envAddress("WORMHOLE")).chainId();
+        uint256 expected = vm.envOr("WORMHOLE_CHAIN_ID", uint256(wormholeChainId));
+        require(expected == wormholeChainId, "WORMHOLE_CHAIN_ID does not match Wormhole Core chainId()");
 
         vm.startBroadcast();
         gateway = new SpokeGateway(
@@ -38,7 +42,7 @@ contract DeploySpoke is Script {
         vm.serializeString(root, "network", network);
         vm.serializeString(root, "role", "spoke");
         vm.serializeUint(root, "chainId", block.chainid);
-        vm.serializeUint(root, "wormholeChainId", vm.envUint("WORMHOLE_CHAIN_ID"));
+        vm.serializeUint(root, "wormholeChainId", wormholeChainId);
         vm.serializeUint(root, "startBlock", startBlock);
         vm.serializeString(root, "contracts", contracts);
         string memory json = vm.serializeString(root, "tokens", tokens);

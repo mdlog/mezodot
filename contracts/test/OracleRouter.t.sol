@@ -108,6 +108,35 @@ contract OracleRouterTest is Test {
         oracle.updatePrices(updates);
     }
 
+    /// Final review M4: a zero-fee Pyth deployment must still receive the updates.
+    function test_zeroFeeUpdatesArePushed() public {
+        MockPyth freePyth = new MockPyth(60, 0);
+        OracleRouter router = new OracleRouter(freePyth, 120, 200, address(this));
+        router.setFeed(ETH, ETH_ID);
+        bytes[] memory updates = new bytes[](1);
+        updates[0] = freePyth.createPriceFeedUpdateData(ETH_ID, 3_200e8, 0, -8, 3_200e8, 0, uint64(block.timestamp));
+        assertEq(router.updatePrices(updates), 0);
+        assertEq(router.getPrice(ETH), 3_200e18);
+    }
+
+    function test_tryGetPrice() public {
+        (bool ok, uint256 price) = oracle.tryGetPrice(ETH); // never pushed
+        assertFalse(ok);
+        assertEq(price, 0);
+        _update(ETH_ID, 3_200_00000000, 1_00000000, -8, uint64(block.timestamp));
+        (ok, price) = oracle.tryGetPrice(ETH);
+        assertTrue(ok);
+        assertEq(price, 3_200e18);
+        skip(121);
+        (ok,) = oracle.tryGetPrice(ETH); // stale
+        assertFalse(ok);
+        _update(MEZO_ID, 100_00000000, 3_00000000, -8, uint64(block.timestamp));
+        (ok,) = oracle.tryGetPrice(MEZO); // 3% confidence
+        assertFalse(ok);
+        (ok,) = oracle.tryGetPrice(keccak256("NOPE")); // unknown key
+        assertFalse(ok);
+    }
+
     function test_onlyOwnerSetsFeeds() public {
         vm.prank(makeAddr("x"));
         vm.expectRevert();

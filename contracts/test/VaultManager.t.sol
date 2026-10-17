@@ -278,5 +278,87 @@ contract VaultManagerTest is HubFixture {
         }
     }
 
+    // --- Final review I2 / I3 / M6 ----------------------------------------------------
+
+    function test_setAdapterIsOneShot() public {
+        vm.expectRevert(VaultManager.AdapterAlreadySet.selector);
+        vaultManager.setAdapter(makeAddr("newAdapter"));
+    }
+
+    /// Without debt nothing is at risk: withdrawing must not depend on oracle liveness.
+    function test_debtFreeWithdrawNeedsNoFreshPrices() public {
+        uint256 shares = postLocal(alice, pMUSD, pMusdCollateral, 1_000e18);
+        uint256 mezoShares = postLocal(alice, pMEZO, pMezoCollateral, 1_000e18);
+        skip(1 days); // every stored price is now stale
+        vm.startPrank(alice);
+        vaultManager.withdrawCollateral(pMusdCollateral, shares, alice, noUpdates());
+        vaultManager.withdrawCollateral(pMezoCollateral, mezoShares, alice, noUpdates());
+        vm.stopPrank();
+        assertEq(pMUSD.balanceOf(alice), shares);
+        assertEq(pMEZO.balanceOf(alice), mezoShares);
+    }
+
+    /// Collateral whose price is unavailable counts as zero for borrow/withdraw limits instead of
+    /// blocking the account, while debt is still priced strictly.
+    function test_staleCollateralCountsAsZeroForLimits() public {
+        uint256 musdShares = postLocal(alice, pMUSD, pMusdCollateral, 10_000e18); // $10,000 x 80%
+        postLocal(alice, pMEZO, pMezoCollateral, 1_000_000e18); // ~$7,940 x 50%
+        _borrow(alice, musdMarket, 1_000e18);
+
+        skip(200); // MEZO goes stale; refresh everything except MEZO
+        bytes[] memory updates = new bytes[](3);
+        uint64 t = uint64(block.timestamp);
+        updates[0] = pyth.createPriceFeedUpdateData(MUSD_ID, musdPrice, 0, -8, musdPrice, 0, t);
+        updates[1] = pyth.createPriceFeedUpdateData(ETH_ID, ethPrice, 0, -8, ethPrice, 0, t);
+        updates[2] = pyth.createPriceFeedUpdateData(USDC_ID, usdcPrice, 0, -8, usdcPrice, 0, t);
+        pyth.updatePriceFeeds{value: pyth.getUpdateFee(updates)}(updates);
+
+        // Half the pMUSD can leave: 5,000 x 80% = 4,000 >= 1,000 debt, ignoring MEZO.
+        vm.prank(alice);
+        vaultManager.withdrawCollateral(pMusdCollateral, musdShares / 2, alice, noUpdates());
+        // But stale MEZO adds no borrowing power: 4,000 limit, 1,000 owed.
+        vm.prank(alice);
+        vm.expectRevert(VaultManager.InsufficientCollateral.selector);
+        vaultManager.borrow(musdMarket, 3_500e18, noUpdates());
+        _borrow(alice, musdMarket, 2_900e18);
+    }
+
+    function test_debtStillPricedStrictly() public {
+        postLocal(alice, pMUSD, pMusdCollateral, 10_000e18);
+        _borrow(alice, musdMarket, 1_000e18);
+        skip(200); // MUSD (the debt asset) is stale
+        vm.prank(alice);
+        vm.expectRevert(); // StalePrice on the debt price
+        vaultManager.withdrawCollateral(pMusdCollateral, 1, alice, noUpdates());
+    }
+
+    /// Gifting collateral to another account (which could add an oracle dependency) is no longer possible.
+    function test_depositCollateralForRequiresOperator() public {
+        address griefer = makeAddr("griefer");
+        uint256 shares = supplyFor(griefer, pMEZO, 1e18);
+        vm.startPrank(griefer);
+        pMEZO.approve(address(vaultManager), shares);
+        vm.expectRevert(VaultManager.NotOperator.selector);
+        vaultManager.depositCollateralFor(alice, pMezoCollateral, 1);
+        vm.stopPrank();
+
+        vm.prank(alice);
+        vaultManager.setOperator(griefer, true);
+        vm.prank(griefer);
+        vaultManager.depositCollateralFor(alice, pMezoCollateral, 1);
+        assertEq(vaultManager.collateralBalance(alice, pMezoCollateral), 1);
+    }
+
+    /// Pause must never stop a borrower from defending a position by adding collateral.
+    function test_collateralTopUpAllowedWhilePaused() public {
+        uint256 shares = supplyFor(alice, pMUSD, 1_000e18);
+        vaultManager.pause();
+        vm.startPrank(alice);
+        pMUSD.approve(address(vaultManager), shares);
+        vaultManager.depositCollateral(pMusdCollateral, shares);
+        vm.stopPrank();
+        assertEq(vaultManager.collateralBalance(alice, pMusdCollateral), shares);
+    }
+
     receive() external payable {}
 }

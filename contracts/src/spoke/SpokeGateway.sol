@@ -24,6 +24,8 @@ contract SpokeGateway is Ownable2Step, Pausable, ReentrancyGuard {
     IWormhole public immutable wormhole;
     uint16 public immutable hubChainId;
     uint8 public immutable consistencyLevel;
+    /// @notice Wormhole chain id of this spoke (read from Wormhole Core at deployment).
+    uint16 public immutable localChainId;
 
     bytes32 public hubEmitter;
     mapping(address token => TokenConfig) public tokens;
@@ -46,11 +48,13 @@ contract SpokeGateway is Ownable2Step, Pausable, ReentrancyGuard {
     error AlreadyConsumed();
     error WrongMessageType();
     error InsufficientLocked();
+    error WrongTarget();
 
     constructor(IWormhole wormhole_, uint16 hubChainId_, uint8 consistencyLevel_, address owner_) Ownable(owner_) {
         wormhole = wormhole_;
         hubChainId = hubChainId_;
         consistencyLevel = consistencyLevel_;
+        localChainId = wormhole_.chainId();
     }
 
     function setHubEmitter(bytes32 emitter) external onlyOwner {
@@ -97,9 +101,16 @@ contract SpokeGateway is Ownable2Step, Pausable, ReentrancyGuard {
         locked[token] += received;
         if (locked[token] > cfg.cap) revert CapExceeded();
 
+        // Addressed to the registered hub adapter only, so the VAA can never credit a different adapter.
         bytes memory payload = Payload.encode(
             Payload.Message(
-                Payload.DEPOSIT, ++outboundNonce, Payload.toBytes32(msg.sender), Payload.toBytes32(token), received
+                Payload.DEPOSIT,
+                ++outboundNonce,
+                hubChainId,
+                hubEmitter,
+                Payload.toBytes32(msg.sender),
+                Payload.toBytes32(token),
+                received
             )
         );
         sequence = wormhole.publishMessage{value: msg.value}(0, payload, consistencyLevel);
@@ -119,6 +130,8 @@ contract SpokeGateway is Ownable2Step, Pausable, ReentrancyGuard {
 
         Payload.Message memory m = Payload.decode(vm.payload);
         if (m.msgType != Payload.RELEASE) revert WrongMessageType();
+        // A RELEASE names exactly one gateway: never execute one addressed to another chain or deployment.
+        if (m.targetChain != localChainId || m.target != Payload.toBytes32(address(this))) revert WrongTarget();
         address token = Payload.toAddress(m.token);
         address recipient = Payload.toAddress(m.account);
         if (m.amount > locked[token]) revert InsufficientLocked();

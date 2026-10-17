@@ -44,10 +44,8 @@ contract E2ETest is CrossChainFixture {
     function test_flowA_passiveLp() public {
         uint256 shares = supplyFor(lpUser, pMUSD, 10_000e18);
         assertApproxEqAbs(pMUSD.convertToAssets(shares), 10_000e18, 1e6);
-        // Generate borrower demand, then let a year pass.
-        vaultManager.setAdapter(address(this));
-        vaultManager.creditRemote(borrower, wethBase, 300e18);
-        vaultManager.setAdapter(address(adapter));
+        // Generate borrower demand through the real cross-chain path, then let a year pass.
+        keepers.relayMessage(spokeDeposit(borrower, weth, 300e18));
         vm.prank(borrower);
         vaultManager.borrow(musdMarket, 600_000e18, noUpdates());
         skip(365 days);

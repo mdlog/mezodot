@@ -47,7 +47,8 @@ contract OracleRouter is Ownable2Step {
     function updatePrices(bytes[] calldata updates) external payable returns (uint256 feePaid) {
         feePaid = updateFee(updates);
         if (msg.value < feePaid) revert InsufficientFee();
-        if (feePaid > 0) pyth.updatePriceFeeds{value: feePaid}(updates);
+        // Forward even when the fee is zero: some Pyth deployments charge nothing.
+        if (updates.length > 0) pyth.updatePriceFeeds{value: feePaid}(updates);
         uint256 refund = msg.value - feePaid;
         if (refund > 0) {
             (bool ok,) = msg.sender.call{value: refund}("");
@@ -59,8 +60,21 @@ contract OracleRouter is Ownable2Step {
     function getPrice(bytes32 key) external view returns (uint256) {
         PythStructs.Price memory p = pyth.getPriceNoOlderThan(_id(key), maxAge);
         if (p.price <= 0) revert InvalidPrice();
-        if (uint256(p.conf) * BPS > uint256(uint64(p.price)) * maxConfBps) revert PriceUncertain();
+        if (!_confident(p)) revert PriceUncertain();
         return _toWad(p.price, p.expo);
+    }
+
+    /// @notice Non-reverting `getPrice`: (false, 0) when the key is unknown or the price is missing,
+    ///         stale, non-positive or too uncertain. Used for conservative collateral valuation.
+    function tryGetPrice(bytes32 key) external view returns (bool ok, uint256 priceWad) {
+        bytes32 id = feeds[key];
+        if (id == bytes32(0)) return (false, 0);
+        try pyth.getPriceNoOlderThan(id, maxAge) returns (PythStructs.Price memory p) {
+            if (p.price <= 0 || !_confident(p)) return (false, 0);
+            return (true, _toWad(p.price, p.expo));
+        } catch {
+            return (false, 0);
+        }
     }
 
     /// @notice Last known price with its publish time, without freshness checks.
@@ -73,6 +87,10 @@ contract OracleRouter is Ownable2Step {
         } catch {
             return (0, 0);
         }
+    }
+
+    function _confident(PythStructs.Price memory p) internal view returns (bool) {
+        return uint256(p.conf) * BPS <= uint256(uint64(p.price)) * maxConfBps;
     }
 
     function _id(bytes32 key) internal view returns (bytes32 id) {

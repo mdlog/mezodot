@@ -9,6 +9,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {PToken} from "./PToken.sol";
 import {OracleRouter} from "./OracleRouter.sol";
+import {Payload} from "../libraries/Payload.sol";
 
 interface IReleaseSender {
     function sendRelease(uint16 chainId, bytes32 token, bytes32 recipient, uint256 amount)
@@ -33,6 +34,16 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
     uint256 public constant CLOSE_FACTOR_BPS = 5_000;
     uint256 public constant MAX_COLLATERALS = 16;
     uint256 public constant MAX_MARKETS = 8;
+
+    /// How prices are read when valuing a position.
+    /// Strict: fresh and confident or revert (debt, liquidation).
+    /// Conservative: unavailable collateral prices count as zero (borrow / withdraw limits).
+    /// View: last known price, never reverts (read-only views).
+    enum PriceMode {
+        View,
+        Conservative,
+        Strict
+    }
 
     struct CollateralConfig {
         bool enabled;
@@ -121,6 +132,8 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
     error ZeroAmount();
     error InsufficientValue();
     error RefundFailed();
+    error AdapterAlreadySet();
+    error InvalidRecipient();
 
     modifier onlyAdapter() {
         if (msg.sender != adapter) revert NotAdapter();
@@ -180,12 +193,17 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         emit MarketAdded(marketId, address(pool), priceKey);
     }
 
+    /// @notice Sets the Wormhole adapter once. It cannot be rotated: a new adapter would orphan messages
+    ///         in flight and reset the DEPOSIT replay guard that lives in the adapter.
     function setAdapter(address adapter_) external onlyOwner {
+        if (adapter != address(0)) revert AdapterAlreadySet();
+        if (adapter_ == address(0)) revert InvalidParams();
         adapter = adapter_;
         emit AdapterSet(adapter_);
     }
 
-    /// @notice Blocks new collateral deposits and borrows. Repay, withdraw and liquidation stay open.
+    /// @notice Blocks new borrows. Collateral top-ups, repay, withdraw and liquidation stay open, so users
+    ///         can always reduce risk or exit while the protocol is paused.
     function pause() external onlyOwner {
         _pause();
     }
@@ -211,12 +229,17 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     /// @notice Posts pToken shares held by the caller as collateral.
-    function depositCollateral(uint256 id, uint256 shares) external nonReentrant whenNotPaused {
+    function depositCollateral(uint256 id, uint256 shares) external nonReentrant {
         _depositLocal(msg.sender, id, shares);
     }
 
     /// @notice Posts the caller's pToken shares as collateral for `account` (e.g. LeverageManager).
-    function depositCollateralFor(address account, uint256 id, uint256 shares) external nonReentrant whenNotPaused {
+    /// @dev Operator-only: unsolicited collateral could add an oracle dependency to someone else's account.
+    function depositCollateralFor(address account, uint256 id, uint256 shares)
+        external
+        nonReentrant
+        onlyOperatorOf(account)
+    {
         _depositLocal(account, id, shares);
     }
 
@@ -251,7 +274,8 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         nonReentrant
     {
         CollateralConfig storage c = _collateral(id);
-        if (!c.isRemote || recipient == bytes32(0)) revert InvalidCollateral();
+        if (!c.isRemote) revert InvalidCollateral();
+        _requireRecipient(recipient);
         if (amount == 0) revert ZeroAmount();
         uint256 spent = _pushPrices(priceUpdate);
         _debit(msg.sender, id, amount);
@@ -314,8 +338,10 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         Market storage m = _market(marketId);
         CollateralConfig storage c = _collateral(collateralId);
         if (collateralBalance[account][collateralId] == 0) revert InsufficientBalance();
+        if (c.isRemote) _requireRecipient(remoteReceiver);
         {
-            (,,, uint256 debtValue, uint256 hf) = _position(account, true);
+            // Strict on every held collateral: an oracle outage must not make healthy positions liquidatable.
+            (,,, uint256 debtValue, uint256 hf) = _position(account, PriceMode.Strict);
             if (debtValue == 0 || hf >= WAD) revert PositionHealthy();
         }
 
@@ -331,7 +357,6 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
 
         uint256 fee;
         if (c.isRemote) {
-            if (remoteReceiver == bytes32(0)) revert InvalidParams();
             fee = IReleaseSender(adapter).messageFee();
             IReleaseSender(adapter).sendRelease{value: fee}(c.chainId, c.remoteToken, remoteReceiver, seized);
         } else {
@@ -358,7 +383,7 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
 
     function getRiskSnapshot(address account) external view returns (RiskSnapshot memory s) {
         (s.collateralValue, s.adjustedCollateral, s.borrowLimit, s.debtValue, s.healthFactor) =
-            _position(account, false);
+            _position(account, PriceMode.View);
     }
 
     function collaterals(uint256 id) external view returns (CollateralConfig memory) {
@@ -379,7 +404,7 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
 
     /// @notice USD value (WAD) of `account`'s balance in collateral `id`, at last known prices.
     function collateralValue(address account, uint256 id) external view returns (uint256) {
-        return _valueOf(_collaterals[id], collateralBalance[account][id], false);
+        return _valueOf(_collaterals[id], collateralBalance[account][id], PriceMode.View);
     }
 
     // =========================================================================
@@ -449,14 +474,24 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     /// @dev Reverts unless Σ value × LTV ≥ debt (+ `extraAmount` of market `extraMarket`).
+    ///      Debt is priced strictly. Collateral whose price is unavailable counts as zero, so an outage
+    ///      on one asset never blocks actions that the remaining collateral supports. With no debt
+    ///      nothing is at risk and no price is needed.
     function _requireWithinLimit(address account, uint256 extraMarket, uint256 extraAmount) internal {
         _accrueAll();
-        (,, uint256 limit, uint256 debtValue,) = _position(account, true);
+        uint256 debtValue = _debtValue(account, true);
         if (extraAmount > 0) {
             Market storage m = _markets[extraMarket];
             debtValue += _usd(extraAmount, oracle.getPrice(m.priceKey), m.decimals);
         }
+        if (debtValue == 0) return;
+        (,, uint256 limit) = _collateralTotals(account, PriceMode.Conservative);
         if (debtValue > limit) revert InsufficientCollateral();
+    }
+
+    function _requireRecipient(bytes32 recipient) internal pure {
+        // The spoke decodes recipients as left-padded EVM addresses; anything else could never be released.
+        if (recipient == bytes32(0) || !Payload.isAddress(recipient)) revert InvalidRecipient();
     }
 
     function _accrueAll() internal {
@@ -465,35 +500,49 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         }
     }
 
-    /// @param strict Use freshness-checked prices (state-changing paths) or last known prices (views).
-    function _position(address account, bool strict)
+    /// @dev Full position. `View` uses last known prices and pending interest; otherwise prices follow
+    ///      `mode` for collateral and are strict for debt (call `_accrueAll` first).
+    function _position(address account, PriceMode mode)
         internal
         view
         returns (uint256 value, uint256 adjusted, uint256 limit, uint256 debtValue, uint256 hf)
+    {
+        (value, adjusted, limit) = _collateralTotals(account, mode);
+        debtValue = _debtValue(account, mode != PriceMode.View);
+        hf = debtValue == 0 ? type(uint256).max : adjusted * WAD / debtValue;
+    }
+
+    function _collateralTotals(address account, PriceMode mode)
+        internal
+        view
+        returns (uint256 value, uint256 adjusted, uint256 limit)
     {
         for (uint256 id = 0; id < _collaterals.length; id++) {
             uint256 balance = collateralBalance[account][id];
             if (balance == 0) continue;
             CollateralConfig storage c = _collaterals[id];
-            uint256 v = _valueOf(c, balance, strict);
+            uint256 v = _valueOf(c, balance, mode);
             value += v;
             adjusted += v * c.ltBps / BPS;
             limit += v * c.ltvBps / BPS;
         }
-        for (uint256 i = 0; i < _markets.length; i++) {
-            Market storage m = _markets[i];
-            // Views include interest pending since the last accrual; mutating paths accrue first.
-            uint256 debt = strict ? m.pool.borrowBalanceStored(account) : m.pool.borrowBalanceView(account);
-            if (debt == 0) continue;
-            debtValue += _usd(debt, _price(m.priceKey, strict), m.decimals);
-        }
-        hf = debtValue == 0 ? type(uint256).max : adjusted * WAD / debtValue;
     }
 
-    function _valueOf(CollateralConfig storage c, uint256 balance, bool strict) internal view returns (uint256) {
+    /// @param strict Stored debt at fresh prices (mutating paths, after accrual) or pending debt at
+    ///        last known prices (views).
+    function _debtValue(address account, bool strict) internal view returns (uint256 debtValue) {
+        for (uint256 i = 0; i < _markets.length; i++) {
+            Market storage m = _markets[i];
+            uint256 debt = strict ? m.pool.borrowBalanceStored(account) : m.pool.borrowBalanceView(account);
+            if (debt == 0) continue;
+            debtValue += _usd(debt, _priceFor(m.priceKey, strict ? PriceMode.Strict : PriceMode.View), m.decimals);
+        }
+    }
+
+    function _valueOf(CollateralConfig storage c, uint256 balance, PriceMode mode) internal view returns (uint256) {
         if (balance == 0) return 0;
         uint256 units = c.isRemote ? balance : PToken(c.token).convertToAssets(balance);
-        return _usd(units, _price(c.priceKey, strict), c.decimals);
+        return _usd(units, _priceFor(c.priceKey, mode), c.decimals);
     }
 
     function _seizeAmount(
@@ -518,8 +567,12 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         actualRepaid = repaid;
     }
 
-    function _price(bytes32 key, bool strict) internal view returns (uint256 price) {
-        if (strict) return oracle.getPrice(key);
+    function _priceFor(bytes32 key, PriceMode mode) internal view returns (uint256 price) {
+        if (mode == PriceMode.Strict) return oracle.getPrice(key);
+        if (mode == PriceMode.Conservative) {
+            (bool ok, uint256 p) = oracle.tryGetPrice(key);
+            return ok ? p : 0;
+        }
         (price,) = oracle.getPriceUnsafe(key);
     }
 

@@ -11,12 +11,14 @@ import {VaultManager} from "./VaultManager.sol";
 /// @notice The hub's only Wormhole endpoint. Verifies DEPOSIT messages from registered spoke
 ///         gateways and credits collateral in VaultManager; publishes RELEASE messages for
 ///         remote withdrawals and liquidations.
-/// @dev Anyone may relay a VAA: safety comes from guardian signatures, the emitter registry
-///      and the replay guard, not from who submits it.
+/// @dev Anyone may relay a VAA: safety comes from guardian signatures, the emitter registry,
+///      the replay guard and the destination binding in the payload, not from who submits it.
 contract WormholeAdapter is Ownable2Step, ReentrancyGuard {
     IWormhole public immutable wormhole;
     VaultManager public immutable vaultManager;
     uint8 public immutable consistencyLevel;
+    /// @notice Wormhole chain id of the hub (read from Wormhole Core at deployment).
+    uint16 public immutable localChainId;
 
     /// @notice Registered SpokeGateway (universal address) per Wormhole chain id.
     mapping(uint16 chainId => bytes32 emitter) public spokeEmitter;
@@ -37,6 +39,7 @@ contract WormholeAdapter is Ownable2Step, ReentrancyGuard {
     error WrongMessageType();
     error UnknownCollateral();
     error NotVaultManager();
+    error WrongTarget();
 
     constructor(IWormhole wormhole_, VaultManager vaultManager_, uint8 consistencyLevel_, address owner_)
         Ownable(owner_)
@@ -44,6 +47,7 @@ contract WormholeAdapter is Ownable2Step, ReentrancyGuard {
         wormhole = wormhole_;
         vaultManager = vaultManager_;
         consistencyLevel = consistencyLevel_;
+        localChainId = wormhole_.chainId();
     }
 
     function setSpoke(uint16 chainId, bytes32 emitter) external onlyOwner {
@@ -67,6 +71,8 @@ contract WormholeAdapter is Ownable2Step, ReentrancyGuard {
 
         Payload.Message memory m = Payload.decode(vm.payload);
         if (m.msgType != Payload.DEPOSIT) revert WrongMessageType();
+        // Only messages addressed to this adapter on this chain may credit collateral.
+        if (m.targetChain != localChainId || m.target != Payload.toBytes32(address(this))) revert WrongTarget();
         uint256 idPlusOne = vaultManager.remoteCollateralId(vm.emitterChainId, m.token);
         if (idPlusOne == 0) revert UnknownCollateral();
         address account = Payload.toAddress(m.account);
@@ -76,15 +82,18 @@ contract WormholeAdapter is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Publishes a RELEASE for `recipient` on the spoke. Only VaultManager, after debiting the hub balance.
+    /// @dev The payload names the registered gateway on `chainId` as its only valid executor.
     function sendRelease(uint16 chainId, bytes32 token, bytes32 recipient, uint256 amount)
         external
         payable
         returns (uint64 sequence)
     {
         if (msg.sender != address(vaultManager)) revert NotVaultManager();
-        if (spokeEmitter[chainId] == bytes32(0)) revert UnknownEmitter();
-        bytes memory payload =
-            Payload.encode(Payload.Message(Payload.RELEASE, ++outboundNonce, recipient, token, amount));
+        bytes32 target = spokeEmitter[chainId];
+        if (target == bytes32(0)) revert UnknownEmitter();
+        bytes memory payload = Payload.encode(
+            Payload.Message(Payload.RELEASE, ++outboundNonce, chainId, target, recipient, token, amount)
+        );
         sequence = wormhole.publishMessage{value: msg.value}(0, payload, consistencyLevel);
         emit ReleaseSent(sequence, chainId, recipient, token, amount);
     }

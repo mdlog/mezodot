@@ -137,7 +137,7 @@ contract DeployHub is Script {
         vm.serializeString(root, "network", network);
         vm.serializeString(root, "role", "hub");
         vm.serializeUint(root, "chainId", block.chainid);
-        vm.serializeUint(root, "wormholeChainId", 50);
+        vm.serializeUint(root, "wormholeChainId", IWormhole(vm.envAddress("WORMHOLE")).chainId());
         vm.serializeUint(root, "startBlock", startBlock);
         vm.serializeString(root, "contracts", contracts);
         vm.serializeString(root, "priceFeeds", feeds);

@@ -75,6 +75,24 @@ abstract contract CrossChainFixture is HubFixture {
         revert("no message published");
     }
 
+    /// Message addressed to the hub adapter (as a spoke would send it).
+    function hubMsg(uint8 msgType, uint64 nonce, bytes32 account, bytes32 token, uint256 amount)
+        internal
+        view
+        returns (Payload.Message memory)
+    {
+        return Payload.Message(msgType, nonce, MEZO_CHAIN, Payload.toBytes32(address(adapter)), account, token, amount);
+    }
+
+    /// Message addressed to the Base spoke gateway (as the hub would send it).
+    function spokeMsg(uint8 msgType, uint64 nonce, bytes32 account, bytes32 token, uint256 amount)
+        internal
+        view
+        returns (Payload.Message memory)
+    {
+        return Payload.Message(msgType, nonce, BASE_SEPOLIA, Payload.toBytes32(address(spoke)), account, token, amount);
+    }
+
     function signRaw(uint16 chainId, address emitter, uint64 sequence, bytes memory payload)
         internal
         pure
