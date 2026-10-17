@@ -1,27 +1,35 @@
 import { erc20Abi, maxUint256, parseUnits, type Address, type Hex, type PublicClient } from 'viem';
 import {
-  fetchPriceUpdate,
+  fetchOracleUpdate,
   keeperGatewayAbi,
   leverageManagerAbi,
   oracleRouterAbi,
   pTokenAbi,
+  readOracle,
+  riskCheckSymbols,
   spokeGatewayAbi,
+  staleSymbols,
+  symbolForPriceKey,
   toBytes32,
   vaultManagerAbi,
   wormholeAdapterAbi,
   type CollateralState,
   type MarketState,
+  type PositionState,
+  type PriceSymbol,
+  type ProtocolState,
 } from '@mezodot/sdk';
-import { HUB, type SpokeInfo } from './env';
+import { AGENT_URL, HUB, type SpokeInfo } from './env';
 import type { TxStep } from './tx';
 
 /**
  * Builders for every user action. Each returns the ordered wallet steps; approvals are skipped
- * when the allowance already covers the amount. Risk-checked calls carry fresh Pyth updates and
- * pay the oracle fee (plus the Wormhole fee where a message is published).
+ * when the allowance already covers the amount. Risk-checked calls attach the pull updates their
+ * risk check needs (a Supra proof for ETH/USDC from the agent relay; nothing for Pyth feeds Mezo
+ * keeps fresh) and pay the oracle fee, plus the Wormhole fee where a message is published.
  */
 
-type Ctx = { account: Address; hub: PublicClient };
+type Ctx = { account: Address; hub: PublicClient; protocol: ProtocolState; position: PositionState | null };
 
 const hubId = HUB.chain.id;
 const d = () => {
@@ -29,12 +37,29 @@ const d = () => {
   return HUB.deployment;
 };
 
-/** Fresh signed prices + the BTC fee the oracle charges to post them. */
-export async function priceUpdate(hub: PublicClient): Promise<{ updates: Hex[]; fee: bigint }> {
-  const { updates } = await fetchPriceUpdate(HUB.hermesUrl, Object.values(d().priceFeeds) as Hex[]);
+/**
+ * Pull updates for the `symbols` a risk check reads that would not stay valid until the transaction
+ * lands, plus the BTC fee the router charges to post them. Built just in time, right before signing.
+ */
+export async function priceUpdate(hub: PublicClient, symbols: PriceSymbol[]): Promise<{ updates: Hex[]; fee: bigint }> {
+  if (symbols.length === 0) return { updates: [], fee: 0n };
+  const oracle = await readOracle(hub, d());
+  const needed = staleSymbols(oracle, symbols, Math.floor(Date.now() / 1000));
+  if (needed.length === 0) return { updates: [], fee: 0n };
+  let updates: Hex[];
+  try {
+    ({ updates } = await fetchOracleUpdate(AGENT_URL, needed));
+  } catch (err) {
+    throw new Error(`Could not fetch ${needed.join('/')} price updates from the Mezodot agent: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // Symbols the relay cannot refresh (Pyth push feeds) go without an update: if they are stale the
+  // contract reverts with PriceUnavailable, which explainError reports by name.
+  if (updates.length === 0) return { updates, fee: 0n };
   const fee = await hub.readContract({ address: d().contracts.oracleRouter, abi: oracleRouterAbi, functionName: 'updateFee', args: [updates] });
   return { updates, fee };
 }
+
+const marketSymbol = (m: MarketState) => symbolForPriceKey(m.priceKey);
 
 function approveStep(client: PublicClient, chainId: number, token: Address, owner: Address, spender: Address, amount: bigint, label: string): TxStep {
   return {
@@ -80,12 +105,12 @@ export const postCollateralSteps = ({ account, hub }: Ctx, c: CollateralState, s
   },
 ];
 
-export const withdrawCollateralSteps = ({ account, hub }: Ctx, c: CollateralState, shares: bigint): TxStep[] => [
+export const withdrawCollateralSteps = ({ account, hub, protocol, position }: Ctx, c: CollateralState, shares: bigint): TxStep[] => [
   {
     label: `Withdraw ${c.symbol} collateral`,
     chainId: hubId,
     request: async () => {
-      const { updates, fee } = await priceUpdate(hub);
+      const { updates, fee } = await priceUpdate(hub, riskCheckSymbols(protocol, position));
       return {
         address: d().contracts.vaultManager,
         abi: vaultManagerAbi,
@@ -99,12 +124,12 @@ export const withdrawCollateralSteps = ({ account, hub }: Ctx, c: CollateralStat
 
 // --- Borrow / repay --------------------------------------------------------------
 
-export const borrowSteps = ({ hub }: Ctx, m: MarketState, amount: bigint): TxStep[] => [
+export const borrowSteps = ({ hub, protocol, position }: Ctx, m: MarketState, amount: bigint): TxStep[] => [
   {
     label: `Borrow ${m.symbol}`,
     chainId: hubId,
     request: async () => {
-      const { updates, fee } = await priceUpdate(hub);
+      const { updates, fee } = await priceUpdate(hub, riskCheckSymbols(protocol, position, marketSymbol(m)));
       return { address: d().contracts.vaultManager, abi: vaultManagerAbi, functionName: 'borrow', args: [BigInt(m.id), amount, updates], value: fee };
     },
   },
@@ -146,13 +171,13 @@ export const spokeDepositSteps = (account: Address, spoke: SpokeInfo, client: Pu
   ];
 };
 
-export const withdrawRemoteSteps = ({ account, hub }: Ctx, c: CollateralState, amount: bigint, recipient: Address = account): TxStep[] => [
+export const withdrawRemoteSteps = ({ account, hub, protocol, position }: Ctx, c: CollateralState, amount: bigint, recipient: Address = account): TxStep[] => [
   {
     label: `Release ${c.symbol} on spoke`,
     chainId: hubId,
     request: async () => {
       const [{ updates, fee }, wormholeFee] = await Promise.all([
-        priceUpdate(hub),
+        priceUpdate(hub, riskCheckSymbols(protocol, position)),
         hub.readContract({ address: d().contracts.wormholeAdapter, abi: wormholeAdapterAbi, functionName: 'messageFee' }),
       ]);
       return {
@@ -185,7 +210,7 @@ export const relaySpokeSteps = (spoke: SpokeInfo, vaa: Hex): TxStep[] => [
 
 // --- Loop ----------------------------------------------------------------------------
 
-export const loopSteps = ({ account, hub }: Ctx, musd: MarketState, principal: bigint, leverage: number, isOperator: boolean): TxStep[] => {
+export const loopSteps = ({ account, hub, protocol, position }: Ctx, musd: MarketState, principal: bigint, leverage: number, isOperator: boolean): TxStep[] => {
   const lm = d().contracts.leverageManager;
   const leverageWad = parseUnits(leverage.toString(), 18);
   return [
@@ -201,7 +226,7 @@ export const loopSteps = ({ account, hub }: Ctx, musd: MarketState, principal: b
       request: async () => {
         const gross = (principal * leverageWad) / 10n ** 18n;
         const expectedShares = await hub.readContract({ address: musd.pool, abi: pTokenAbi, functionName: 'previewDeposit', args: [gross] });
-        const { updates, fee } = await priceUpdate(hub);
+        const { updates, fee } = await priceUpdate(hub, riskCheckSymbols(protocol, position, marketSymbol(musd)));
         return {
           address: lm,
           abi: leverageManagerAbi,
@@ -214,12 +239,12 @@ export const loopSteps = ({ account, hub }: Ctx, musd: MarketState, principal: b
   ];
 };
 
-export const unwindSteps = ({ hub }: Ctx, minOut: bigint): TxStep[] => [
+export const unwindSteps = ({ hub, protocol, position }: Ctx, minOut: bigint): TxStep[] => [
   {
     label: 'Unwind loop',
     chainId: hubId,
     request: async () => {
-      const { updates, fee } = await priceUpdate(hub);
+      const { updates, fee } = await priceUpdate(hub, riskCheckSymbols(protocol, position));
       return {
         address: d().contracts.leverageManager,
         abi: leverageManagerAbi,

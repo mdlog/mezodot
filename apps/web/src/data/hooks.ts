@@ -1,26 +1,35 @@
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAccount, useConfig, usePublicClient } from 'wagmi';
 import { getPublicClient } from 'wagmi/actions';
-import { erc20Abi, type Address, type Hex, type PublicClient } from 'viem';
+import { erc20Abi, type Address, type PublicClient } from 'viem';
 import {
-  fetchPriceUpdate,
+  PRICE_SYMBOLS,
+  SOURCE_TAG,
+  displayPrices,
+  fetchOracleUpdate,
   leverageManagerAbi,
-  pricesBySymbol,
+  positionSymbols,
+  readOracle,
   readPosition,
   readProtocol,
   symbolForPriceKey,
+  usablePrices,
   valuePosition,
+  type OracleState,
+  type OracleStatus,
   type PriceSymbol,
   type ProtocolState,
   type UsdPrices,
 } from '@mezodot/sdk';
-import { AGENT_URL, HUB, SPOKES } from '../chain/env';
+import { AGENT_URL, ENV_NAME, HUB, SPOKES } from '../chain/env';
 import { scanIncremental } from './incremental';
 
 /** Query keys shared with the transaction runner, which invalidates them after each write. */
 export const QK = {
   protocol: ['protocol'] as const,
-  prices: ['prices'] as const,
+  oracle: ['oracle'] as const,
+  pullPrices: (symbols: string) => ['pullPrices', symbols] as const,
   position: (a?: Address) => ['position', a] as const,
   balances: (a?: Address) => ['balances', a] as const,
   loopStats: ['loopStats'] as const,
@@ -46,18 +55,62 @@ export function useProtocol() {
   });
 }
 
-/** Fresh Pyth prices for previews (and the update bytes for the next risk-checked tx). */
-export function usePrices() {
+/** Router state: feeds, strict availability and last stored prices. */
+export function useOracle() {
+  const client = useHubClient();
   return useQuery({
-    queryKey: QK.prices,
-    enabled: Boolean(HUB.deployment),
-    queryFn: async () => {
-      const feeds = HUB.deployment!.priceFeeds;
-      const update = await fetchPriceUpdate(HUB.hermesUrl, Object.values(feeds) as Hex[]);
-      return { prices: pricesBySymbol(feeds, update.prices) as UsdPrices, publishTime: Math.max(0, ...Object.values(update.prices).map((p) => p.publishTime)) };
-    },
-    refetchInterval: 15_000,
+    queryKey: QK.oracle,
+    enabled: Boolean(client && HUB.deployment),
+    queryFn: () => readOracle(client!, HUB.deployment!),
+    refetchInterval: 12_000,
   });
+}
+
+/** Keys the agent relay can refresh: Supra legs everywhere; on the devnet the mocked Pyth legs too. */
+const isPullable = (s: OracleStatus) =>
+  [s.feed?.primary, s.feed?.secondary].some((l) => l?.source === SOURCE_TAG.SUPRA) || (ENV_NAME === 'devnet' && s.feed?.primary.source === SOURCE_TAG.PYTH);
+
+export type Prices = {
+  oracle: OracleState;
+  /** Prices VaultManager accepts now (strict on-chain, else a fresh pull price): use for limits and previews. */
+  usable: UsdPrices;
+  /** Usable prices, falling back to the last stored values: use for display only. */
+  prices: UsdPrices;
+  /** Newest publish time among usable prices (unix seconds). */
+  publishTime: number;
+  /** Why fresh pull prices are missing (agent relay unreachable), if they are. */
+  relayError: string | null;
+};
+
+/**
+ * Prices for the UI. Keys not usable on-chain (e.g. ETH, whose Supra proof is only posted with a
+ * transaction) are previewed with fresh prices from the agent relay; the browser never calls Hermes.
+ */
+export function usePrices(): { data: Prices | undefined; isLoading: boolean } {
+  const oracle = useOracle();
+  const pull = oracle.data ? PRICE_SYMBOLS.filter((s) => !oracle.data![s].ok && isPullable(oracle.data![s])) : [];
+  const fresh = useQuery({
+    queryKey: QK.pullPrices(pull.join(',')),
+    enabled: pull.length > 0,
+    queryFn: () => fetchOracleUpdate(AGENT_URL, pull),
+    refetchInterval: 15_000,
+    retry: false,
+  });
+  const data = useMemo((): Prices | undefined => {
+    if (!oracle.data) return undefined;
+    const freshPrices = pull.length > 0 ? fresh.data?.prices : undefined;
+    const times = PRICE_SYMBOLS.map((s) => (oracle.data![s].ok ? oracle.data![s].publishTime : (freshPrices?.[s]?.publishTime ?? 0)));
+    return {
+      oracle: oracle.data,
+      usable: usablePrices(oracle.data, freshPrices),
+      prices: displayPrices(oracle.data, freshPrices),
+      publishTime: Math.max(0, ...times),
+      relayError: pull.length > 0 && fresh.error ? (fresh.error instanceof Error ? fresh.error.message : String(fresh.error)) : null,
+    };
+    // `pull` is derived from oracle.data.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [oracle.data, fresh.data, fresh.error]);
+  return { data, isLoading: oracle.isLoading };
 }
 
 export function usePosition() {
@@ -72,13 +125,27 @@ export function usePosition() {
   });
 }
 
-/** Position valued with fresh prices (the on-chain snapshot may use stale pull-oracle prices). */
+/**
+ * Position valued with the prices VaultManager would accept now, so limits and MAX amounts match the
+ * contract (the on-chain snapshot uses last stored prices, which may be stale for pull feeds).
+ * `unpriced` lists held assets without an acceptable price: they count as zero toward borrowing.
+ */
 export function useValuedPosition() {
   const protocol = useProtocol();
   const prices = usePrices();
   const position = usePosition();
-  const valued = protocol.data && position.data && prices.data ? valuePosition(protocol.data, position.data, prices.data.prices) : null;
-  return { valued, position: position.data, protocol: protocol.data, prices: prices.data?.prices, isLoading: position.isLoading || protocol.isLoading };
+  const usable = prices.data?.usable;
+  const valued = protocol.data && position.data && usable ? valuePosition(protocol.data, position.data, usable) : null;
+  const unpriced = protocol.data && position.data && usable ? positionSymbols(protocol.data, position.data).filter((s) => usable[s] === undefined) : [];
+  return {
+    valued,
+    position: position.data,
+    protocol: protocol.data,
+    prices: usable,
+    unpriced,
+    relayError: prices.data?.relayError ?? null,
+    isLoading: position.isLoading || protocol.isLoading,
+  };
 }
 
 export type WalletBalances = {

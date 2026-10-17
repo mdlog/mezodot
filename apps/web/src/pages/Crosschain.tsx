@@ -4,7 +4,7 @@ import { ArrowDownLeft, ArrowRight, BadgeCheck, Check, Shield, Waves, X } from '
 import { useAccount, usePublicClient } from 'wagmi';
 import { parseEventLogs, type PublicClient } from 'viem';
 import { maxWithdrawableUnits, spokeGatewayAbi, wormholeAdapterAbi } from '@mezodot/sdk';
-import { AmountInput, ConnectGate, InfoBar, NotDeployed, PageTitle, PanelTitle, Spinner, SummaryStrip, TxLink } from '../components/ui';
+import { AmountInput, ConnectGate, InfoBar, NotDeployed, PageTitle, PanelTitle, Spinner, SummaryStrip, TxLink, PriceNotice } from '../components/ui';
 import { HUB, HUB_DEPLOYED, SPOKES, spokeByWormholeChain, type SpokeInfo } from '../chain/env';
 import { relayHubSteps, relaySpokeSteps, spokeDepositSteps, withdrawRemoteSteps } from '../chain/actions';
 import { useTx } from '../chain/tx';
@@ -250,7 +250,7 @@ function WithdrawRemotePanel() {
   const hub = useHubClient();
   const { addFlight } = useUi();
   const { run, busy } = useTx();
-  const { valued, protocol } = useValuedPosition();
+  const { valued, protocol, position, unpriced, relayError } = useValuedPosition();
   const remote = valued?.collateral.filter((c) => c.collateral.isRemote && c.balance > 0n) ?? [];
   const [selected, setSelected] = useState<number | null>(null);
   const [amount, setAmount] = useState('');
@@ -273,7 +273,8 @@ function WithdrawRemotePanel() {
   const withdraw = async () => {
     if (!address || !hub || !row || !parsed) return;
     const spoke = spokeByWormholeChain(row.collateral.chainId);
-    const result = await run(`Release ${row.collateral.symbol}`, withdrawRemoteSteps({ account: address, hub }, row.collateral, parsed));
+    const ctx = { account: address, hub, protocol, position: position ?? null };
+    const result = await run(`Release ${row.collateral.symbol}`, withdrawRemoteSteps(ctx, row.collateral, parsed));
     if (!result.ok || !spoke) return;
     const receipt = result.receipts[0];
     const [event] = parseEventLogs({ abi: wormholeAdapterAbi, logs: receipt.logs, eventName: 'ReleaseSent' });
@@ -297,6 +298,7 @@ function WithdrawRemotePanel() {
   return (
     <section className="panel route-panel">
       <PanelTitle label="Withdraw to a spoke" meta="VaultManager.withdrawRemote" />
+      {valued && valued.debtUsd > 0 && <PriceNotice unpriced={unpriced} relayError={relayError} />}
       {remote.length === 0 ? (
         <p className="muted-note">{isConnected ? 'No spoke collateral posted.' : 'Connect a wallet to manage spoke collateral.'}</p>
       ) : (

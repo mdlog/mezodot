@@ -2,8 +2,11 @@ import { useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAccount, useConfig } from 'wagmi';
 import { switchChain, waitForTransactionReceipt, writeContract } from 'wagmi/actions';
-import { BaseError, ContractFunctionRevertedError, UserRejectedRequestError, type Hash, type TransactionReceipt } from 'viem';
+import type { Hash, TransactionReceipt } from 'viem';
+import { explainError } from '../lib/errors';
 import { useUi } from '../state/UiContext';
+
+export { explainError };
 
 /** One wallet transaction. `request` is built lazily so price updates are fetched just in time. */
 export type TxStep = {
@@ -15,37 +18,6 @@ export type TxStep = {
 };
 
 export type TxResult = { ok: true; receipts: TransactionReceipt[] } | { ok: false };
-
-const FRIENDLY: Record<string, string> = {
-  InsufficientCollateral: 'This would exceed your borrow limit',
-  InsufficientBalance: 'Not enough collateral posted',
-  InsufficientCash: 'Not enough liquidity in the pool',
-  PositionHealthy: 'Position is healthy — nothing to liquidate',
-  SlippageExceeded: 'Price moved; try again',
-  NotOperator: 'Approve LeverageManager as operator first',
-  CapExceeded: 'Collateral cap reached',
-  BorrowCapExceeded: 'Market borrow cap reached',
-  NothingToRepay: 'No debt to repay',
-  StalePrice: 'Oracle price is stale — refresh and retry',
-  PriceUncertain: 'Oracle confidence too low right now',
-  InvalidLeverage: 'Choose a leverage above 1×',
-  TokenNotAllowed: 'Token not accepted on this spoke',
-  WrongFee: 'Wormhole fee changed; retry',
-  AlreadyConsumed: 'Message already delivered',
-  EnforcedPause: 'Protocol is paused for new positions',
-};
-
-/** Turns wallet / revert errors into one readable sentence. */
-export function explainError(err: unknown): string {
-  if (err instanceof BaseError) {
-    if (err.walk((e) => e instanceof UserRejectedRequestError)) return 'Transaction rejected in wallet';
-    const revert = err.walk((e) => e instanceof ContractFunctionRevertedError) as ContractFunctionRevertedError | null;
-    const name = revert?.data?.errorName;
-    if (name) return FRIENDLY[name] ?? name;
-    return err.shortMessage;
-  }
-  return err instanceof Error ? err.message.split('\n')[0] : String(err);
-}
 
 /** Runs a sequence of steps (switching chains as needed), with toasts and data refresh. */
 export function useTx() {

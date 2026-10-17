@@ -39,18 +39,19 @@ export function Loop() {
   const equity = (loopCollateral?.valueUsd ?? 0) - (loopDebt?.valueUsd ?? 0);
 
   const open = async () => {
-    if (!address || !hub || !musd || plan.error || principalWei === null) return;
+    if (!address || !hub || !musd || !protocol || plan.error || principalWei === null) return;
     const principal = principalWei;
-    const result = await run(`${leverage}× loop`, loopSteps({ account: address, hub }, musd, principal, leverage, position?.isLeverageOperator ?? false));
+    const ctx = { account: address, hub, protocol, position: position ?? null };
+    const result = await run(`${leverage}× loop`, loopSteps(ctx, musd, principal, leverage, position?.isLeverageOperator ?? false));
     if (result.ok) setLastLoop(result.receipts[result.receipts.length - 1].transactionHash);
   };
 
   const unwind = async () => {
-    if (!address || !hub) return;
+    if (!address || !hub || !protocol) return;
     // Equity is in USD; the contract pays out MUSD. Accept up to 2% below the estimate (fees + interest).
     const musdPrice = prices?.MUSD ?? 1;
     const minOut = floorUnits((Math.max(0, equity) / musdPrice) * 0.98, musd?.decimals ?? 18);
-    await run('Unwind loop', unwindSteps({ account: address, hub }, minOut));
+    await run('Unwind loop', unwindSteps({ account: address, hub, protocol, position: position ?? null }, minOut));
   };
 
   const trace = [

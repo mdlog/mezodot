@@ -41,7 +41,8 @@ type Evaluation = { account: string; healthFactor: number; debtUsd: number; plan
 
 const TOOLS = [
   ['get_markets', 'Pools, APYs, exchange rates, collateral params'],
-  ['get_position', 'Cross-chain position valued with fresh Pyth prices'],
+  ['get_position', 'Cross-chain position at the prices the protocol accepts now'],
+  ['get_oracle_health', 'Per-feed sources, age and validity (Pyth push, Supra pull)'],
   ['get_risk_report', 'Volatility, VaR, LTV advice, walk-forward + DSR'],
   ['simulate_loop', 'Preview a 1-click loop'],
   ['simulate_borrow', 'Health factor after a borrow'],

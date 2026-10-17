@@ -43,7 +43,7 @@ export function Dashboard() {
             <span className="live-dot" /> {HUB.label} <i>/</i> {protocol ? `Block ${fmt(Number(protocol.blockNumber))}` : 'connecting…'}
           </>
         }
-        time={prices ? `Pyth prices ${timeAgo(prices.publishTime * 1000)}` : 'Loading prices'}
+        time={prices ? `Oracle prices ${prices.publishTime > 0 ? timeAgo(prices.publishTime * 1000) : 'unavailable'}` : 'Loading prices'}
         icon={Clock3}
       />
 
@@ -223,7 +223,7 @@ export function Dashboard() {
         </section>
 
         <section className="panel position-panel">
-          <PanelTitle label="Your position" meta={isConnected ? 'Valued with fresh Pyth prices' : 'Connect a wallet'} />
+          <PanelTitle label="Your position" meta={isConnected ? 'Valued at prices the protocol accepts now' : 'Connect a wallet'} />
           {valued ? (
             <>
               <div className="position-value">

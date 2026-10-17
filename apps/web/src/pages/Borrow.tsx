@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ArrowRight, ArrowUpRight, LockKeyhole, Network, Shield, ShieldAlert } from 'lucide-react';
 import { useAccount } from 'wagmi';
 import { healthStatus, perSecondToAnnual, symbolForPriceKey } from '@mezodot/sdk';
-import { AmountInput, ConnectGate, NotDeployed, PageTitle, PanelTitle, SummaryStrip } from '../components/ui';
+import { AmountInput, ConnectGate, NotDeployed, PageTitle, PanelTitle, PriceNotice, SummaryStrip } from '../components/ui';
 import { HUB_DEPLOYED, spokeByWormholeChain } from '../chain/env';
 import { borrowSteps } from '../chain/actions';
 import { useTx } from '../chain/tx';
@@ -18,7 +18,7 @@ export function Borrow() {
   const { address, isConnected } = useAccount();
   const hub = useHubClient();
   const { run, busy } = useTx();
-  const { valued, protocol, prices, position } = useValuedPosition();
+  const { valued, protocol, prices, position, unpriced, relayError } = useValuedPosition();
   const [marketId, setMarketId] = useState(0);
   const [amount, setAmount] = useState('');
 
@@ -46,8 +46,8 @@ export function Borrow() {
   const liqLtv = valued && valued.collateralUsd > 0 ? valued.adjustedCollateralUsd / valued.collateralUsd : 0.8;
 
   const borrow = async () => {
-    if (!address || !hub || !market || !parsed) return;
-    const result = await run(`Borrow ${market.symbol}`, borrowSteps({ account: address, hub }, market, parsed));
+    if (!address || !hub || !market || !parsed || !protocol) return;
+    const result = await run(`Borrow ${market.symbol}`, borrowSteps({ account: address, hub, protocol, position: position ?? null }, market, parsed));
     if (result.ok) setAmount('');
   };
 
@@ -71,7 +71,7 @@ export function Borrow() {
             VAULTMANAGER <i>/</i> CROSS-CHAIN HEALTH FACTOR
           </>
         }
-        time="Prices: Pyth (posted with each borrow)"
+        time="Prices: Pyth on Mezo · Supra pull for ETH/USDC"
         icon={Shield}
       />
       {!HUB_DEPLOYED && <NotDeployed />}
@@ -160,8 +160,9 @@ export function Borrow() {
               </button>
             </div>
           </ConnectGate>
+          <PriceNotice unpriced={unpriced} relayError={relayError} />
           <div className="small-disclosure">
-            <LockKeyhole size={14} /> Fresh Pyth prices are posted with the borrow; the oracle fee is paid in BTC.
+            <LockKeyhole size={14} /> MUSD/MEZO prices come from Pyth, pushed on Mezo. ETH/USDC prices are attached to the borrow as a signed Supra proof.
           </div>
         </section>
 

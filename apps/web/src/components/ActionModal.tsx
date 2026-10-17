@@ -10,7 +10,7 @@ import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { fmt, fmtApy, fmtHealth, money, units } from '../lib/format';
 import { useUi, type AmountModal } from '../state/UiContext';
 import { Modal } from './Modal';
-import { AmountInput, ConnectGate } from './ui';
+import { AmountInput, ConnectGate, PriceNotice } from './ui';
 
 const TITLES: Record<AmountModal['type'], string> = {
   supply: 'Supply',
@@ -40,7 +40,7 @@ function ActionBody({ modal }: { modal: AmountModal }) {
   const hub = useHubClient();
   const { closeModal } = useUi();
   const { run, busy } = useTx();
-  const { valued, protocol, prices, position } = useValuedPosition();
+  const { valued, protocol, prices, position, unpriced, relayError } = useValuedPosition();
   const balances = useWalletBalances().data;
   const [amount, setAmount] = useState(modal.preset ?? '');
   const [useMax, setUseMax] = useState(false);
@@ -105,7 +105,7 @@ function ActionBody({ modal }: { modal: AmountModal }) {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (invalid || !address || !hub) return;
-    const ctx = { account: address, hub };
+    const ctx = { account: address, hub, protocol, position: position ?? null };
     const steps = (() => {
       switch (modal.type) {
         case 'supply':
@@ -145,11 +145,12 @@ function ActionBody({ modal }: { modal: AmountModal }) {
           </b>
           <p>
             {modal.type === 'borrow' || modal.type === 'unpost'
-              ? 'Fresh Pyth prices are posted with the transaction (small BTC fee).'
+              ? 'Prices the health check needs are attached when they are about to expire (a Supra proof for ETH/USDC).'
               : 'Approval is requested only if your allowance is too low.'}
           </p>
         </div>
       </div>
+      {(modal.type === 'borrow' || modal.type === 'unpost') && <PriceNotice unpriced={unpriced} relayError={relayError} />}
       <label className="field-label" htmlFor="modal-amount">
         AMOUNT{' '}
         <span>

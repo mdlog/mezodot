@@ -179,6 +179,17 @@ export function AmountInput({
   );
 }
 
+/** Held assets without an acceptable price count as zero toward borrowing (VaultManager's rule). */
+export function PriceNotice({ unpriced, relayError }: { unpriced: string[]; relayError: string | null }) {
+  if (unpriced.length === 0) return null;
+  return (
+    <p className="inline-error" role="status">
+      No usable {unpriced.join(' / ')} price right now{relayError ? ' — the price relay is unreachable' : ''}. That collateral counts as $0 toward your borrow
+      limit until a fresh price is available.
+    </p>
+  );
+}
+
 export function TxLink({ network, hash, label }: { network: NetworkInfo; hash: string; label?: string }) {
   const url = explorerTx(network, hash);
   const text = label ?? `${hash.slice(0, 8)}…${hash.slice(-4)}`;
