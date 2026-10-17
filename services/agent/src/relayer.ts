@@ -1,11 +1,12 @@
 import { join } from 'node:path';
-import { keccak256, sliceHex, hexToNumber, type Address, type Hex, type PublicClient } from 'viem';
+import { type Address, type Hex, type PublicClient } from 'viem';
 import {
   NETWORKS,
   fetchSignedVaa,
   keeperGatewayAbi,
   parseLogMessagePublished,
   signDevVaa,
+  vaaDigest,
   spokeGatewayAbi,
   wormholeAdapterAbi,
   type NetworkName,
@@ -41,11 +42,8 @@ const MAX_ATTEMPTS = 8;
 
 export const messageId = (emitterChain: number, emitter: Address, sequence: bigint) => `${emitterChain}/${emitter.toLowerCase()}/${sequence}`;
 
-/** Wormhole digest that contracts use as the replay key: keccak256(keccak256(body)). */
-export function vaaHash(vaa: Hex): Hex {
-  const signatures = hexToNumber(sliceHex(vaa, 5, 6));
-  return keccak256(keccak256(sliceHex(vaa, 6 + signatures * 66)));
-}
+/** Wormhole digest that contracts use as the replay key (re-exported from the SDK). */
+export const vaaHash = vaaDigest;
 
 /**
  * Permissionless relayer for both directions:

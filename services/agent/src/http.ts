@@ -70,6 +70,19 @@ export function startHttp(s: Services, host = process.env.HTTP_HOST ?? '127.0.0.
           const report = s.risk.report();
           return report ? send(res, 200, report) : send(res, 503, { error: s.risk.lastError() ?? 'Risk report not ready' });
         }
+        case '/stats': {
+          // PRD KPI: share of borrowed value backed by collateral that lives on non-Mezo chains,
+          // attributing each account's debt pro rata to its remote collateral share.
+          const evals = s.liquidator.lastEvaluations;
+          const debt = evals.reduce((sum, e) => sum + e.debtUsd, 0);
+          const remoteBacked = evals.reduce((sum, e) => sum + (e.collateralUsd > 0 ? (e.debtUsd * e.remoteCollateralUsd) / e.collateralUsd : 0), 0);
+          return send(res, 200, {
+            borrowers: evals.length,
+            debtUsd: debt,
+            crossChainBorrowRatio: debt > 0 ? remoteBacked / debt : null,
+            updatedAt: s.liquidator.lastRun,
+          });
+        }
         case '/messages':
           return send(res, 200, s.relayer.messages().slice(0, 100).map(({ vaa: _vaa, ...m }) => m));
         case '/liquidatable':

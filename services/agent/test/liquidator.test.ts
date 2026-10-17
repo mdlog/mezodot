@@ -97,3 +97,13 @@ describe('evaluateAccount', () => {
     expect(e.plan).toBeNull();
   });
 });
+
+describe('mergeAccounts', () => {
+  it('dedupes within a batch and across batches, case-insensitively', async () => {
+    const { mergeAccounts } = await import('../src/liquidator');
+    const a = '0x00000000000000000000000000000000000000Aa';
+    const b = '0x00000000000000000000000000000000000000bb';
+    expect(mergeAccounts([], [a, a.toLowerCase() as `0x${string}`, b, b])).toEqual([a, b]);
+    expect(mergeAccounts([a], [a, b])).toEqual([a, b]);
+  });
+});

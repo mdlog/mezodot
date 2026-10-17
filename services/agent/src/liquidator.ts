@@ -8,18 +8,18 @@ import {
   oracleRouterAbi,
   readPosition,
   readProtocol,
-  summarizePosition,
-  symbolForPriceKey,
+  pricesBySymbol,
+  valuePosition,
+  type UsdPrices,
   vaultManagerAbi,
   NETWORKS,
   type PositionState,
-  type PriceSymbol,
   type ProtocolState,
 } from '@mezodot/sdk';
 import type { Context } from './context';
 import { JsonStore } from './store';
 
-export type UsdPrices = Partial<Record<PriceSymbol, number>>;
+export type { UsdPrices };
 
 export type LiquidationPlan = {
   marketId: number;
@@ -38,6 +38,8 @@ export type AccountEvaluation = {
   account: Address;
   healthFactor: number;
   collateralUsd: number;
+  /** Collateral on spokes (USD) — used for the cross-chain borrow KPI. */
+  remoteCollateralUsd: number;
   /** Σ value × LTV at fresh prices. */
   borrowLimitUsd: number;
   /** Σ value × liquidation threshold at fresh prices. */
@@ -54,33 +56,16 @@ const toNumber = (v: bigint, decimals: number) => Number(v) / 10 ** decimals;
  * largest collateral, repaying up to the 50% close factor (capped by keeper inventory).
  */
 export function evaluateAccount(protocol: ProtocolState, position: PositionState, prices: UsdPrices, inventory: Record<number, bigint> = {}): AccountEvaluation {
-  const collateralRows = protocol.collaterals.map((c) => {
-    const balance = position.collateral.find((p) => p.id === c.id)?.balance ?? 0n;
-    const symbol = symbolForPriceKey(c.priceKey);
-    const price = symbol ? (prices[symbol] ?? 0) : 0;
-    let units = 0;
-    if (c.isRemote) units = toNumber(balance, c.decimals);
-    else {
-      const market = protocol.markets.find((m) => m.pool.toLowerCase() === c.token.toLowerCase());
-      if (market) units = toNumber(balance, market.shareDecimals) * toNumber(market.exchangeRate, market.decimals);
-    }
-    return { c, balance, units, price, valueUsd: units * price };
-  });
-  const debtRows = protocol.markets.map((m) => {
-    const amount = position.debts.find((d) => d.marketId === m.id)?.amount ?? 0n;
-    const symbol = symbolForPriceKey(m.priceKey);
-    const price = symbol ? (prices[symbol] ?? 0) : 0;
-    return { m, amount, price, valueUsd: toNumber(amount, m.decimals) * price };
-  });
+  const valued = valuePosition(protocol, position, prices);
+  const collateralRows = valued.collateral.map((r) => ({ c: r.collateral, balance: r.balance, units: r.units, price: r.price, valueUsd: r.valueUsd }));
+  const debtRows = valued.debts.map((d) => ({ m: d.market, amount: d.amount, price: d.price, valueUsd: d.valueUsd }));
+  const summary = valued;
 
-  const summary = summarizePosition(
-    collateralRows.filter((r) => r.balance > 0n).map((r) => ({ valueUsd: r.valueUsd, ltvBps: r.c.ltvBps, ltBps: r.c.ltBps })),
-    debtRows.reduce((s, d) => s + d.valueUsd, 0),
-  );
   const base = {
     account: position.account,
     healthFactor: summary.healthFactor,
     collateralUsd: summary.collateralUsd,
+    remoteCollateralUsd: summary.remoteCollateralUsd,
     borrowLimitUsd: summary.borrowLimitUsd,
     adjustedUsd: summary.adjustedCollateralUsd,
     debtUsd: summary.debtUsd,
@@ -126,6 +111,18 @@ export function evaluateAccount(protocol: ProtocolState, position: PositionState
 
 type LiquidatorState = { cursor: bigint | null; accounts: Address[] };
 
+/** Appends unseen accounts (case-insensitive), preserving first-seen order. */
+export function mergeAccounts(existing: Address[], incoming: Address[]): Address[] {
+  const seen = new Set(existing.map((a) => a.toLowerCase()));
+  const out = [...existing];
+  for (const a of incoming) {
+    if (seen.has(a.toLowerCase())) continue;
+    seen.add(a.toLowerCase());
+    out.push(a);
+  }
+  return out;
+}
+
 /** Watches borrowers and liquidates unhealthy positions through KeeperGateway. */
 export class Liquidator {
   readonly store: JsonStore<LiquidatorState>;
@@ -142,11 +139,7 @@ export class Liquidator {
   async freshPrices() {
     const feeds = this.ctx.hub.deployment.priceFeeds;
     const update = await fetchPriceUpdate(NETWORKS[this.ctx.hub.network].hermesUrl, Object.values(feeds), this.fetchImpl);
-    const prices: UsdPrices = {};
-    for (const [symbol, id] of Object.entries(feeds) as [PriceSymbol, Hex][]) {
-      const p = update.prices[id.toLowerCase()];
-      if (p) prices[symbol] = p.price;
-    }
+    const prices = pricesBySymbol(feeds, update.prices);
     return { update, prices };
   }
 
@@ -157,8 +150,7 @@ export class Liquidator {
     if (from <= latest) {
       const logs = await client.getContractEvents({ address: deployment.contracts.vaultManager, abi: vaultManagerAbi, eventName: 'Borrowed', fromBlock: from, toBlock: latest });
       this.store.update((s) => {
-        const set = new Set(s.accounts.map((a) => a.toLowerCase()));
-        for (const l of logs) if (l.args.account && !set.has(l.args.account.toLowerCase())) s.accounts.push(l.args.account);
+        s.accounts = mergeAccounts(s.accounts, logs.flatMap((l) => (l.args.account ? [l.args.account] : [])));
         s.cursor = latest + 1n;
       });
     }
