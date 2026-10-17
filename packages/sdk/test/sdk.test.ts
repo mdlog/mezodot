@@ -8,6 +8,10 @@ import {
   decodePayload,
   encodeMockPythUpdate,
   encodePayload,
+  fromBytes32,
+  isEvmAddressBytes32,
+  blockRanges,
+  getLogsChunked,
   fetchPriceUpdate,
   fetchSignedVaa,
   getHubDeployment,
@@ -26,7 +30,8 @@ import {
 
 // Reference bytes produced by the contracts themselves (see Task 11 notes in the plan ledger).
 const SOLIDITY_PAYLOAD =
-  '0x01010000000000000007000000000000000000000000328809bc894f92807417d2dad6b7c998c1afdac60000000000000000000000004200000000000000000000000000000000000006000000000000000000000000000000000000000000000000214e8348c4f00000';
+  '0x020100000000000000070032000000000000000000000000e6e340d132b5f46d1e472debcd681b2abc16e57e000000000000000000000000328809bc894f92807417d2dad6b7c998c1afdac60000000000000000000000004200000000000000000000000000000000000006000000000000000000000000000000000000000000000000214e8348c4f00000';
+const HUB_ADAPTER = '0xE6E340D132b5f46d1e472DebcD681B2aBc16e57E';
 const MOCK_PYTH_ETH =
   '0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace0000000000000000000000000000000000000000000000000000004a817c80000000000000000000000000000000000000000000000000000000000005f5e100fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff8000000000000000000000000000000000000000000000000000000006553f1000000000000000000000000000000000000000000000000000000004a817c80000000000000000000000000000000000000000000000000000000000005f5e100fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff8000000000000000000000000000000000000000000000000000000006553f100';
 const ALICE = '0x328809Bc894f92807417D2dAD6b7C998c1aFdac6';
@@ -79,10 +84,12 @@ describe('math mirrors the contracts', () => {
 });
 
 describe('wire formats match Solidity', () => {
-  it('payload encodes byte-for-byte like Payload.sol', () => {
+  it('payload v2 encodes byte-for-byte like Payload.sol', () => {
     const encoded = encodePayload({
       msgType: MessageType.DEPOSIT,
       nonce: 7n,
+      targetChain: 50,
+      target: toBytes32(HUB_ADAPTER),
       account: toBytes32(ALICE),
       token: toBytes32(BASE_WETH),
       amount: 2_400_000_000_000_000_000n,
@@ -90,8 +97,15 @@ describe('wire formats match Solidity', () => {
     expect(encoded).toBe(SOLIDITY_PAYLOAD);
     const d = decodePayload(encoded);
     expect(d.nonce).toBe(7n);
+    expect(d.targetChain).toBe(50);
+    expect(fromBytes32(d.target).toLowerCase()).toBe(HUB_ADAPTER.toLowerCase());
     expect(d.amount).toBe(2_400_000_000_000_000_000n);
-    expect(() => decodePayload(sliceHex(encoded, 0, 105))).toThrow();
+    expect(() => decodePayload(sliceHex(encoded, 0, 139))).toThrow();
+  });
+
+  it('recognises recipients the spoke can decode', () => {
+    expect(isEvmAddressBytes32(toBytes32(ALICE))).toBe(true);
+    expect(isEvmAddressBytes32(`0x${ALICE.slice(2)}${'0'.repeat(24)}`)).toBe(false); // right-padded
   });
 
   it('MockPyth update matches createPriceFeedUpdateData', () => {
@@ -149,5 +163,24 @@ describe('deployments', () => {
     expect(getHubDeployment('devnet-hub')?.contracts.vaultManager).toMatch(/^0x/);
     expect(isDeployed('mezo-testnet')).toBe(false);
     expect(getHubDeployment('mezo-testnet')).toBeNull();
+  });
+});
+
+describe('log chunking', () => {
+  it('splits inclusive ranges under the RPC cap', () => {
+    expect(blockRanges(0n, 9_999n, 5_000n)).toEqual([
+      { fromBlock: 0n, toBlock: 4_999n },
+      { fromBlock: 5_000n, toBlock: 9_999n },
+    ]);
+    expect(blockRanges(10n, 10n, 5_000n)).toEqual([{ fromBlock: 10n, toBlock: 10n }]);
+    expect(blockRanges(10n, 9n)).toEqual([]);
+    for (const r of blockRanges(1n, 123_456n)) expect(r.toBlock - r.fromBlock).toBeLessThan(10_000n);
+  });
+
+  it('concatenates chunk results and propagates failures', async () => {
+    const seen: bigint[] = [];
+    const logs = await getLogsChunked(0n, 12_000n, async (r) => (seen.push(r.fromBlock), [r.fromBlock]), 5_000n);
+    expect(logs).toEqual([0n, 5_000n, 10_000n]);
+    await expect(getLogsChunked(0n, 12_000n, async (r) => (r.fromBlock > 0n ? Promise.reject(new Error('rpc')) : []), 5_000n)).rejects.toThrow('rpc');
   });
 });

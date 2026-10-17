@@ -7,3 +7,4 @@ export * from './pyth';
 export * from './wormhole';
 export * from './reader';
 export * from './valuation';
+export * from './logs';
