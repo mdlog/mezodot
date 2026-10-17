@@ -56,6 +56,16 @@ contract OracleRouterTest is Test {
         assertEq(publishTime, block.timestamp - 121);
     }
 
+    /// A configured feed that was never pushed on-chain (common on Mezo for pull feeds) must not
+    /// break views: getPriceUnsafe returns zero; the strict getPrice still reverts.
+    function test_neverUpdatedFeedIsZeroInViews() public {
+        (uint256 price, uint256 publishTime) = oracle.getPriceUnsafe(ETH);
+        assertEq(price, 0);
+        assertEq(publishTime, 0);
+        vm.expectRevert(PythErrors.PriceFeedNotFound.selector);
+        oracle.getPrice(ETH);
+    }
+
     function test_lowConfidenceReverts() public {
         // conf 3% of price > 2% limit
         _update(ETH_ID, 100_00000000, 3_00000000, -8, uint64(block.timestamp));

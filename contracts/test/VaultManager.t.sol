@@ -246,6 +246,16 @@ contract VaultManagerTest is HubFixture {
         vaultManager.addCollateral(_remote(BASE_SEPOLIA, SPOKE_WETH, 18, ETH_KEY, 7500, 8000, 700));
     }
 
+    function test_snapshotSurvivesFeedNeverPushed() public {
+        bytes32 newKey = keccak256("NEW");
+        oracle.setFeed(newKey, bytes32(uint256(0x9999)));
+        vaultManager.addCollateral(_remote(ETH_SEPOLIA, SPOKE_WETH, 18, newKey, 7500, 8000, 700));
+        vaultManager.creditRemote(alice, vaultManager.collateralCount() - 1, 1e18);
+        postLocal(alice, pMUSD, pMusdCollateral, 1_000e18);
+        VaultManager.RiskSnapshot memory s = vaultManager.getRiskSnapshot(alice);
+        assertEq(s.collateralValue, 1_000e18); // unpriced collateral counts as zero in views
+    }
+
     function test_snapshotNoDebtHasMaxHealth() public {
         postLocal(alice, pMUSD, pMusdCollateral, 1e18);
         assertEq(vaultManager.getRiskSnapshot(alice).healthFactor, type(uint256).max);

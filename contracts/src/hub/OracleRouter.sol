@@ -64,10 +64,15 @@ contract OracleRouter is Ownable2Step {
     }
 
     /// @notice Last known price with its publish time, without freshness checks.
+    /// @dev Never reverts for a configured key: a feed that was never pushed on-chain (common for
+    ///      pull feeds on Mezo) returns (0, 0) so views stay usable; risk checks use `getPrice`.
     function getPriceUnsafe(bytes32 key) external view returns (uint256 priceWad, uint256 publishTime) {
-        PythStructs.Price memory p = pyth.getPriceUnsafe(_id(key));
-        if (p.price <= 0) return (0, p.publishTime);
-        return (_toWad(p.price, p.expo), p.publishTime);
+        try pyth.getPriceUnsafe(_id(key)) returns (PythStructs.Price memory p) {
+            if (p.price <= 0) return (0, p.publishTime);
+            return (_toWad(p.price, p.expo), p.publishTime);
+        } catch {
+            return (0, 0);
+        }
     }
 
     function _id(bytes32 key) internal view returns (bytes32 id) {
