@@ -1,0 +1,7 @@
+{
+  "network": "eth-sepolia",
+  "role": "spoke",
+  "chainId": 11155111,
+  "wormholeChainId": 10002,
+  "contracts": null
+}

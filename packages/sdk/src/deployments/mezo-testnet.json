@@ -1,0 +1,7 @@
+{
+  "network": "mezo-testnet",
+  "role": "hub",
+  "chainId": 31611,
+  "wormholeChainId": 50,
+  "contracts": null
+}
