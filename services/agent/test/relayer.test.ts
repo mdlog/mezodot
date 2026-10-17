@@ -68,7 +68,20 @@ describe('relayer retry policy (final review M1)', () => {
       throw new Error('transient');
     };
     relayer.store.update((s) => {
-      s.messages['a'] = { id: 'a', direction: 'deposit', source: 'devnet-spoke', target: 'devnet-hub', emitterChain: 10004, emitter: '0x0000000000000000000000000000000000000001', sequence: 1n, txHash: '0x01', blockNumber: 1n, status: 'waiting_vaa', attempts: 0, observedAt: 0 };
+      s.messages['a'] = {
+        id: 'a',
+        direction: 'deposit',
+        source: 'devnet-spoke',
+        target: 'devnet-hub',
+        emitterChain: 10004,
+        emitter: '0x0000000000000000000000000000000000000001',
+        sequence: 1n,
+        txHash: '0x01',
+        blockNumber: 1n,
+        status: 'waiting_vaa',
+        attempts: 0,
+        observedAt: 0,
+      };
     });
 
     for (let i = 0; i < 20; i++) {

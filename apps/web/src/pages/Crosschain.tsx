@@ -2,14 +2,15 @@ import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowDownLeft, ArrowRight, BadgeCheck, Check, Shield, Waves, X } from 'lucide-react';
 import { useAccount, usePublicClient } from 'wagmi';
-import { parseEventLogs, parseUnits, type PublicClient } from 'viem';
-import { spokeGatewayAbi, wormholeAdapterAbi } from '@mezodot/sdk';
+import { parseEventLogs, type PublicClient } from 'viem';
+import { maxWithdrawableUnits, spokeGatewayAbi, wormholeAdapterAbi } from '@mezodot/sdk';
 import { AmountInput, ConnectGate, InfoBar, NotDeployed, PageTitle, PanelTitle, Spinner, SummaryStrip, TxLink } from '../components/ui';
 import { HUB, HUB_DEPLOYED, SPOKES, spokeByWormholeChain, type SpokeInfo } from '../chain/env';
 import { relayHubSteps, relaySpokeSteps, spokeDepositSteps, withdrawRemoteSteps } from '../chain/actions';
 import { useTx } from '../chain/tx';
 import { useFlightStatus } from '../data/flights';
 import { useHubClient, usePrices, useValuedPosition, useWalletBalances } from '../data/hooks';
+import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { fmt, money, timeAgo, units } from '../lib/format';
 import { useUi, type Flight } from '../state/UiContext';
 
@@ -78,13 +79,8 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
     );
   }
   const balance = balances?.spokes[spoke.name]?.[asset] ?? 0n;
-  let parsed: bigint | null = null;
-  try {
-    parsed = amount ? parseUnits(amount, DECIMALS[asset]) : null;
-  } catch {
-    parsed = null;
-  }
-  const invalid = !parsed || parsed <= 0n || parsed > balance;
+  const parsed = parseInput(amount, DECIMALS[asset]);
+  const invalid = parsed === null || parsed > balance;
   const usd = parsed ? units(parsed, DECIMALS[asset]) * (prices?.[PRICE_SYMBOL[asset]] ?? 0) : 0;
 
   const deposit = async () => {
@@ -153,7 +149,7 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
             {spoke.label} balance · {fmt(units(balance, DECIMALS[asset]), 4)} {asset}
           </span>
         </label>
-        <AmountInput id="bridge-amount" value={amount} onChange={setAmount} unit={asset} onMax={() => setAmount(units(balance, DECIMALS[asset]).toString())} />
+        <AmountInput id="bridge-amount" value={amount} onChange={setAmount} unit={asset} onMax={() => setAmount(toInput(balance, DECIMALS[asset]))} />
         <div className="amount-estimate">
           Value <b>{money(usd, 2)}</b>
         </div>
@@ -261,13 +257,18 @@ function WithdrawRemotePanel() {
   const row = remote.find((r) => r.collateral.id === selected) ?? remote[0];
 
   if (!protocol) return null;
-  let parsed: bigint | null = null;
-  try {
-    parsed = row && amount ? parseUnits(amount, row.collateral.decimals) : null;
-  } catch {
-    parsed = null;
-  }
-  const invalid = !row || !parsed || parsed <= 0n || parsed > row.balance;
+  // Spoke collateral that backs debt can only partly leave; with no debt all of it can.
+  const maxOut =
+    !row || !valued
+      ? 0n
+      : valued.debtUsd <= 0
+        ? row.balance
+        : (() => {
+            const byHealth = floorUnits(maxWithdrawableUnits(valued, row.collateral.id), row.collateral.decimals);
+            return byHealth < row.balance ? byHealth : row.balance;
+          })();
+  const parsed = row ? parseInput(amount, row.collateral.decimals) : null;
+  const invalid = !row || parsed === null || parsed > maxOut;
 
   const withdraw = async () => {
     if (!address || !hub || !row || !parsed) return;
@@ -319,12 +320,14 @@ function WithdrawRemotePanel() {
             value={amount}
             onChange={setAmount}
             unit={row?.collateral.symbol ?? ''}
-            onMax={() => row && setAmount(units(row.balance, row.collateral.decimals).toString())}
+            onMax={() => row && setAmount(toInput(maxOut, row.collateral.decimals))}
           />
           <button className="button button--light button--wide" onClick={withdraw} disabled={invalid || Boolean(busy)}>
             {busy ?? 'Release on spoke'}
           </button>
-          <p className="muted-note">Rejected if it would push your debt over the borrow limit.</p>
+          <p className="muted-note">
+            Up to {row ? fmt(units(maxOut, row.collateral.decimals), 6) : '0'} {row?.collateral.symbol} can leave while your debt stays within the borrow limit.
+          </p>
         </>
       )}
     </section>

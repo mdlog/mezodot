@@ -1,12 +1,12 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { ArrowRight, Coins, Shield } from 'lucide-react';
 import { useAccount } from 'wagmi';
-import { parseUnits } from 'viem';
-import { healthStatus, perSecondToAnnual, symbolForPriceKey, type CollateralState, type MarketState } from '@mezodot/sdk';
+import { healthStatus, maxWithdrawableUnits, perSecondToAnnual, symbolForPriceKey, type CollateralState, type MarketState } from '@mezodot/sdk';
 import { HUB } from '../chain/env';
 import { borrowSteps, postCollateralSteps, repaySteps, supplySteps, withdrawCollateralSteps, withdrawSteps } from '../chain/actions';
 import { useTx } from '../chain/tx';
 import { useHubClient, useValuedPosition, useWalletBalances } from '../data/hooks';
+import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { fmt, fmtApy, fmtHealth, money, units } from '../lib/format';
 import { useUi, type AmountModal } from '../state/UiContext';
 import { Modal } from './Modal';
@@ -59,32 +59,35 @@ function ActionBody({ modal }: { modal: AmountModal }) {
     const walletShares = balances?.hub.tokens[market.receiptSymbol] ?? 0n;
     const debt = position?.debts.find((x) => x.marketId === market.id)?.amount ?? 0n;
     const postedShares = collateral ? (position?.collateral.find((c) => c.id === collateral.id)?.balance ?? 0n) : 0n;
-    const availableUsd = valued?.availableUsd ?? 0;
-    const borrowMax =
-      price > 0 ? parseUnits(Math.max(0, (availableUsd / price) * 0.999).toFixed(market.decimals > 6 ? 6 : market.decimals), market.decimals) : 0n;
+    const min = (a: bigint, b: bigint) => (a < b ? a : b);
+    const walletShareAssets = assetsFor(market, walletShares);
+    // Redeeming every share only works if the pool can pay them all; otherwise MAX is the pool's cash.
+    const canRedeemAll = walletShares > 0n && walletShareAssets <= market.cash;
+    // Removing collateral is limited by the debt it backs; with no debt all of it can go.
+    const debtFree = !valued || valued.debtUsd <= 0;
+    const unpostAll = debtFree;
+    const unpostMax = unpostAll
+      ? assetsFor(market, postedShares)
+      : floorUnits(collateral && valued ? maxWithdrawableUnits(valued, collateral.id) : 0, market.decimals);
+    const borrowMax = floorUnits(price > 0 ? ((valued?.availableUsd ?? 0) / price) * 0.999 : 0, market.decimals);
 
-    // Max per action, in underlying units.
+    // Max per action, in underlying base units (always exact bigints; never round-tripped through floats).
     const max: Record<AmountModal['type'], bigint> = {
       supply: walletAsset,
-      withdraw: assetsFor(market, walletShares) < market.cash ? assetsFor(market, walletShares) : market.cash,
-      borrow: borrowMax < market.cash ? borrowMax : market.cash,
-      repay: debt < walletAsset ? debt : walletAsset,
-      post: assetsFor(market, walletShares),
-      unpost: assetsFor(market, postedShares),
+      withdraw: canRedeemAll ? walletShareAssets : min(walletShareAssets, market.cash),
+      borrow: min(borrowMax, market.cash),
+      repay: min(debt, walletAsset),
+      post: walletShareAssets,
+      unpost: min(unpostMax, assetsFor(market, postedShares)),
     };
-    return { price, walletAsset, walletShares, debt, postedShares, max: max[modal.type] };
+    return { price, walletAsset, walletShares, debt, postedShares, canRedeemAll, unpostAll, max: max[modal.type] };
   }, [market, protocol, prices, balances, position, collateral, valued, modal.type]);
 
   if (!protocol || !market || !info) return <p className="muted-note">Loading on-chain data…</p>;
 
-  let parsed: bigint | null = null;
-  try {
-    parsed = amount.trim() === '' ? null : parseUnits(amount, market.decimals);
-  } catch {
-    parsed = null;
-  }
+  const parsed = parseInput(amount, market.decimals);
   const value = parsed ?? 0n;
-  const invalid = parsed === null || parsed <= 0n || parsed > info.max;
+  const invalid = parsed === null || parsed > info.max;
   const usd = units(value, market.decimals) * info.price;
 
   // Health factor preview with fresh prices.
@@ -108,7 +111,7 @@ function ActionBody({ modal }: { modal: AmountModal }) {
         case 'supply':
           return supplySteps(ctx, market, value);
         case 'withdraw':
-          return withdrawSteps(ctx, market, value, useMax ? { shares: info.walletShares } : null);
+          return withdrawSteps(ctx, market, value, useMax && info.canRedeemAll ? { shares: info.walletShares } : null);
         case 'borrow':
           return borrowSteps(ctx, market, value);
         case 'repay':
@@ -116,7 +119,7 @@ function ActionBody({ modal }: { modal: AmountModal }) {
         case 'post':
           return postCollateralSteps(ctx, collateral!, useMax ? info.walletShares : sharesFor(market, value));
         case 'unpost':
-          return withdrawCollateralSteps(ctx, collateral!, useMax ? info.postedShares : sharesFor(market, value));
+          return withdrawCollateralSteps(ctx, collateral!, useMax && info.unpostAll ? info.postedShares : sharesFor(market, value));
       }
     })();
     const result = await run(`${TITLES[modal.type]} ${market.symbol}`, steps);
@@ -164,7 +167,7 @@ function ActionBody({ modal }: { modal: AmountModal }) {
         }}
         unit={market.symbol}
         onMax={() => {
-          setAmount(units(info.max, market.decimals).toString());
+          setAmount(toInput(info.max, market.decimals));
           setUseMax(true);
         }}
       />

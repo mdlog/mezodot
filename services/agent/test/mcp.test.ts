@@ -113,7 +113,12 @@ describe('MCP over HTTP is not reachable from arbitrary web pages (final review 
   async function serve(env: Record<string, string>) {
     const { startHttp } = await import('../src/http');
     const ctx = createContext(loadConfig({ MEZODOT_ENV: 'devnet', STATE_DIR: '/tmp/mezodot-test-state', HTTP_PORT: '0', ...env }));
-    const services = { ctx, relayer: { messages: () => [], pending: () => [] }, liquidator: { lastEvaluations: [], lastRun: null }, risk: { report: () => null, lastError: () => null } } as unknown as Services;
+    const services = {
+      ctx,
+      relayer: { messages: () => [], pending: () => [] },
+      liquidator: { lastEvaluations: [], lastRun: null },
+      risk: { report: () => null, lastError: () => null },
+    } as unknown as Services;
     const server = startHttp(services, '127.0.0.1');
     await new Promise<void>((r) => server.once('listening', () => r()));
     const port = (server.address() as { port: number }).port;
@@ -151,8 +156,15 @@ describe('MCP over HTTP is not reachable from arbitrary web pages (final review 
     const { server, base } = await serve({ MCP_TOKEN: 'a-long-random-test-token-123' });
     try {
       expect((await fetch(`${base}/mcp`, { method: 'POST', headers: mcpHeaders, body: listTools })).status).toBe(401);
-      expect((await fetch(`${base}/mcp`, { method: 'POST', headers: { ...mcpHeaders, authorization: 'Bearer wrong-token-of-same-size-12' }, body: listTools })).status).toBe(401);
-      const ok = await fetch(`${base}/mcp`, { method: 'POST', headers: { ...mcpHeaders, authorization: 'Bearer a-long-random-test-token-123' }, body: listTools });
+      expect(
+        (await fetch(`${base}/mcp`, { method: 'POST', headers: { ...mcpHeaders, authorization: 'Bearer wrong-token-of-same-size-12' }, body: listTools }))
+          .status,
+      ).toBe(401);
+      const ok = await fetch(`${base}/mcp`, {
+        method: 'POST',
+        headers: { ...mcpHeaders, authorization: 'Bearer a-long-random-test-token-123' },
+        body: listTools,
+      });
       expect(ok.status).toBe(200);
     } finally {
       server.close();
@@ -166,4 +178,3 @@ describe('MCP over HTTP is not reachable from arbitrary web pages (final review 
     expect(mcpWriteAllowed(loadConfig({ MEZODOT_ENV: 'devnet', MCP_TOKEN: 'a-long-random-test-token-123' }))).toBe(false);
   });
 });
-

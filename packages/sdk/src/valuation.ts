@@ -72,3 +72,18 @@ export function pricesBySymbol(feeds: Record<PriceSymbol, `0x${string}`>, byId: 
   }
   return out;
 }
+
+/**
+ * Units of collateral `collateralId` that can be withdrawn while keeping Σ value × LTV ≥ debt
+ * (VaultManager's rule), with a 0.1% safety margin for price movement before inclusion.
+ * Collateral without a usable price adds nothing to the limit and can always leave in full.
+ */
+export function maxWithdrawableUnits(valued: Pick<ValuedPosition, 'collateral' | 'debtUsd' | 'borrowLimitUsd'>, collateralId: number): number {
+  const row = valued.collateral.find((c) => c.collateral.id === collateralId);
+  if (!row || row.balance === 0n) return 0;
+  if (valued.debtUsd <= 0 || row.price <= 0 || row.collateral.ltvBps === 0) return row.units;
+  const headroomUsd = valued.borrowLimitUsd - valued.debtUsd;
+  if (headroomUsd <= 0) return 0;
+  const units = (headroomUsd / (row.price * (row.collateral.ltvBps / 10_000))) * 0.999;
+  return Math.min(row.units, units);
+}

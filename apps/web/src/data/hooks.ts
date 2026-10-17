@@ -15,6 +15,7 @@ import {
   type UsdPrices,
 } from '@mezodot/sdk';
 import { AGENT_URL, HUB, SPOKES } from '../chain/env';
+import { scanIncremental } from './incremental';
 
 /** Query keys shared with the transaction runner, which invalidates them after each write. */
 export const QK = {
@@ -131,12 +132,10 @@ export function useLoopStats() {
     enabled: Boolean(client && HUB.deployment),
     refetchInterval: 30_000,
     queryFn: async () => {
-      const logs = await client!.getContractEvents({
-        address: HUB.deployment!.contracts.leverageManager,
-        abi: leverageManagerAbi,
-        eventName: 'Looped',
-        fromBlock: BigInt(HUB.deployment!.startBlock),
-      });
+      const latest = await client!.getBlockNumber();
+      const logs = await scanIncremental('loops', BigInt(HUB.deployment!.startBlock), latest, (range) =>
+        client!.getContractEvents({ address: HUB.deployment!.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Looped', ...range }),
+      );
       const volume = logs.reduce((s, l) => s + (l.args.principal! * l.args.leverage!) / 10n ** 18n, 0n);
       return { loops: logs.length, volume };
     },

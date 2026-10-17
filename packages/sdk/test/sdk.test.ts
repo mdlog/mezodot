@@ -184,3 +184,44 @@ describe('log chunking', () => {
     await expect(getLogsChunked(0n, 12_000n, async (r) => (r.fromBlock > 0n ? Promise.reject(new Error('rpc')) : []), 5_000n)).rejects.toThrow('rpc');
   });
 });
+
+describe('maxWithdrawableUnits (final review I6)', () => {
+  const pos = (debtUsd: number, rows: { id: number; units: number; price: number; ltvBps: number; ltBps: number }[]) => {
+    const collateral = rows.map((r) => ({
+      collateral: { id: r.id, ltvBps: r.ltvBps, ltBps: r.ltBps },
+      balance: 1n,
+      units: r.units,
+      price: r.price,
+      valueUsd: r.units * r.price,
+    }));
+    const limit = collateral.reduce((s, c) => s + (c.valueUsd * c.collateral.ltvBps) / 10_000, 0);
+    return { collateral, debtUsd, borrowLimitUsd: limit } as never;
+  };
+
+  it('returns the whole balance when there is no debt', async () => {
+    const { maxWithdrawableUnits } = await import('../src');
+    expect(maxWithdrawableUnits(pos(0, [{ id: 2, units: 1.5, price: 3_200, ltvBps: 7_500, ltBps: 8_000 }]), 2)).toBe(1.5);
+  });
+
+  it('keeps the remaining limit at or above debt', async () => {
+    const { maxWithdrawableUnits } = await import('../src');
+    // 1 WETH ($3,200 × 75% = $2,400 limit), $1,200 debt → may remove (2,400 − 1,200) / (3,200 × 0.75) = 0.5 WETH
+    const x = maxWithdrawableUnits(pos(1_200, [{ id: 2, units: 1, price: 3_200, ltvBps: 7_500, ltBps: 8_000 }]), 2);
+    expect(x).toBeLessThanOrEqual(0.5);
+    expect(x).toBeGreaterThan(0.499);
+    expect(maxWithdrawableUnits(pos(2_400, [{ id: 2, units: 1, price: 3_200, ltvBps: 7_500, ltBps: 8_000 }]), 2)).toBe(0);
+  });
+
+  it('allows removing unpriced collateral entirely (it adds nothing to the limit)', async () => {
+    const { maxWithdrawableUnits } = await import('../src');
+    expect(
+      maxWithdrawableUnits(
+        pos(100, [
+          { id: 0, units: 10, price: 1, ltvBps: 8_000, ltBps: 8_500 },
+          { id: 1, units: 5, price: 0, ltvBps: 5_000, ltBps: 6_000 },
+        ]),
+        1,
+      ),
+    ).toBe(5);
+  });
+});

@@ -26,7 +26,10 @@ const networkOf = (item: ActivityItem) => (item.network === HUB.name ? HUB : SPO
 export function Activity() {
   const { isConnected } = useAccount();
   const { showToast } = useUi();
-  const { data = [], isLoading } = useActivity();
+  const query = useActivity();
+  const data = useMemo(() => query.data?.items ?? [], [query.data]);
+  const spokeErrors = query.data?.spokeErrors ?? [];
+  const { isLoading } = query;
   const [filter, setFilter] = useState<(typeof KINDS)[number]>('All activity');
   const filtered = useMemo(() => data.filter((i) => filter === 'All activity' || i.kind === filter), [data, filter]);
 
@@ -119,7 +122,16 @@ export function Activity() {
               </tbody>
             </table>
           </div>
-          {!isLoading && filtered.length === 0 && (
+          {query.isError && (
+            <div className="inline-error" role="alert">
+              Could not read your history from {HUB.label}: {query.error instanceof Error ? query.error.message.split('\n')[0] : 'RPC error'}.{' '}
+              <button className="text-link" onClick={() => void query.refetch()}>
+                Retry
+              </button>
+            </div>
+          )}
+          {spokeErrors.length > 0 && <p className="muted-note">Spoke history unavailable: {spokeErrors.join('; ')}. Hub records above are complete.</p>}
+          {!isLoading && !query.isError && filtered.length === 0 && (
             <div className="empty-state">
               <ActivityIcon size={23} />
               <b>No events{filter === 'All activity' ? ' yet' : ' in this filter'}</b>

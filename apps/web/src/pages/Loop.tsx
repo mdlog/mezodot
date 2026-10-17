@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { ArrowRight, Check, Shield, Sparkles, TriangleAlert, Undo2, Zap } from 'lucide-react';
 import { useAccount } from 'wagmi';
-import { parseUnits } from 'viem';
 import { healthStatus, perSecondToAnnual, planLoop } from '@mezodot/sdk';
 import { AmountInput, ConnectGate, NotDeployed, PageTitle, PanelTitle, SummaryStrip } from '../components/ui';
 import { HUB_DEPLOYED } from '../chain/env';
 import { loopSteps, unwindSteps } from '../chain/actions';
 import { useTx } from '../chain/tx';
 import { useHubClient, useValuedPosition, useWalletBalances } from '../data/hooks';
+import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { fmt, fmtApy, fmtHealth, money, pct, units } from '../lib/format';
 
 const LEVERAGE_OPTIONS = [1.5, 2, 2.5, 3, 3.5, 4];
@@ -16,7 +16,7 @@ export function Loop() {
   const { address, isConnected } = useAccount();
   const hub = useHubClient();
   const { run, busy } = useTx();
-  const { valued, protocol, position } = useValuedPosition();
+  const { valued, protocol, position, prices } = useValuedPosition();
   const balances = useWalletBalances().data;
   const [amount, setAmount] = useState('1000');
   const [leverage, setLeverage] = useState(3);
@@ -29,7 +29,8 @@ export function Loop() {
   const plan = planLoop(Number(amount) || 0, leverage, { ltvBps: collateral?.ltvBps ?? 8000, ltBps: collateral?.ltBps ?? 8500, supplyApy, borrowApy });
   const wallet = balances?.hub.tokens.MUSD ?? 0n;
   const liquidity = musd ? units(musd.cash, musd.decimals) : 0;
-  const overBalance = musd ? (Number(amount) || 0) > units(wallet, musd.decimals) : false;
+  const principalWei = musd ? parseInput(amount, musd.decimals) : null;
+  const overBalance = principalWei !== null && principalWei > wallet;
   const overLiquidity = plan.flashAmount > liquidity;
 
   const loopCollateral = valued?.collateral.find((c) => c.collateral.symbol === 'pMUSD');
@@ -38,16 +39,17 @@ export function Loop() {
   const equity = (loopCollateral?.valueUsd ?? 0) - (loopDebt?.valueUsd ?? 0);
 
   const open = async () => {
-    if (!address || !hub || !musd || plan.error) return;
-    const principal = parseUnits(amount, musd.decimals);
+    if (!address || !hub || !musd || plan.error || principalWei === null) return;
+    const principal = principalWei;
     const result = await run(`${leverage}× loop`, loopSteps({ account: address, hub }, musd, principal, leverage, position?.isLeverageOperator ?? false));
     if (result.ok) setLastLoop(result.receipts[result.receipts.length - 1].transactionHash);
   };
 
   const unwind = async () => {
     if (!address || !hub) return;
-    // Accept up to 2% below the fresh-price equity estimate (fees + interest).
-    const minOut = parseUnits(Math.max(0, equity * 0.98).toFixed(6), 18);
+    // Equity is in USD; the contract pays out MUSD. Accept up to 2% below the estimate (fees + interest).
+    const musdPrice = prices?.MUSD ?? 1;
+    const minOut = floorUnits((Math.max(0, equity) / musdPrice) * 0.98, musd?.decimals ?? 18);
     await run('Unwind loop', unwindSteps({ account: address, hub }, minOut));
   };
 
@@ -94,7 +96,7 @@ export function Loop() {
               value={amount}
               onChange={setAmount}
               unit="MUSD"
-              onMax={() => musd && setAmount(units(wallet, musd.decimals).toFixed(2))}
+              onMax={() => musd && setAmount(toInput(wallet, musd.decimals))}
             />
           </div>
           <div className="form-section">
@@ -124,7 +126,11 @@ export function Loop() {
             </div>
           </div>
           <ConnectGate connected={isConnected}>
-            <button className="button button--dark button--wide" onClick={open} disabled={Boolean(plan.error) || overBalance || overLiquidity || Boolean(busy)}>
+            <button
+              className="button button--dark button--wide"
+              onClick={open}
+              disabled={Boolean(plan.error) || principalWei === null || overBalance || overLiquidity || Boolean(busy)}
+            >
               {busy ?? (
                 <>
                   <Zap size={15} /> Open {leverage}× loop <ArrowRight size={15} />

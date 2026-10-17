@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { useAccount } from 'wagmi';
 import type { Address, Hex, PublicClient } from 'viem';
-import { leverageManagerAbi, pTokenAbi, spokeGatewayAbi, vaultManagerAbi, type NetworkName, type ProtocolState } from '@mezodot/sdk';
+import { leverageManagerAbi, pTokenAbi, spokeGatewayAbi, vaultManagerAbi, type BlockRange, type NetworkName, type ProtocolState } from '@mezodot/sdk';
 import { HUB, SPOKES } from '../chain/env';
 import { QK, useHubClient, useProtocol, useSpokeClients } from './hooks';
+import { scanIncremental } from './incremental';
 
 export type ActivityKind =
   'Supply' | 'Withdraw' | 'Collateral in' | 'Collateral out' | 'Cross-chain' | 'Release' | 'Borrow' | 'Repay' | 'Loop' | 'Unwind' | 'Liquidation';
@@ -33,9 +34,8 @@ async function withTimestamps(client: PublicClient, network: NetworkName, items:
   for (const i of items) if (i.network === network) i.timestamp = timestamps.get(`${network}:${i.blockNumber}`) ?? null;
 }
 
-async function hubActivity(client: PublicClient, protocol: ProtocolState, account: Address): Promise<ActivityItem[]> {
+async function hubActivity(client: PublicClient, protocol: ProtocolState, account: Address, range: BlockRange): Promise<ActivityItem[]> {
   const dep = HUB.deployment!;
-  const fromBlock = BigInt(dep.startBlock);
   const vm = dep.contracts.vaultManager;
   const items: ActivityItem[] = [];
   const push = (i: Omit<ActivityItem, 'id' | 'network' | 'timestamp'> & { logIndex: number }) =>
@@ -47,26 +47,26 @@ async function hubActivity(client: PublicClient, protocol: ProtocolState, accoun
     Promise.all(
       protocol.markets.map((m) =>
         client
-          .getContractEvents({ address: m.pool, abi: pTokenAbi, eventName: 'Deposit', args: { owner: account }, fromBlock })
+          .getContractEvents({ address: m.pool, abi: pTokenAbi, eventName: 'Deposit', args: { owner: account }, ...range })
           .then((l) => l.map((x) => ({ x, m }))),
       ),
     ),
     Promise.all(
       protocol.markets.map((m) =>
         client
-          .getContractEvents({ address: m.pool, abi: pTokenAbi, eventName: 'Withdraw', args: { owner: account }, fromBlock })
+          .getContractEvents({ address: m.pool, abi: pTokenAbi, eventName: 'Withdraw', args: { owner: account }, ...range })
           .then((l) => l.map((x) => ({ x, m }))),
       ),
     ),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'CollateralDeposited', args: { account }, fromBlock }),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'CollateralWithdrawn', args: { account }, fromBlock }),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'RemoteCredited', args: { account }, fromBlock }),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'RemoteWithdrawRequested', args: { account }, fromBlock }),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Borrowed', args: { account }, fromBlock }),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Repaid', args: { account }, fromBlock }),
-    client.getContractEvents({ address: dep.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Looped', args: { account }, fromBlock }),
-    client.getContractEvents({ address: dep.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Unwound', args: { account }, fromBlock }),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Liquidated', args: { account }, fromBlock }),
+    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'CollateralDeposited', args: { account }, ...range }),
+    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'CollateralWithdrawn', args: { account }, ...range }),
+    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'RemoteCredited', args: { account }, ...range }),
+    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'RemoteWithdrawRequested', args: { account }, ...range }),
+    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Borrowed', args: { account }, ...range }),
+    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Repaid', args: { account }, ...range }),
+    client.getContractEvents({ address: dep.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Looped', args: { account }, ...range }),
+    client.getContractEvents({ address: dep.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Unwound', args: { account }, ...range }),
+    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Liquidated', args: { account }, ...range }),
   ]);
 
   for (const { x, m } of poolDeposits.flat())
@@ -191,18 +191,17 @@ async function hubActivity(client: PublicClient, protocol: ProtocolState, accoun
       logIndex: x.logIndex,
     });
 
-  await withTimestamps(client, HUB.name, items);
   return items;
 }
 
-async function spokeActivity(client: PublicClient, spoke: (typeof SPOKES)[number], account: Address): Promise<ActivityItem[]> {
+async function spokeActivity(client: PublicClient, spoke: (typeof SPOKES)[number], account: Address, range: BlockRange): Promise<ActivityItem[]> {
   if (!spoke.deployment) return [];
   const logs = await client.getContractEvents({
     address: spoke.deployment.contracts.spokeGateway,
     abi: spokeGatewayAbi,
     eventName: 'Deposited',
     args: { account },
-    fromBlock: BigInt(spoke.deployment.startBlock),
+    ...range,
   });
   const items: ActivityItem[] = logs.map((x) => {
     const symbol = x.args.token!.toLowerCase() === spoke.deployment!.tokens.WETH.toLowerCase() ? 'WETH' : 'USDC';
@@ -219,9 +218,13 @@ async function spokeActivity(client: PublicClient, spoke: (typeof SPOKES)[number
       timestamp: null,
     };
   });
-  await withTimestamps(client, spoke.name, items);
   return items;
 }
+
+/** Spoke history is scanned for this many recent blocks (~2 days on Base); hub history is complete. */
+export const SPOKE_HISTORY_BLOCKS = 100_000n;
+
+export type ActivityResult = { items: ActivityItem[]; spokeErrors: string[] };
 
 export function useActivity() {
   const { address } = useAccount();
@@ -232,12 +235,35 @@ export function useActivity() {
     queryKey: QK.activity(address),
     enabled: Boolean(address && hub && protocol.data),
     refetchInterval: 20_000,
-    queryFn: async () => {
-      const all = await Promise.all([
-        hubActivity(hub!, protocol.data!, address!),
-        ...SPOKES.map((s, i) => (spokeClients[i] ? spokeActivity(spokeClients[i]!, s, address!).catch(() => []) : Promise.resolve([]))),
-      ]);
-      return all.flat().sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+    queryFn: async (): Promise<ActivityResult> => {
+      const hubLatest = await hub!.getBlockNumber();
+      // Chunked + incremental: public RPCs cap eth_getLogs ranges (Mezo: 10,000 blocks).
+      const hubItems = await scanIncremental(`hub:${address}`, BigInt(HUB.deployment!.startBlock), hubLatest, (r) =>
+        hubActivity(hub!, protocol.data!, address!, r),
+      );
+      await withTimestamps(hub!, HUB.name, hubItems);
+      const spokeErrors: string[] = [];
+      const spokeItems = (
+        await Promise.all(
+          SPOKES.map(async (s, i) => {
+            const client = spokeClients[i];
+            if (!client || !s.deployment) return [];
+            try {
+              const latest = await client.getBlockNumber();
+              const floor = latest > SPOKE_HISTORY_BLOCKS ? latest - SPOKE_HISTORY_BLOCKS : 0n;
+              const start = BigInt(s.deployment.startBlock) > floor ? BigInt(s.deployment.startBlock) : floor;
+              const items = await scanIncremental(`spoke:${s.name}:${address}`, start, latest, (r) => spokeActivity(client, s, address!, r));
+              await withTimestamps(client, s.name, items);
+              return items;
+            } catch (err) {
+              spokeErrors.push(`${s.label}: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+              return [];
+            }
+          }),
+        )
+      ).flat();
+      const items = [...hubItems, ...spokeItems].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+      return { items, spokeErrors };
     },
   });
 }

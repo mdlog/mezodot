@@ -19,7 +19,8 @@ export function Dashboard() {
   const loops = useLoopStats().data;
   const stats = useAgent<Stats>('/stats').data;
   const { valued } = useValuedPosition();
-  const activity = useActivity().data ?? [];
+  const activityQuery = useActivity();
+  const activity = activityQuery.data?.items ?? [];
 
   const tvl = protocol && prices ? computeTvl(protocol, prices.prices) : null;
   const status = valued ? healthStatus(valued.healthFactor) : null;
@@ -300,7 +301,10 @@ export function Dashboard() {
               <span className="activity-row-time">{item.timestamp ? timeAgo(item.timestamp) : ''}</span>
             </div>
           ))}
-          {activity.length === 0 && <p className="muted-note">{isConnected ? 'No activity yet.' : 'Connect a wallet to see your activity.'}</p>}
+          {activityQuery.isError && <p className="inline-error">Could not read your on-chain history. It will retry automatically.</p>}
+          {activity.length === 0 && !activityQuery.isError && (
+            <p className="muted-note">{isConnected ? 'No activity yet.' : 'Connect a wallet to see your activity.'}</p>
+          )}
         </div>
       </section>
 

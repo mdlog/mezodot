@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { ArrowRight, ArrowUpRight, LockKeyhole, Network, Shield, ShieldAlert } from 'lucide-react';
 import { useAccount } from 'wagmi';
-import { parseUnits } from 'viem';
 import { healthStatus, perSecondToAnnual, symbolForPriceKey } from '@mezodot/sdk';
 import { AmountInput, ConnectGate, NotDeployed, PageTitle, PanelTitle, SummaryStrip } from '../components/ui';
 import { HUB_DEPLOYED, spokeByWormholeChain } from '../chain/env';
 import { borrowSteps } from '../chain/actions';
 import { useTx } from '../chain/tx';
 import { useHubClient, useValuedPosition } from '../data/hooks';
+import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { fmt, fmtApy, fmtHealth, money, pct, units } from '../lib/format';
 import { useUi } from '../state/UiContext';
 
@@ -27,16 +27,17 @@ export function Borrow() {
   const price = priceSymbol ? (prices?.[priceSymbol] ?? 0) : 0;
   const availableUnits = valued && price > 0 ? Math.max(0, valued.availableUsd / price) : 0;
   const liquidity = market ? units(market.cash, market.decimals) : 0;
-  const maxUnits = Math.min(availableUnits, liquidity) * 0.999;
+  // Exact bigint limit: fresh-price headroom (floored, 0.1% margin) capped by pool cash.
+  const maxBorrow = market
+    ? (() => {
+        const byLimit = floorUnits(availableUnits * 0.999, market.decimals);
+        return byLimit < market.cash ? byLimit : market.cash;
+      })()
+    : 0n;
 
-  let parsed: bigint | null = null;
-  try {
-    parsed = market && amount ? parseUnits(amount, market.decimals) : null;
-  } catch {
-    parsed = null;
-  }
+  const parsed = market ? parseInput(amount, market.decimals) : null;
   const value = parsed && market ? units(parsed, market.decimals) : 0;
-  const invalid = !parsed || value <= 0 || value > maxUnits;
+  const invalid = parsed === null || parsed > maxBorrow;
   const hfAfter = valued ? (valued.debtUsd + value * price > 0 ? valued.adjustedCollateralUsd / (valued.debtUsd + value * price) : Infinity) : Infinity;
   const status = healthStatus(valued?.healthFactor ?? Infinity);
   const debt = market ? (position?.debts.find((d) => d.marketId === market.id)?.amount ?? 0n) : 0n;
@@ -114,10 +115,17 @@ export function Borrow() {
           <label className="field-label" htmlFor="borrow-amount">
             BORROW AMOUNT{' '}
             <span>
-              Available ≈ {fmt(maxUnits, 2)} {market?.symbol}
+              Available ≈ {market ? fmt(units(maxBorrow, market.decimals), 2) : '0'} {market?.symbol}
             </span>
           </label>
-          <AmountInput id="borrow-amount" large value={amount} onChange={setAmount} unit={market?.symbol ?? ''} onMax={() => setAmount(maxUnits.toFixed(4))} />
+          <AmountInput
+            id="borrow-amount"
+            large
+            value={amount}
+            onChange={setAmount}
+            unit={market?.symbol ?? ''}
+            onMax={() => market && setAmount(toInput(maxBorrow, market.decimals))}
+          />
           <div className="borrow-preview">
             <div>
               <span>Borrow APY</span>

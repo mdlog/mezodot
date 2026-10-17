@@ -170,7 +170,12 @@ describe('liquidator against RPC limits and fees (final review I4 / M3 / M8)', (
     };
     const ctx = {
       config: { stateDir: mkdtempSync(join(tmpdir(), 'mezodot-liq-')), env: 'devnet' },
-      hub: { network: 'devnet-hub', client, wallet: null, deployment: { startBlock: 0, contracts: { vaultManager: '0x0000000000000000000000000000000000000001' } } },
+      hub: {
+        network: 'devnet-hub',
+        client,
+        wallet: null,
+        deployment: { startBlock: 0, contracts: { vaultManager: '0x0000000000000000000000000000000000000001' } },
+      },
       spokes: [],
       log: () => {},
     };
@@ -201,7 +206,14 @@ describe('liquidator against RPC limits and fees (final review I4 / M3 / M8)', (
         network: 'devnet-hub',
         client,
         wallet: { account: { address: '0x00000000000000000000000000000000000000ee' } },
-        deployment: { startBlock: 0, contracts: { keeperGateway: '0x0000000000000000000000000000000000000002', oracleRouter: '0x0000000000000000000000000000000000000003', wormholeAdapter: '0x0000000000000000000000000000000000000004' } },
+        deployment: {
+          startBlock: 0,
+          contracts: {
+            keeperGateway: '0x0000000000000000000000000000000000000002',
+            oracleRouter: '0x0000000000000000000000000000000000000003',
+            wormholeAdapter: '0x0000000000000000000000000000000000000004',
+          },
+        },
       },
       spokes: [],
       log: () => {},
