@@ -1,0 +1,11 @@
+**/node_modules
+contracts/lib
+contracts/out
+contracts/cache
+contracts/broadcast
+.devnet
+.superpowers
+**/dist
+**/.state
+**/.env
+.git

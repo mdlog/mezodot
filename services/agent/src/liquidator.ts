@@ -38,6 +38,10 @@ export type AccountEvaluation = {
   account: Address;
   healthFactor: number;
   collateralUsd: number;
+  /** Σ value × LTV at fresh prices. */
+  borrowLimitUsd: number;
+  /** Σ value × liquidation threshold at fresh prices. */
+  adjustedUsd: number;
   debtUsd: number;
   plan: LiquidationPlan | null;
 };
@@ -73,7 +77,14 @@ export function evaluateAccount(protocol: ProtocolState, position: PositionState
     collateralRows.filter((r) => r.balance > 0n).map((r) => ({ valueUsd: r.valueUsd, ltvBps: r.c.ltvBps, ltBps: r.c.ltBps })),
     debtRows.reduce((s, d) => s + d.valueUsd, 0),
   );
-  const base = { account: position.account, healthFactor: summary.healthFactor, collateralUsd: summary.collateralUsd, debtUsd: summary.debtUsd };
+  const base = {
+    account: position.account,
+    healthFactor: summary.healthFactor,
+    collateralUsd: summary.collateralUsd,
+    borrowLimitUsd: summary.borrowLimitUsd,
+    adjustedUsd: summary.adjustedCollateralUsd,
+    debtUsd: summary.debtUsd,
+  };
   if (!(summary.healthFactor < 1)) return { ...base, plan: null };
 
   const debt = debtRows.filter((d) => d.amount > 0n && d.price > 0).sort((a, b) => b.valueUsd - a.valueUsd)[0];

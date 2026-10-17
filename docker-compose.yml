@@ -1,0 +1,17 @@
+# Mezodot keeper agent: relayer + liquidator + risk engine + HTTP/MCP API.
+#   cp services/agent/.env.example services/agent/.env   # fill KEEPER_PRIVATE_KEY for write access
+#   docker compose up -d agent
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: services/agent/Dockerfile
+    env_file: services/agent/.env
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - agent-state:/data
+    restart: unless-stopped
+
+volumes:
+  agent-state:

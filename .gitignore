@@ -10,3 +10,4 @@ contracts/broadcast/*/31337/
 .devnet/
 services/agent/.state/
 .superpowers/
+services/agent/.env

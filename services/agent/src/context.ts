@@ -45,6 +45,6 @@ export function createContext(config: AgentConfig): Context {
     config,
     hub: { network: config.hub, deployment: hubDeployment, ...clientsFor(config.hub) },
     spokes,
-    log: (scope, message, extra) => console.log(JSON.stringify({ t: new Date().toISOString(), scope, message, ...extra })),
+    log: (scope, message, extra) => console.error(JSON.stringify({ t: new Date().toISOString(), scope, message, ...extra })),
   };
 }
