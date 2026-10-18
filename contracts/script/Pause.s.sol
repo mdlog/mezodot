@@ -21,7 +21,11 @@ contract Pause is Script {
         string memory json = vm.readFile(
             string.concat(vm.projectRoot(), "/../packages/sdk/src/deployments/", vm.envString("NETWORK"), ".json")
         );
-        bool pause = keccak256(bytes(vm.envOr("ACTION", string("pause")))) == keccak256("pause");
+        bytes32 action = keccak256(bytes(vm.envOr("ACTION", string("pause"))));
+        require(
+            action == keccak256("pause") || action == keccak256("unpause"), "Pause: ACTION must be pause or unpause"
+        );
+        bool pause = action == keccak256("pause");
         vm.startBroadcast();
         if (keccak256(bytes(vm.envString("MODE"))) == keccak256("hub")) {
             _set(vm.parseJsonAddress(json, ".contracts.vaultManager"), pause);

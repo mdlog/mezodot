@@ -11,9 +11,11 @@ import {Payload} from "../src/libraries/Payload.sol";
 ///   MODE=hub   (on Mezo):  registers the spoke emitter and its WETH/USDC as remote collateral.
 ///   MODE=spoke (on spoke): registers the hub adapter as the only trusted RELEASE emitter.
 /// Env: MODE, HUB_NETWORK, SPOKE_NETWORK (deployment JSON names), FORCE_REPOINT (default false).
-/// Re-runnable: an emitter already set to the same address is left alone, and a live link is only re-pointed
-/// with FORCE_REPOINT=1 (a stale JSON must not redirect a gateway); existing remote collateral is reconciled
-/// to the risk parameters below instead of being skipped.
+/// Re-runnable: an emitter already set to the same address is left alone. A live link is re-pointed only with
+/// FORCE_REPOINT=1, and only while it backs nothing (no hub credit for the spoke's tokens, nothing locked on the
+/// spoke): re-pointing a link that backs funds strands them or pays old withdrawals from new deposits.
+/// Existing remote collateral keeps its on-chain risk parameters; RECONCILE_PARAMS=1 resets them to the values
+/// below (they may have been tuned with setCollateralParams since the listing).
 contract ConfigureCrossChain is Script {
     function run() external {
         string memory mode = vm.envString("MODE");
@@ -27,6 +29,12 @@ contract ConfigureCrossChain is Script {
             uint16 spokeChain = uint16(vm.parseJsonUint(spokeJson, ".wormholeChainId"));
             VaultManager vaultManager = WormholeAdapter(adapter).vaultManager();
             if (_repoint(WormholeAdapter(adapter).spokeEmitter(spokeChain), Payload.toBytes32(gateway))) {
+                // Remote ids are keyed by (chain, token), so the old and new gateway would share this credit.
+                require(
+                    _remoteCredit(vaultManager, spokeChain, vm.parseJsonAddress(spokeJson, ".tokens.WETH")) == 0
+                        && _remoteCredit(vaultManager, spokeChain, vm.parseJsonAddress(spokeJson, ".tokens.USDC")) == 0,
+                    "ConfigureCrossChain: the hub still credits collateral from this spoke chain; wind it down first"
+                );
                 WormholeAdapter(adapter).setSpoke(spokeChain, Payload.toBytes32(gateway));
             }
             _addRemote(
@@ -43,6 +51,12 @@ contract ConfigureCrossChain is Script {
                 "ConfigureCrossChain: spoke hubChainId does not match the hub deployment"
             );
             if (_repoint(SpokeGateway(gateway).hubEmitter(), Payload.toBytes32(adapter))) {
+                // Tokens locked here are released only by the hub that credited them.
+                require(
+                    SpokeGateway(gateway).locked(vm.parseJsonAddress(spokeJson, ".tokens.WETH")) == 0
+                        && SpokeGateway(gateway).locked(vm.parseJsonAddress(spokeJson, ".tokens.USDC")) == 0,
+                    "ConfigureCrossChain: this spoke still holds locked collateral of its current hub"
+                );
                 SpokeGateway(gateway).setHubEmitter(Payload.toBytes32(adapter));
             }
             console2.log("spoke linked to hub adapter", adapter);
@@ -65,6 +79,10 @@ contract ConfigureCrossChain is Script {
         if (listed != 0) {
             VaultManager.CollateralConfig memory c = vaultManager.collaterals(listed - 1);
             if (c.ltvBps == ltv && c.ltBps == lt && c.bonusBps == bonus) return;
+            if (!vm.envOr("RECONCILE_PARAMS", false)) {
+                console2.log("collateral differs from the script's risk parameters, left as is:", listed - 1);
+                return;
+            }
             console2.log("reconciling risk parameters of collateral", listed - 1);
             vaultManager.setCollateralParams(listed - 1, ltv, lt, bonus, c.cap, c.enabled);
             return;
@@ -86,6 +104,12 @@ contract ConfigureCrossChain is Script {
                 cap: type(uint256).max
             })
         );
+    }
+
+    /// Collateral the hub credits for (chain, token); 0 when it is not listed.
+    function _remoteCredit(VaultManager vaultManager, uint16 chainId, address token) internal view returns (uint256) {
+        uint256 listed = vaultManager.remoteCollateralId(chainId, Payload.toBytes32(token));
+        return listed == 0 ? 0 : vaultManager.totalCollateral(listed - 1);
     }
 
     /// Whether to (re)write an emitter: not when it already matches, and over a different live one only on request.

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {CrossChainFixture} from "./utils/CrossChainFixture.sol";
 import {KeeperGateway} from "../src/hub/KeeperGateway.sol";
 import {VaultManager} from "../src/hub/VaultManager.sol";
@@ -102,6 +103,17 @@ contract KeeperGatewayTest is CrossChainFixture {
         assertEq(address(gateway).balance, 0);
     }
 
+    /// Review: stray BTC must not block keeper contracts that cannot take BTC (a 1-wei donation used to revert them).
+    function test_strayBtcDoesNotBlockKeeperContracts() public {
+        _underwaterLocal();
+        NoBtcKeeper bot = new NoBtcKeeper(gateway);
+        musd.mint(address(bot), 10_000e18);
+        vm.deal(address(gateway), 1);
+        uint256 seized = bot.liquidate(alice, musdMarket, 1_000e18, pMezoCollateral);
+        assertGt(seized, 0);
+        assertEq(address(gateway).balance, 1); // waits for the next keeper that accepts it
+    }
+
     /// Review: BTC sent to the gateway outside a liquidation used to be excluded from every refund, forever.
     function test_strayBtcIsNotStuck() public {
         _underwaterLocal();
@@ -110,5 +122,22 @@ contract KeeperGatewayTest is CrossChainFixture {
         gateway.triggerLiquidation(alice, musdMarket, 1_000e18, pMezoCollateral, 0, bytes32(0), noUpdates());
         assertEq(keeper.balance, 0.5 ether);
         assertEq(address(gateway).balance, 0);
+    }
+}
+
+/// A keeper contract with no way to receive BTC (no receive or payable fallback).
+contract NoBtcKeeper {
+    KeeperGateway internal immutable gateway;
+
+    constructor(KeeperGateway gateway_) {
+        gateway = gateway_;
+    }
+
+    function liquidate(address account, uint256 marketId, uint256 repay, uint256 collateralId)
+        external
+        returns (uint256)
+    {
+        IERC20(address(gateway.vaultManager().markets(marketId).pool.asset())).approve(address(gateway), repay);
+        return gateway.triggerLiquidation(account, marketId, repay, collateralId, 0, bytes32(0), new bytes[](0));
     }
 }

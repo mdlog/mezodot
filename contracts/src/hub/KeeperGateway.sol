@@ -58,6 +58,8 @@ contract KeeperGateway is ReentrancyGuard {
     ) external payable nonReentrant returns (uint256 seized) {
         IERC20 asset = IERC20(vaultManager.markets(marketId).pool.asset());
         uint256 before = asset.balanceOf(address(this));
+        // BTC already held before this call: sent here by mistake (a BTC precompile transfer cannot be refused).
+        uint256 stray = address(this).balance - msg.value;
         asset.safeTransferFrom(msg.sender, address(this), repayAmount);
         asset.forceApprove(address(vaultManager), repayAmount);
         if (remoteReceiver == bytes32(0)) remoteReceiver = bytes32(uint256(uint160(msg.sender)));
@@ -69,13 +71,7 @@ contract KeeperGateway is ReentrancyGuard {
 
         uint256 unused = asset.balanceOf(address(this)) - before;
         if (unused > 0) asset.safeTransfer(msg.sender, unused);
-        // The gateway never keeps BTC: refund all of it, including BTC sent here by mistake (an ERC-20 transfer
-        // on Mezo's BTC precompile moves the native balance without calling receive(), so it cannot be refused).
-        uint256 btcRefund = address(this).balance;
-        if (btcRefund > 0) {
-            (bool ok,) = msg.sender.call{value: btcRefund}("");
-            if (!ok) revert RefundFailed();
-        }
+        _refundBtc(address(this).balance - stray, stray);
 
         _record(msg.sender).liquidations++;
         emit LiquidationTriggered(msg.sender, account, marketId, collateralId, repayAmount - unused, seized);
@@ -90,6 +86,16 @@ contract KeeperGateway is ReentrancyGuard {
 
     function getRiskSnapshot(address account) external view returns (VaultManager.RiskSnapshot memory) {
         return vaultManager.getRiskSnapshot(account);
+    }
+
+    /// @dev Unspent BTC (`owed`) must reach the caller. Stray BTC goes along when the caller accepts it and otherwise
+    ///      waits for the next keeper, so a 1-wei donation can never block keeper contracts that take no BTC.
+    function _refundBtc(uint256 owed, uint256 stray) internal {
+        if (owed + stray == 0) return;
+        (bool ok,) = msg.sender.call{value: owed + stray}("");
+        if (ok || owed == 0) return;
+        (ok,) = msg.sender.call{value: owed}("");
+        if (!ok) revert RefundFailed();
     }
 
     function _record(address keeper) internal returns (KeeperStats storage) {

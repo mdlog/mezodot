@@ -93,7 +93,9 @@ contract DeployHub is Script {
         VaultManager.CollateralConfig memory pMezoCollateral =
             _local(address(pMEZO), keccak256("MEZO"), 5000, 6000, 1000);
         // Collateral caps count pool shares; an empty pool mints 10^6 shares per unit (PToken's virtual offset).
-        pMezoCollateral.cap = vm.envOr("MEZO_COLLATERAL_CAP", uint256(100_000_000e18)) * 1e6;
+        // The share cap is fixed here: as the exchange rate rises it admits slightly less MEZO than the env value.
+        uint256 mezoCap = vm.envOr("MEZO_COLLATERAL_CAP", uint256(100_000_000e18));
+        pMezoCollateral.cap = mezoCap > type(uint256).max / 1e6 ? type(uint256).max : mezoCap * 1e6;
         vaultManager.addCollateral(pMezoCollateral);
         // BTC held on the hub as a plain token: LTV 70%, liquidation threshold 78%, bonus 5% (≈ 3.3× max leverage).
         VaultManager.CollateralConfig memory btcConfig = _plain(btc, keccak256("BTC"), 7000, 7800, 500);
