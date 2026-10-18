@@ -112,7 +112,7 @@ abstract contract MezodotPool is Ownable2Step, Pausable, ReentrancyGuard, IERC31
         emit ReservesWithdrawn(to, amount);
     }
 
-    /// @notice Blocks new deposits and borrows. Withdrawals, repayments and flash loans stay open.
+    /// @notice Blocks new deposits, borrows and flash loans. Withdrawals and repayments stay open.
     function pause() external onlyOwner {
         _pause();
     }

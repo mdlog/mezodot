@@ -274,6 +274,21 @@ contract VaultManagerTest is HubFixture {
         vaultManager.repayWithCollateral(alice, musdMarket, pMusdCollateral, 1_000e18);
     }
 
+    /// Invariant finding: debt worth under 1 wei of USD (a few wei of MEZO) used to round to "no debt", so it could
+    /// be borrowed with nothing posted, or kept while every collateral was withdrawn, and never liquidated.
+    function test_dustDebtStillNeedsCollateral() public {
+        address eve = makeAddr("eve");
+        vm.prank(eve);
+        vm.expectRevert(VaultManager.InsufficientCollateral.selector);
+        vaultManager.borrow(mezoMarket, 125, noUpdates());
+
+        uint256 shares = postLocal(alice, pMUSD, pMusdCollateral, 1_000e18);
+        _borrow(alice, mezoMarket, 125);
+        vm.prank(alice);
+        vm.expectRevert(VaultManager.InsufficientCollateral.selector);
+        vaultManager.withdrawCollateral(pMusdCollateral, shares, alice, noUpdates());
+    }
+
     // --- Disabled collateral ---------------------------------------------------------
 
     function test_disabledCollateralBacksNoNewBorrowingButKeepsHealth() public {

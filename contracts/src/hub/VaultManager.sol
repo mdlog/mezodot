@@ -320,6 +320,8 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         _debit(msg.sender, id, amount);
         _requireWithinLimit(msg.sender, 0, 0);
         uint256 fee = IReleaseSender(adapter).messageFee();
+        // Checked before the message is paid for: BTC collateral is this contract's native balance on Mezo.
+        if (msg.value < spent + fee) revert InsufficientValue();
         uint64 sequence = IReleaseSender(adapter).sendRelease{value: fee}(c.chainId, c.remoteToken, recipient, amount);
         emit RemoteWithdrawRequested(msg.sender, id, amount, recipient, sequence);
         _refund(spent + fee);
@@ -435,6 +437,7 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 messageFee;
         if (c.isRemote) {
             messageFee = IReleaseSender(adapter).messageFee();
+            if (msg.value < spent + messageFee) revert InsufficientValue();
             IReleaseSender(adapter).sendRelease{value: messageFee}(c.chainId, c.remoteToken, remoteReceiver, seized);
         } else {
             IERC20(c.token).safeTransfer(localReceiver, seized);
@@ -561,8 +564,9 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 debtValue = _debtValue(account, true);
         if (extraAmount > 0) {
             Market storage m = _markets[extraMarket];
-            debtValue += _usd(extraAmount, oracle.getPrice(m.priceKey), m.decimals);
+            debtValue += _usdUp(extraAmount, oracle.getPrice(m.priceKey), m.decimals);
         }
+        // Debt rounds up, so this is zero only when nothing is owed or borrowed.
         if (debtValue == 0) return;
         (,, uint256 limit) = _collateralTotals(account, PriceMode.Conservative);
         if (debtValue > limit) revert InsufficientCollateral();
@@ -644,7 +648,7 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
             Market storage m = _markets[i];
             uint256 debt = strict ? m.pool.borrowBalanceStored(account) : m.pool.borrowBalanceView(account);
             if (debt == 0) continue;
-            debtValue += _usd(debt, _priceFor(m.priceKey, strict ? PriceMode.Strict : PriceMode.View), m.decimals);
+            debtValue += _usdUp(debt, _priceFor(m.priceKey, strict ? PriceMode.Strict : PriceMode.View), m.decimals);
         }
     }
 
@@ -687,6 +691,11 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
 
     function _usd(uint256 amount, uint256 priceWad, uint8 decimals) internal pure returns (uint256) {
         return Math.mulDiv(amount, priceWad, 10 ** decimals);
+    }
+
+    /// Debt is valued rounding up: a few wei of a token worth under $1 must never count as no debt at all.
+    function _usdUp(uint256 amount, uint256 priceWad, uint8 decimals) internal pure returns (uint256) {
+        return Math.mulDiv(amount, priceWad, 10 ** decimals, Math.Rounding.Ceil);
     }
 
     function _pushPrices(bytes[] calldata updates) internal returns (uint256 fee) {
