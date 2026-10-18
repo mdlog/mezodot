@@ -62,7 +62,6 @@ contract KeeperGateway is ReentrancyGuard {
         asset.forceApprove(address(vaultManager), repayAmount);
         if (remoteReceiver == bytes32(0)) remoteReceiver = bytes32(uint256(uint160(msg.sender)));
 
-        uint256 btcBefore = address(this).balance - msg.value;
         seized = vaultManager.liquidate{value: msg.value}(
             account, marketId, repayAmount, collateralId, minSeize, msg.sender, remoteReceiver, priceUpdate
         );
@@ -70,7 +69,9 @@ contract KeeperGateway is ReentrancyGuard {
 
         uint256 unused = asset.balanceOf(address(this)) - before;
         if (unused > 0) asset.safeTransfer(msg.sender, unused);
-        uint256 btcRefund = address(this).balance - btcBefore;
+        // The gateway never keeps BTC: refund all of it, including BTC sent here by mistake (an ERC-20 transfer
+        // on Mezo's BTC precompile moves the native balance without calling receive(), so it cannot be refused).
+        uint256 btcRefund = address(this).balance;
         if (btcRefund > 0) {
             (bool ok,) = msg.sender.call{value: btcRefund}("");
             if (!ok) revert RefundFailed();
@@ -100,6 +101,6 @@ contract KeeperGateway is ReentrancyGuard {
         return stats[keeper];
     }
 
-    /// @dev Receives BTC refunds from VaultManager during liquidation.
+    /// @dev Receives BTC refunds from VaultManager during liquidation; whatever is held goes to the next keeper.
     receive() external payable {}
 }

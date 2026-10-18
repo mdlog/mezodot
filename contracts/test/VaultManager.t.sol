@@ -198,6 +198,120 @@ contract VaultManagerTest is HubFixture {
         vaultManager.addCollateral(c);
     }
 
+    // --- Repay with collateral (same pool) ---------------------------------------------
+
+    function test_repayWithCollateralNetsDebtAgainstShares() public {
+        uint256 shares = postLocal(alice, pMUSD, pMusdCollateral, 10_000e18);
+        _borrow(alice, musdMarket, 6_000e18);
+        uint256 rate = pMUSD.exchangeRate();
+        uint256 cash = pMUSD.cash();
+        vm.prank(alice);
+        (uint256 repaid, uint256 burned) =
+            vaultManager.repayWithCollateral(alice, musdMarket, pMusdCollateral, type(uint256).max);
+        assertEq(repaid, 6_000e18);
+        assertEq(pMUSD.borrowBalanceStored(alice), 0);
+        assertEq(vaultManager.collateralBalance(alice, pMusdCollateral), shares - burned);
+        assertApproxEqAbs(vaultManager.collateralValue(alice, pMusdCollateral), 4_000e18, 1e6);
+        assertEq(pMUSD.cash(), cash); // no cash moved
+        assertGe(pMUSD.exchangeRate(), rate); // suppliers are never diluted
+        assertEq(pMUSD.balanceOf(address(vaultManager)), vaultManager.totalCollateral(pMusdCollateral));
+    }
+
+    function test_repayWithCollateralWorksWithNoIdleCash() public {
+        postLocal(alice, pMUSD, pMusdCollateral, 10_000e18);
+        _borrow(alice, musdMarket, 6_000e18);
+        address bob = makeAddr("bob");
+        vaultManager.creditRemote(bob, wethBase, 1_000e18);
+        _borrow(bob, musdMarket, pMUSD.cash());
+        assertEq(pMUSD.cash(), 0);
+        vm.prank(alice);
+        vaultManager.repayWithCollateral(alice, musdMarket, pMusdCollateral, 2_000e18);
+        assertEq(pMUSD.borrowBalanceStored(alice), 4_000e18);
+    }
+
+    function test_repayWithCollateralRules() public {
+        postLocal(alice, pMUSD, pMusdCollateral, 10_000e18);
+        vm.prank(alice);
+        vm.expectRevert(VaultManager.NothingToRepay.selector);
+        vaultManager.repayWithCollateral(alice, musdMarket, pMusdCollateral, 1e18);
+        _borrow(alice, musdMarket, 1_000e18);
+        // Only the account or its operator.
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert(VaultManager.NotOperator.selector);
+        vaultManager.repayWithCollateral(alice, musdMarket, pMusdCollateral, 1e18);
+        vm.startPrank(alice);
+        // Shares of another pool, or remote collateral, cannot repay this market.
+        vm.expectRevert(VaultManager.InvalidCollateral.selector);
+        vaultManager.repayWithCollateral(alice, musdMarket, pMezoCollateral, 1e18);
+        vm.expectRevert(VaultManager.InvalidCollateral.selector);
+        vaultManager.repayWithCollateral(alice, musdMarket, wethBase, 1e18);
+        vm.expectRevert(VaultManager.ZeroAmount.selector);
+        vaultManager.repayWithCollateral(alice, musdMarket, pMusdCollateral, 0);
+        vm.stopPrank();
+    }
+
+    /// Burning the last collateral while debt remains would leave bad debt that no liquidation can write off.
+    function test_repayWithCollateralCannotLeaveBadDebt() public {
+        setUpBtc();
+        postLocal(alice, pMUSD, pMusdCollateral, 5_000e18);
+        _postBtc(alice, 0.1e18); // $8,000
+        _borrow(alice, musdMarket, 8_500e18);
+        btcPrice = 16_000e8; // -80%: the BTC is liquidated in full and the debt left exceeds the pMUSD
+        pushPrices();
+        musd.mint(liquidator, 5_000e18);
+        vm.startPrank(liquidator);
+        musd.approve(address(vaultManager), type(uint256).max);
+        vaultManager.liquidate(alice, musdMarket, 4_250e18, btcCollateral, 0, liquidator, 0, noUpdates());
+        vm.stopPrank();
+        assertEq(vaultManager.collateralBalance(alice, btcCollateral), 0);
+        assertGt(pMUSD.borrowBalanceStored(alice), vaultManager.collateralValue(alice, pMusdCollateral));
+
+        vm.prank(alice);
+        vm.expectRevert(VaultManager.WouldLeaveBadDebt.selector);
+        vaultManager.repayWithCollateral(alice, musdMarket, pMusdCollateral, type(uint256).max);
+        // Netting only part of it keeps collateral behind for the liquidation that writes the rest off.
+        vm.prank(alice);
+        vaultManager.repayWithCollateral(alice, musdMarket, pMusdCollateral, 1_000e18);
+    }
+
+    // --- Disabled collateral ---------------------------------------------------------
+
+    function test_disabledCollateralBacksNoNewBorrowingButKeepsHealth() public {
+        postLocal(alice, pMUSD, pMusdCollateral, 10_000e18);
+        _borrow(alice, musdMarket, 4_000e18);
+        vaultManager.setCollateralParams(pMusdCollateral, 8000, 8500, 500, type(uint256).max, false);
+        vm.prank(alice);
+        vm.expectRevert(VaultManager.InsufficientCollateral.selector);
+        vaultManager.borrow(musdMarket, 1e18, noUpdates());
+        VaultManager.RiskSnapshot memory snap = vaultManager.getRiskSnapshot(alice);
+        assertEq(snap.borrowLimit, 0);
+        assertApproxEqRel(snap.healthFactor, 2.125e18, 1e12); // 10,000 × 85% / 4,000: not liquidatable
+    }
+
+    function test_disabledRemoteCollateralIsStillCreditedWithoutBorrowingPower() public {
+        vaultManager.setCollateralParams(wethBase, 7500, 8000, 700, type(uint256).max, false);
+        vaultManager.creditRemote(alice, wethBase, 1e18); // tokens are already locked on the spoke
+        assertEq(vaultManager.collateralBalance(alice, wethBase), 1e18);
+        vm.prank(alice);
+        vm.expectRevert(VaultManager.InsufficientCollateral.selector);
+        vaultManager.borrow(musdMarket, 1e18, noUpdates());
+    }
+
+    // --- Listing checks ----------------------------------------------------------------
+
+    function test_addCollateralChecksKindAndDecimals() public {
+        MockERC20 six = new MockERC20("Six", "SIX", 6);
+        // A plain token is valued unit for unit at the configured decimals, so they must be the token's.
+        vm.expectRevert(VaultManager.InvalidCollateral.selector);
+        vaultManager.addCollateral(_plain(address(six), USDC_KEY, 5000, 6000, 500));
+        // Share collateral is valued through its pool's exchange rate: it must be a listed market pool.
+        vm.expectRevert(VaultManager.InvalidCollateral.selector);
+        vaultManager.addCollateral(_local(address(six), USDC_KEY, 5000, 6000, 500));
+        VaultManager.CollateralConfig memory c = _plain(address(six), USDC_KEY, 5000, 6000, 500);
+        c.decimals = 6;
+        vaultManager.addCollateral(c);
+    }
+
     // --- Liquidation protocol fee --------------------------------------------------
 
     function test_liquidationFeeGoesToTreasury() public {

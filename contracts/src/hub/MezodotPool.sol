@@ -220,11 +220,16 @@ abstract contract MezodotPool is Ownable2Step, Pausable, ReentrancyGuard, IERC31
         accrueInterest();
         uint256 owed = borrowBalanceStored(account);
         applied = amount > owed ? owed : amount;
-        uint256 remaining = owed - applied;
+        _reduceDebt(account, owed, applied);
+    }
+
+    /// @dev `owed` is the account's current debt (after accrual); `amount` <= `owed`.
+    function _reduceDebt(address account, uint256 owed, uint256 amount) internal {
+        uint256 remaining = owed - amount;
         _borrows[account] = BorrowSnapshot(remaining, borrowIndex);
         // Per-account round-up can make the sum of debts exceed totalBorrows by dust.
-        totalBorrows = totalBorrows > applied ? totalBorrows - applied : 0;
-        emit RepayBorrow(account, applied, remaining);
+        totalBorrows = totalBorrows > amount ? totalBorrows - amount : 0;
+        emit RepayBorrow(account, amount, remaining);
     }
 
     /// @notice Writes off `account`'s remaining debt once it has no collateral left (VaultManager, after the
@@ -258,6 +263,7 @@ abstract contract MezodotPool is Ownable2Step, Pausable, ReentrancyGuard, IERC31
     ///      and borrow from it (via VaultManager) inside the callback. Nested flash loans are blocked.
     function flashLoan(IERC3156FlashBorrower receiver, address token, uint256 amount, bytes calldata data)
         external
+        whenNotPaused
         returns (bool)
     {
         if (token != address(_underlying())) revert UnsupportedToken();

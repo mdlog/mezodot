@@ -16,12 +16,15 @@ import {WormholeAdapter} from "../src/hub/WormholeAdapter.sol";
 import {LeverageManager} from "../src/hub/LeverageManager.sol";
 import {KeeperGateway} from "../src/hub/KeeperGateway.sol";
 import {SwapLeverageManager} from "../src/hub/SwapLeverageManager.sol";
-import {ITigrisRouter} from "../src/interfaces/ITigrisRouter.sol";
+import {ITigrisPool, ITigrisPoolFactory} from "../src/interfaces/ITigrisPool.sol";
 
 /// @notice Deploys the Mezo hub. Remote (spoke) collateral is registered later by ConfigureCrossChain.
 /// Env: NETWORK, MUSD, MEZO, BTC, WORMHOLE, CONSISTENCY_LEVEL (default 1), SEED_AMOUNT (default 1e18; 0 = none).
-///      BTC leverage: TIGRIS_ROUTER, TIGRIS_FACTORY, TIGRIS_STABLE (default false: the volatile MUSD/BTC pool).
+///      BTC leverage: TIGRIS_FACTORY (the MUSD/BTC pool is looked up there), TIGRIS_STABLE (default false: the
+///      volatile pool), TIGRIS_ROUTER (recorded for keeper sales and app quotes).
 ///      Revenue: LIQUIDATION_FEE_BPS (protocol share of the liquidation bonus, default 1,000 = 10%).
+///      Caps (token wei; testnet defaults in brackets): MUSD_SUPPLY_CAP [5M], MUSD_BORROW_CAP [4M],
+///      MEZO_SUPPLY_CAP [2B], MEZO_BORROW_CAP [1B], MEZO_COLLATERAL_CAP [100M MEZO], BTC_COLLATERAL_CAP [25 BTC].
 ///      Oracle: PYTH (Pyth Core), SUPRA_PULL (optional Supra DORA pull contract), and per symbol
 ///      (MUSD, MEZO, ETH, USDC, BTC): <SYM>_FEED (Pyth price id), <SYM>_MAX_AGE (Pyth leg, default 120 s),
 ///      <SYM>_MAX_CONF_BPS (default 200), <SYM>_SUPRA_PAIR (optional secondary leg),
@@ -44,6 +47,7 @@ contract DeployHub is Script {
         address pMUSD;
         address pMEZO;
         address swapLeverageManager;
+        address tigrisPool;
     }
 
     function run() external returns (Deployed memory d) {
@@ -54,6 +58,7 @@ contract DeployHub is Script {
         uint256 startBlock = block.number;
 
         _mockPrecompileToken(mezo);
+        _mockPrecompileToken(btc);
         vm.startBroadcast();
         // The broadcaster, whatever the signer type: with --account/--keystore and no --sender,
         // msg.sender here is forge's default sender, which would own every contract.
@@ -69,15 +74,30 @@ contract DeployHub is Script {
             IERC20(mezo), "Mezodot MEZO", "pMEZO", new InterestRateModel(0.02e18, 0.08e18, 0.7e18, 1e18), 0.1e18, owner
         );
 
+        // Bounded from day one: a thin market (MEZO) or one large depositor cannot take over the hub.
+        pMUSD.setCaps(
+            vm.envOr("MUSD_SUPPLY_CAP", uint256(5_000_000e18)), vm.envOr("MUSD_BORROW_CAP", uint256(4_000_000e18))
+        );
+        pMEZO.setCaps(
+            vm.envOr("MEZO_SUPPLY_CAP", uint256(2_000_000_000e18)),
+            vm.envOr("MEZO_BORROW_CAP", uint256(1_000_000_000e18))
+        );
+
         VaultManager vaultManager = new VaultManager(oracle, owner);
         pMUSD.setVaultManager(address(vaultManager));
         pMEZO.setVaultManager(address(vaultManager));
         uint256 musdMarket = vaultManager.addMarket(pMUSD, keccak256("MUSD"));
         vaultManager.addMarket(pMEZO, keccak256("MEZO"));
         uint256 pMusdCollateral = vaultManager.addCollateral(_local(address(pMUSD), keccak256("MUSD"), 8000, 8500, 500));
-        vaultManager.addCollateral(_local(address(pMEZO), keccak256("MEZO"), 5000, 6000, 1000));
+        VaultManager.CollateralConfig memory pMezoCollateral =
+            _local(address(pMEZO), keccak256("MEZO"), 5000, 6000, 1000);
+        // Collateral caps count pool shares; an empty pool mints 10^6 shares per unit (PToken's virtual offset).
+        pMezoCollateral.cap = vm.envOr("MEZO_COLLATERAL_CAP", uint256(100_000_000e18)) * 1e6;
+        vaultManager.addCollateral(pMezoCollateral);
         // BTC held on the hub as a plain token: LTV 70%, liquidation threshold 78%, bonus 5% (≈ 3.3× max leverage).
-        uint256 btcCollateral = vaultManager.addCollateral(_plain(btc, keccak256("BTC"), 7000, 7800, 500));
+        VaultManager.CollateralConfig memory btcConfig = _plain(btc, keccak256("BTC"), 7000, 7800, 500);
+        btcConfig.cap = vm.envOr("BTC_COLLATERAL_CAP", uint256(25e18));
+        uint256 btcCollateral = vaultManager.addCollateral(btcConfig);
         vaultManager.setLiquidationFee(uint16(vm.envOr("LIQUIDATION_FEE_BPS", uint256(1000))));
 
         WormholeAdapter adapter = new WormholeAdapter(
@@ -86,15 +106,12 @@ contract DeployHub is Script {
         vaultManager.setAdapter(address(adapter));
         LeverageManager lev = new LeverageManager(vaultManager, pMUSD, musdMarket, pMusdCollateral);
         KeeperGateway keepers = new KeeperGateway(vaultManager, adapter);
-        SwapLeverageManager swapLev = new SwapLeverageManager(
-            vaultManager,
-            pMUSD,
-            musdMarket,
-            btcCollateral,
-            ITigrisRouter(vm.envAddress("TIGRIS_ROUTER")),
-            vm.envAddress("TIGRIS_FACTORY"),
-            vm.envOr("TIGRIS_STABLE", false)
+        // Looked up on Tigris' own factory, so the leverage desk cannot be pointed at an arbitrary pool.
+        ITigrisPool pair = ITigrisPool(
+            ITigrisPoolFactory(vm.envAddress("TIGRIS_FACTORY")).getPool(musd, btc, vm.envOr("TIGRIS_STABLE", false))
         );
+        require(address(pair) != address(0), "DeployHub: no Tigris MUSD/BTC pool");
+        SwapLeverageManager swapLev = new SwapLeverageManager(vaultManager, pMUSD, musdMarket, btcCollateral, pair);
 
         // Seed deposits (shares sent to a dead address) harden the vaults against share-price games.
         uint256 seed = vm.envOr("SEED_AMOUNT", uint256(1e18));
@@ -121,21 +138,22 @@ contract DeployHub is Script {
             address(keepers),
             address(pMUSD),
             address(pMEZO),
-            address(swapLev)
+            address(swapLev),
+            address(pair)
         );
         _write(network, d, musd, mezo, btc, startBlock);
     }
 
-    /// @dev MEZO on Mezo is a precompile: forge's local EVM only sees a stub that cannot execute it, so the
-    ///      local run mocks `decimals()` (read by the PToken constructor and addMarket). Broadcast with
+    /// @dev MEZO and BTC on Mezo are precompiles: forge's local EVM only sees a stub that cannot execute them,
+    ///      so the local run mocks `decimals()` (read by the PToken constructor, addMarket and addCollateral). Broadcast with
     ///      --skip-simulation (docs/DEPLOY.md): transactions then execute on the node against the real
     ///      precompile. Calls the script itself would send to MEZO cannot be mocked (forge would not record
     ///      them), so the pMEZO seed deposit is done with cast. MEZO has 18 decimals (cast call decimals()).
     function _mockPrecompileToken(address token) internal {
         if (!_isMezoPrecompile(token)) return;
-        uint8 decimals = uint8(vm.envOr("MEZO_DECIMALS", uint256(18)));
-        vm.mockCall(token, abi.encodeWithSelector(IERC20Metadata.decimals.selector), abi.encode(decimals));
-        console2.log("MEZO is a Mezo precompile: simulation mocks decimals(); broadcast with --skip-simulation");
+        // MEZO and BTC both have 18 decimals (cast call <token> 'decimals()').
+        vm.mockCall(token, abi.encodeWithSelector(IERC20Metadata.decimals.selector), abi.encode(uint8(18)));
+        console2.log("Mezo precompile", token, "simulation mocks decimals(); broadcast with --skip-simulation");
     }
 
     function _isMezoPrecompile(address token) internal pure returns (bool) {
@@ -240,6 +258,7 @@ contract DeployHub is Script {
         vm.serializeAddress(c, "pMUSD", d.pMUSD);
         vm.serializeAddress(c, "pMEZO", d.pMEZO);
         vm.serializeAddress(c, "swapLeverageManager", d.swapLeverageManager);
+        vm.serializeAddress(c, "tigrisPool", d.tigrisPool);
         vm.serializeAddress(c, "tigrisRouter", vm.envAddress("TIGRIS_ROUTER"));
         vm.serializeAddress(c, "tigrisFactory", vm.envAddress("TIGRIS_FACTORY"));
         vm.serializeAddress(c, "wormhole", vm.envAddress("WORMHOLE"));

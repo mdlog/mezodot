@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC3156FlashBorrower} from "@openzeppelin/contracts/interfaces/IERC3156FlashBorrower.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {InterestRateModel} from "../src/hub/InterestRateModel.sol";
 import {MezodotPool} from "../src/hub/MezodotPool.sol";
 import {PToken} from "../src/hub/PToken.sol";
@@ -253,6 +254,14 @@ contract PTokenTest is Test {
         FlashDepositor fb = new FlashDepositor(pool);
         vm.expectRevert(MezodotPool.UnsupportedToken.selector);
         pool.flashLoan(fb, address(0xdead), 1, "");
+    }
+
+    /// An incident pause also stops new flash loans (and so new MUSD loops).
+    function test_flashLoanBlockedWhilePaused() public {
+        FlashDepositor fb = new FlashDepositor(pool);
+        pool.pause();
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        pool.flashLoan(fb, address(musd), 1e18, "");
     }
 
     /// Review Focus 1: depositing while the pool's own flash loan is outstanding must not

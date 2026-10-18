@@ -6,6 +6,7 @@ import {CrossChainFixture} from "./utils/CrossChainFixture.sol";
 import {IWormhole} from "../src/interfaces/IWormhole.sol";
 import {VaultManager} from "../src/hub/VaultManager.sol";
 import {WormholeAdapter} from "../src/hub/WormholeAdapter.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SpokeGateway} from "../src/spoke/SpokeGateway.sol";
 import {Payload} from "../src/libraries/Payload.sol";
 import {DevWormhole} from "./mocks/DevWormhole.sol";
@@ -134,6 +135,31 @@ contract CrossChainTest is CrossChainFixture {
 
         vm.expectRevert(SpokeGateway.AlreadyConsumed.selector);
         spoke.receiveMessage(vaa);
+    }
+
+    /// Review: a RELEASE to a recipient the token refuses (blacklist, pause) used to revert forever, leaving
+    /// the tokens locked after the hub had already debited the account.
+    function test_failedReleaseTransferBecomesClaimable() public {
+        _creditedAlice(2e18);
+        address recipient = makeAddr("blacklisted");
+        vm.prank(alice);
+        vaultManager.withdrawRemote(wethBase, 0.5e18, Payload.toBytes32(recipient), noUpdates());
+        bytes memory vaa = signLast(MEZO_CHAIN, address(adapter));
+        vm.mockCallRevert(address(weth), abi.encodeCall(IERC20.transfer, (recipient, 0.5e18)), "blacklisted");
+        spoke.receiveMessage(vaa);
+        vm.clearMockedCalls();
+        assertEq(weth.balanceOf(recipient), 0);
+        assertEq(spoke.claimable(recipient, address(weth)), 0.5e18);
+        assertEq(spoke.locked(address(weth)), 1.5e18);
+
+        address fresh = makeAddr("freshWallet");
+        vm.prank(recipient);
+        spoke.claim(address(weth), fresh);
+        assertEq(weth.balanceOf(fresh), 0.5e18);
+        assertEq(spoke.claimable(recipient, address(weth)), 0);
+        vm.prank(recipient);
+        vm.expectRevert(SpokeGateway.ZeroAmount.selector);
+        spoke.claim(address(weth), fresh);
     }
 
     function test_withdrawRemoteRespectsBorrowLimit() public {

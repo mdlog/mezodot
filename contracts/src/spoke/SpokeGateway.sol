@@ -31,12 +31,16 @@ contract SpokeGateway is Ownable2Step, Pausable, ReentrancyGuard {
     mapping(address token => TokenConfig) public tokens;
     mapping(address token => uint256) public locked;
     mapping(bytes32 vaaHash => bool) public isConsumed;
+    /// Releases whose transfer failed (e.g. a blacklisted recipient or a paused token), held for the recipient.
+    mapping(address recipient => mapping(address token => uint256)) public claimable;
     uint64 public outboundNonce;
 
     event HubEmitterSet(bytes32 emitter);
     event TokenSet(address indexed token, bool allowed, uint256 cap);
     event Deposited(uint64 indexed sequence, address indexed account, address indexed token, uint256 amount);
     event Released(bytes32 indexed vaaHash, address indexed recipient, address indexed token, uint256 amount);
+    event ReleaseDeferred(bytes32 indexed vaaHash, address indexed recipient, address indexed token, uint256 amount);
+    event Claimed(address indexed recipient, address indexed token, address to, uint256 amount);
 
     error TokenNotAllowed();
     error CapExceeded();
@@ -136,7 +140,30 @@ contract SpokeGateway is Ownable2Step, Pausable, ReentrancyGuard {
         address recipient = Payload.toAddress(m.account);
         if (m.amount > locked[token]) revert InsufficientLocked();
         locked[token] -= m.amount;
-        IERC20(token).safeTransfer(recipient, m.amount);
-        emit Released(hash, recipient, token, m.amount);
+        // The hub has already debited the account, so a transfer that fails must not strand the tokens: they
+        // become claimable by the recipient, who can send them to another address.
+        if (_tryTransfer(token, recipient, m.amount)) {
+            emit Released(hash, recipient, token, m.amount);
+        } else {
+            claimable[recipient][token] += m.amount;
+            emit ReleaseDeferred(hash, recipient, token, m.amount);
+        }
+    }
+
+    /// @notice Sends the caller's deferred releases of `token` to `to`.
+    function claim(address token, address to) external nonReentrant {
+        uint256 amount = claimable[msg.sender][token];
+        if (amount == 0) revert ZeroAmount();
+        claimable[msg.sender][token] = 0;
+        IERC20(token).safeTransfer(to, amount);
+        emit Claimed(msg.sender, token, to, amount);
+    }
+
+    /// SafeERC20's success rule (no return data from a contract, or `true`) without reverting.
+    function _tryTransfer(address token, address to, uint256 amount) internal returns (bool) {
+        (bool ok, bytes memory ret) = token.call(abi.encodeCall(IERC20.transfer, (to, amount)));
+        if (!ok) return false;
+        if (ret.length == 0) return token.code.length > 0;
+        return ret.length == 32 && abi.decode(ret, (uint256)) == 1;
     }
 }

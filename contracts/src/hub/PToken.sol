@@ -64,6 +64,32 @@ contract PToken is ERC4626, MezodotPool {
         return Math.min(super.maxRedeem(owner_), _convertToShares(cash(), Math.Rounding.Floor));
     }
 
+    // --- Repay with shares --------------------------------------------------
+
+    /// @notice Repays `account`'s debt by burning shares the VaultManager holds for it (its posted collateral),
+    ///         like Aave's repayWithATokens: borrows and supply shrink together, so no cash moves.
+    /// @param maxShares Shares available to burn. @param maxAssets Debt to repay at most.
+    /// @return assets Debt repaid. @return shares Shares burned; rounding keeps them worth at least `assets`,
+    ///         so the exchange rate never falls.
+    function repayWithShares(address account, uint256 maxShares, uint256 maxAssets)
+        external
+        onlyVaultManager
+        nonReentrant
+        returns (uint256 assets, uint256 shares)
+    {
+        accrueInterest();
+        uint256 owed = borrowBalanceStored(account);
+        assets = Math.min(maxAssets, owed);
+        shares = previewWithdraw(assets);
+        if (shares > maxShares) {
+            shares = maxShares;
+            assets = previewRedeem(shares);
+        }
+        if (assets == 0) revert ZeroAmount();
+        _burn(msg.sender, shares);
+        _reduceDebt(account, owed, assets);
+    }
+
     // --- Entry points: accrue first so previews use up-to-date state ---------
 
     function deposit(uint256 assets, address receiver) public override nonReentrant whenNotPaused returns (uint256) {

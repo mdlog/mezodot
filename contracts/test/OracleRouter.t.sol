@@ -197,10 +197,44 @@ contract OracleRouterTest is Test {
         assertFalse(ok);
     }
 
-    function test_noCrossCheckWhenPublishTimesFarApart() public {
+    function test_newerLegWinsWhenPublishTimesFarApart() public {
         _push(_pythUpdate(ETH_ID, 241_000_000_000, 100_000_000, block.timestamp - 100));
-        _push(_supraUpdate(248_300_000_000, block.timestamp)); // 100 s apart > 60 s window
-        assertEq(router.getPrice(ETH), 2_410e18);
+        _push(_supraUpdate(248_300_000_000, block.timestamp)); // 100 s apart > 60 s window: no cross-check
+        assertEq(router.getPrice(ETH), 2_483e18);
+    }
+
+    /// Review: an hour-old push primary used to override a seconds-old pull proof, so a 12.5% drop stayed
+    /// invisible to borrow limits and liquidations until the next push.
+    function test_freshPullOverridesHourOldPush() public {
+        router.setFeed(ETH, _feed(_leg(PYTH, 3_900, ETH_ID), _leg(SUPRA, 120, SUPRA_ETH), 200, 150));
+        _push(_pythUpdate(ETH_ID, 8_000_000_000_000, 1_000_000_000, block.timestamp - 3_000)); // $80,000
+        _push(_supraUpdate(7_000_000_000_000, block.timestamp - 5)); // $70,000
+        assertEq(router.getPrice(ETH), 70_000e18);
+        (bool ok,, uint256 until) = router.getPriceInfo(ETH);
+        assertTrue(ok);
+        assertEq(until, block.timestamp + 115); // the selected (Supra) leg's expiry
+    }
+
+    function test_olderPriceContradictedByNewerDataFailsClosed() public {
+        router.setFeed(ETH, _feed(_leg(PYTH, 3_900, ETH_ID), _leg(SUPRA, 120, SUPRA_ETH), 200, 150));
+        _push(_pythUpdate(ETH_ID, 8_000_000_000_000, 1_000_000_000, block.timestamp - 3_000));
+        _push(_supraUpdate(7_000_000_000_000, block.timestamp - 5));
+        skip(130); // the Supra proof expired; the push is still within its 3,900 s
+        vm.expectRevert(abi.encodeWithSelector(OracleRouter.PriceDiverged.selector, ETH));
+        router.getPrice(ETH);
+        (bool ok,) = router.tryGetPrice(ETH);
+        assertFalse(ok);
+        // A fresh proof restores the price.
+        _push(_supraUpdate(6_990_000_000_000, block.timestamp));
+        assertEq(router.getPrice(ETH), 69_900e18);
+    }
+
+    function test_olderPriceAgreeingWithNewerDataStillServes() public {
+        router.setFeed(ETH, _feed(_leg(PYTH, 3_900, ETH_ID), _leg(SUPRA, 120, SUPRA_ETH), 200, 150));
+        _push(_pythUpdate(ETH_ID, 8_000_000_000_000, 1_000_000_000, block.timestamp - 3_000));
+        _push(_supraUpdate(8_050_000_000_000, block.timestamp - 5)); // +0.6%
+        skip(130);
+        assertEq(router.getPrice(ETH), 80_000e18);
     }
 
     function test_revertingSourceDoesNotBlockOtherLeg() public {
@@ -236,15 +270,15 @@ contract OracleRouterTest is Test {
 
     // ------------------------------------------------------------------ getPriceInfo (clients decide on pull updates)
 
-    function test_priceInfoReportsLatestExpiryAcrossUsableLegs() public {
+    function test_priceInfoReportsTheSelectedLegsExpiry() public {
         _push(_pythUpdate(ETH_ID, 241_000_000_000, 100_000_000, block.timestamp - 100)); // valid until now + 20
         _push(_supraUpdate(241_298_000_000, block.timestamp - 30)); // valid until now + 90
         (bool ok, uint256 price, uint256 until) = router.getPriceInfo(ETH);
         assertTrue(ok);
-        assertEq(price, 2_410e18); // primary still selected
+        assertEq(price, 2_412.98e18); // the newer leg
         assertEq(until, block.timestamp + 90);
 
-        skip(21); // primary expired: same answer as getPrice, now from Supra
+        skip(21); // primary expired: same answer as getPrice, still from Supra
         (ok, price, until) = router.getPriceInfo(ETH);
         assertTrue(ok);
         assertEq(price, 2_412.98e18);

@@ -6,6 +6,7 @@ import {MockPyth} from "@pythnetwork/pyth-sdk-solidity/MockPyth.sol";
 import {DevWormhole} from "../test/mocks/DevWormhole.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
 import {MockSupraPull} from "../test/mocks/MockSupraPull.sol";
+import {MockTigrisPool} from "../test/mocks/MockTigrisPool.sol";
 import {MockTigrisRouter} from "../test/mocks/MockTigrisRouter.sol";
 
 /// @notice Local devnet only: deploys the external dependencies that exist on real testnets
@@ -33,17 +34,19 @@ contract DevnetMocks is Script {
             _fund(musd, 1_000_000e18);
             _fund(mezo, 100_000_000e18);
             _fund(btc, 100e18);
-            // Stand-in for the Tigris MUSD/BTC pool at the devnet BTC price (80,000 MUSD per BTC).
-            MockTigrisRouter router = new MockTigrisRouter();
-            router.setRate(address(musd), address(btc), 1e18 / 80_000);
-            router.setRate(address(btc), address(musd), 80_000e18);
+            // Stand-in for the Tigris MUSD/BTC pool at the devnet BTC price: 8M MUSD / 100 BTC, 0.04% fee.
+            MockTigrisPool pool = new MockTigrisPool(address(musd), address(btc), 4);
+            musd.mint(address(pool), 8_000_000e18);
+            btc.mint(address(pool), 100e18);
+            pool.sync();
+            MockTigrisRouter router = new MockTigrisRouter(pool);
             console2.log(string.concat("PYTH=", vm.toString(address(pyth))));
             console2.log(string.concat("SUPRA_PULL=", vm.toString(address(supra))));
             console2.log(string.concat("MUSD=", vm.toString(address(musd))));
             console2.log(string.concat("MEZO=", vm.toString(address(mezo))));
             console2.log(string.concat("BTC=", vm.toString(address(btc))));
             console2.log(string.concat("TIGRIS_ROUTER=", vm.toString(address(router))));
-            // The mock router needs no factory; any non-zero address is recorded.
+            // The mock router is also the factory that resolves the pool.
             console2.log(string.concat("TIGRIS_FACTORY=", vm.toString(address(router))));
         } else {
             MockERC20 weth = new MockERC20("Wrapped Ether", "WETH", 18);

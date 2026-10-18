@@ -9,9 +9,12 @@ import {IPriceSource} from "../oracle/IPriceSource.sol";
 ///         (Pyth Core push/pull, Supra DORA pull). Risk-checked reads enforce per-leg freshness, a per-feed
 ///         confidence cap and a cross-vendor consistency check; `getPriceUnsafe` is for views and UIs.
 /// @dev Each key has a primary leg and an optional secondary leg, each with its own maxAge (hourly push feeds
-///      and 120 s pull feeds coexist). Strict reads use the primary when it is fresh and confident, otherwise
-///      the secondary; when both are usable and were published within CROSS_CHECK_WINDOW of each other they
-///      must agree within maxDivergenceBps or the read fails closed.
+///      and 120 s pull feeds coexist). Strict reads use the freshest usable leg (fresh and confident; the
+///      primary on a tie), so an hour-old push price never overrides a seconds-old pull proof. The other leg
+///      cross-checks it within maxDivergenceBps when both are usable and were published within
+///      CROSS_CHECK_WINDOW of each other, or when the other leg holds newer data that failed only its own age
+///      or confidence check: an older price is never served against newer information that contradicts it.
+///      Disagreement fails closed.
 ///      Price updates are tagged: each `bytes` element is `sourceTag (1 byte) ‖ vendor payload`.
 contract OracleRouter is Ownable2Step {
     uint256 internal constant BPS = 10_000;
@@ -19,7 +22,7 @@ contract OracleRouter is Ownable2Step {
     uint32 public constant MAX_AGE_CAP = 3 hours;
     uint16 public constant MAX_CONF_CAP_BPS = 1_000;
     uint16 public constant MAX_DIVERGENCE_CAP_BPS = 2_000;
-    /// Legs are cross-checked only when their publish times are at most this far apart (seconds).
+    /// Usable legs are cross-checked when their publish times are at most this far apart (seconds).
     uint256 public constant CROSS_CHECK_WINDOW = 60;
 
     struct Leg {
@@ -130,9 +133,9 @@ contract OracleRouter is Ownable2Step {
         (ok, priceWad,) = getPriceInfo(key);
     }
 
-    /// @notice `tryGetPrice` plus the time until which the price stays available: the latest expiry among the
-    ///         usable legs (the value may switch to the other leg before then). Lets clients attach a pull
-    ///         update only when a key would otherwise expire before their transaction lands.
+    /// @notice `tryGetPrice` plus the time until which this price stays available: the expiry of the selected
+    ///         (freshest usable) leg. The other leg may still serve after that, subject to the cross-check. Lets
+    ///         clients attach a pull update only when a key would otherwise expire before their transaction lands.
     function getPriceInfo(bytes32 key) public view returns (bool ok, uint256 priceWad, uint256 validUntil) {
         Feed storage f = _feeds[key];
         if (f.primary.source == 0) return (false, 0, 0);
@@ -160,14 +163,19 @@ contract OracleRouter is Ownable2Step {
     function _select(Feed storage f) internal view returns (Status, uint256 price, uint256 validUntil) {
         (bool ok1, uint256 p1, uint256 t1) = _read(f.primary, f.maxConfBps);
         (bool ok2, uint256 p2, uint256 t2) = f.secondary.source == 0 ? (false, 0, 0) : _read(f.secondary, f.maxConfBps);
-        if (ok1 && ok2 && f.maxDivergenceBps != 0 && _absDiff(t1, t2) <= CROSS_CHECK_WINDOW) {
-            uint256 lo = p1 < p2 ? p1 : p2;
-            if (_absDiff(p1, p2) * BPS > lo * f.maxDivergenceBps) return (Status.Diverged, 0, 0);
-        }
         if (!ok1 && !ok2) return (Status.Unavailable, 0, 0);
-        uint256 e1 = ok1 ? t1 + f.primary.maxAge : 0;
-        uint256 e2 = ok2 ? t2 + f.secondary.maxAge : 0;
-        return (Status.Ok, ok1 ? p1 : p2, e1 > e2 ? e1 : e2);
+        bool useSecondary = ok2 && (!ok1 || t2 > t1);
+        uint256 time;
+        (price, time, validUntil) = useSecondary ? (p2, t2, t2 + f.secondary.maxAge) : (p1, t1, t1 + f.primary.maxAge);
+        (bool otherOk, uint256 other, uint256 otherTime) = useSecondary ? (ok1, p1, t1) : (ok2, p2, t2);
+        // A newer other leg is necessarily unusable here (it would have been selected), but its data still
+        // contradicts an older price.
+        bool crossCheck = other != 0 && (otherTime > time || (otherOk && time - otherTime <= CROSS_CHECK_WINDOW));
+        if (crossCheck && f.maxDivergenceBps != 0) {
+            uint256 lo = price < other ? price : other;
+            if (_absDiff(price, other) * BPS > lo * f.maxDivergenceBps) return (Status.Diverged, 0, 0);
+        }
+        return (Status.Ok, price, validUntil);
     }
 
     function _read(Leg storage leg, uint16 maxConfBps) internal view returns (bool ok, uint256 price, uint256 time) {

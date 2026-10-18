@@ -132,6 +132,10 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
     event LiquidationFeeSet(uint16 bps);
     /// Collateral units of a liquidation kept for the protocol and credited to `treasury`.
     event LiquidationFeeTaken(address indexed account, uint256 indexed collateralId, uint256 amount, address treasury);
+    /// Debt repaid by burning the account's posted shares of the same pool; no cash moved.
+    event RepaidWithCollateral(
+        address indexed account, uint256 indexed marketId, uint256 indexed collateralId, uint256 repaid, uint256 shares
+    );
 
     error InvalidParams();
     error InvalidCollateral();
@@ -149,6 +153,7 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
     error RefundFailed();
     error AdapterAlreadySet();
     error InvalidRecipient();
+    error WouldLeaveBadDebt();
 
     modifier onlyAdapter() {
         if (msg.sender != adapter) revert NotAdapter();
@@ -179,6 +184,10 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
             if (remoteCollateralId[c.chainId][c.remoteToken] != 0) revert InvalidCollateral();
         } else {
             if (c.token == address(0) || _localListed[c.token]) revert InvalidCollateral();
+            // Shares are valued through their pool's exchange rate and plain tokens unit for unit, both at
+            // `decimals`: a wrong kind or decimals would misprice every deposit, so both are checked.
+            address units = c.isShare ? _poolAsset(c.token) : c.token;
+            if (IERC20Decimals(units).decimals() != c.decimals) revert InvalidCollateral();
             _localListed[c.token] = true;
         }
         id = _collaterals.length;
@@ -346,6 +355,33 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         returns (uint256 applied)
     {
         applied = _repay(onBehalfOf, marketId, amount, msg.sender);
+    }
+
+    /// @notice Repays `account`'s debt in a market with its posted shares of that same pool, like Aave's
+    ///         repayWithATokens: the pool burns the shares and clears the debt they are worth, so no cash moves
+    ///         and it works at any utilisation. Debt falls by exactly the value the collateral loses, and that
+    ///         collateral counts at LTV and LT below 100%, so the position can only improve: no price is needed.
+    /// @param amount Debt to repay at most; `type(uint256).max` repays as much as the posted shares cover.
+    /// @dev The account or its operator only. Leaving debt with no collateral at all would create bad debt
+    ///      that only a final liquidation writes off, so that case reverts.
+    function repayWithCollateral(address account, uint256 marketId, uint256 collateralId, uint256 amount)
+        external
+        nonReentrant
+        onlyOperatorOf(account)
+        returns (uint256 repaid, uint256 sharesBurned)
+    {
+        Market storage m = _market(marketId);
+        CollateralConfig storage c = _collateral(collateralId);
+        if (c.isRemote || !c.isShare || c.token != address(m.pool)) revert InvalidCollateral();
+        if (amount == 0) revert ZeroAmount();
+        uint256 posted = collateralBalance[account][collateralId];
+        if (posted == 0) revert InsufficientBalance();
+        m.pool.accrueInterest();
+        if (m.pool.borrowBalanceStored(account) == 0) revert NothingToRepay();
+        (repaid, sharesBurned) = m.pool.repayWithShares(account, posted, amount);
+        _debit(account, collateralId, sharesBurned);
+        if (!_hasCollateral(account) && _hasDebt(account)) revert WouldLeaveBadDebt();
+        emit RepaidWithCollateral(account, marketId, collateralId, repaid, sharesBurned);
     }
 
     /// @notice Liquidates an account with health factor < 1.
@@ -539,6 +575,21 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         return false;
     }
 
+    function _hasDebt(address account) internal view returns (bool) {
+        for (uint256 i = 0; i < _markets.length; i++) {
+            if (_markets[i].pool.borrowBalanceStored(account) != 0) return true;
+        }
+        return false;
+    }
+
+    /// Asset of a listed market pool; reverts for any other address.
+    function _poolAsset(address pool) internal view returns (address) {
+        for (uint256 i = 0; i < _markets.length; i++) {
+            if (address(_markets[i].pool) == pool) return _markets[i].pool.asset();
+        }
+        revert InvalidCollateral();
+    }
+
     function _writeOffDebt(address account) internal {
         for (uint256 i = 0; i < _markets.length; i++) {
             uint256 amount = _markets[i].pool.writeOff(account);
@@ -581,7 +632,8 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
             uint256 v = _valueOf(c, balance, mode);
             value += v;
             adjusted += v * c.ltBps / BPS;
-            limit += v * c.ltvBps / BPS;
+            // Disabled collateral keeps backing existing debt (health) but supports no new borrowing.
+            if (c.enabled) limit += v * c.ltvBps / BPS;
         }
     }
 

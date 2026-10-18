@@ -10,9 +10,12 @@ import {PToken} from "./PToken.sol";
 import {VaultManager} from "./VaultManager.sol";
 
 /// @title LeverageManager
-/// @notice 1-click MUSD → pMUSD yield loop in a single transaction using the pool's own flash loan:
+/// @notice 1-click MUSD → pMUSD supply loop in a single transaction using the pool's own flash loan:
 ///         flash borrow → supply → post pMUSD as collateral → borrow against it → repay flash.
-///         `unwind` reverses it. VaultManager enforces LTV, so an over-levered loop simply reverts.
+///         `unwind` nets the debt against the posted pMUSD inside the pool (VaultManager.repayWithCollateral),
+///         so it needs no flash loan or idle cash. VaultManager enforces LTV, so an over-levered loop reverts.
+///         Supply and debt are in the same pool, so the loop's carry is negative by construction (suppliers
+///         earn borrow rate × utilisation × (1 − reserve factor)); it exists for transparent leverage, not yield.
 /// @dev Users must approve MUSD to this contract and `VaultManager.setOperator(this, true)`.
 ///      Holds no funds between transactions.
 contract LeverageManager is IERC3156FlashBorrower, ReentrancyGuard {
@@ -23,11 +26,6 @@ contract LeverageManager is IERC3156FlashBorrower, ReentrancyGuard {
     /// Hard ceiling as a sanity bound; the real limit is the collateral LTV (80% ⇒ 5×).
     uint256 public constant MAX_LEVERAGE = 10e18;
 
-    enum Action {
-        Loop,
-        Unwind
-    }
-
     VaultManager public immutable vaultManager;
     PToken public immutable pool;
     IERC20 public immutable asset;
@@ -37,10 +35,9 @@ contract LeverageManager is IERC3156FlashBorrower, ReentrancyGuard {
     /// Set only for the duration of our own flash loan, so callbacks cannot be triggered externally.
     bool private _inFlash;
     uint256 private _lastShares;
-    uint256 private _lastOut;
-    uint256 private _lastSharesReturned;
 
     event Looped(address indexed account, uint256 principal, uint256 leverage, uint256 shares, uint256 debt);
+    /// @param repaid Debt repaid with posted pMUSD; @param shares pMUSD withdrawn after that;
     /// @param out MUSD paid out; @param sharesReturned pMUSD returned because the pool lacked the cash for them.
     event Unwound(address indexed account, uint256 repaid, uint256 shares, uint256 out, uint256 sharesReturned);
 
@@ -48,8 +45,8 @@ contract LeverageManager is IERC3156FlashBorrower, ReentrancyGuard {
     error SlippageExceeded();
     error UnauthorizedCallback();
     error ZeroAmount();
+    error InvalidConfig();
     error RefundFailed();
-    error InsufficientLiquidity();
 
     constructor(VaultManager vaultManager_, PToken pool_, uint256 marketId_, uint256 collateralId_) {
         vaultManager = vaultManager_;
@@ -57,6 +54,12 @@ contract LeverageManager is IERC3156FlashBorrower, ReentrancyGuard {
         asset = IERC20(pool_.asset());
         marketId = marketId_;
         collateralId = collateralId_;
+        // The ids must name this pool's market and its own shares as hub collateral.
+        VaultManager.CollateralConfig memory c = vaultManager_.collaterals(collateralId_);
+        if (
+            address(vaultManager_.markets(marketId_).pool) != address(pool_) || c.isRemote || !c.isShare
+                || c.token != address(pool_)
+        ) revert InvalidConfig();
     }
 
     /// @param principal User equity in the pool's asset.
@@ -75,15 +78,16 @@ contract LeverageManager is IERC3156FlashBorrower, ReentrancyGuard {
         asset.safeTransferFrom(msg.sender, address(this), principal);
 
         uint256 fee = pool.flashFee(address(asset), flashAmount);
-        _flash(flashAmount, abi.encode(Action.Loop, msg.sender, principal, minShares));
+        _flash(flashAmount, abi.encode(msg.sender, principal, minShares));
         shares = _lastShares;
         debt = flashAmount + fee;
         emit Looped(msg.sender, principal, leverage, shares, debt);
         _refund(spent);
     }
 
-    /// @param repayAmount Debt to repay via flash loan; `type(uint256).max` repays all debt in this market.
-    /// @param shares pToken collateral to withdraw; `type(uint256).max` withdraws all of it.
+    /// @param repayAmount Debt to repay with posted pMUSD; `type(uint256).max` repays all debt in this market,
+    ///        0 repays nothing (withdraw only).
+    /// @param shares pMUSD to withdraw after the repayment; `type(uint256).max` withdraws all that is left.
     /// @param minOut Minimum equity returned to the caller, in MUSD: cash paid out plus returned pMUSD at its
     ///        redemption value.
     /// @return out MUSD paid out.
@@ -95,13 +99,24 @@ contract LeverageManager is IERC3156FlashBorrower, ReentrancyGuard {
         returns (uint256 out, uint256 sharesReturned)
     {
         uint256 spent = _pushPrices(priceUpdate);
-        if (repayAmount == type(uint256).max) repayAmount = pool.borrowBalanceCurrent(msg.sender);
+        // Netting debt against pMUSD burns both inside the pool: no flash loan, no fee, no idle cash needed.
+        uint256 repaid;
+        if (repayAmount > 0 && pool.borrowBalanceCurrent(msg.sender) > 0) {
+            (repaid,) = vaultManager.repayWithCollateral(msg.sender, marketId, collateralId, repayAmount);
+        }
         if (shares == type(uint256).max) shares = vaultManager.collateralBalance(msg.sender, collateralId);
-        if (repayAmount == 0 || shares == 0) revert ZeroAmount();
-
-        _flash(repayAmount, abi.encode(Action.Unwind, msg.sender, shares, minOut));
-        (out, sharesReturned) = (_lastOut, _lastSharesReturned);
-        emit Unwound(msg.sender, repayAmount, shares, out, sharesReturned);
+        if (shares == 0 && repaid == 0) revert ZeroAmount();
+        if (shares > 0) {
+            // Reverts if the remaining position would exceed its borrow limit.
+            vaultManager.withdrawCollateralFor(msg.sender, collateralId, shares, address(this), new bytes[](0));
+            // Redeem what idle cash can pay; the rest of the equity stays in pMUSD, still earning.
+            uint256 redeemed = Math.min(shares, pool.maxRedeem(address(this)));
+            if (redeemed > 0) out = pool.redeem(redeemed, msg.sender, address(this));
+            sharesReturned = shares - redeemed;
+            if (sharesReturned > 0) IERC20(address(pool)).safeTransfer(msg.sender, sharesReturned);
+        }
+        if (out + pool.convertToAssets(sharesReturned) < minOut) revert SlippageExceeded();
+        emit Unwound(msg.sender, repaid, shares, out, sharesReturned);
         _refund(spent);
     }
 
@@ -112,9 +127,8 @@ contract LeverageManager is IERC3156FlashBorrower, ReentrancyGuard {
         if (!_inFlash || msg.sender != address(pool) || initiator != address(this) || token != address(asset)) {
             revert UnauthorizedCallback();
         }
-        (Action action, address account, uint256 a, uint256 b) = abi.decode(data, (Action, address, uint256, uint256));
-        if (action == Action.Loop) _onLoop(account, amount, fee, a, b);
-        else _onUnwind(account, amount, fee, a, b);
+        (address account, uint256 principal, uint256 minShares) = abi.decode(data, (address, uint256, uint256));
+        _onLoop(account, amount, fee, principal, minShares);
         asset.forceApprove(address(pool), amount + fee);
         return CALLBACK_SUCCESS;
     }
@@ -129,27 +143,6 @@ contract LeverageManager is IERC3156FlashBorrower, ReentrancyGuard {
         // Borrow exactly what the flash loan needs back; VaultManager reverts if this breaks the LTV.
         vaultManager.borrowFor(account, marketId, amount + fee, address(this), new bytes[](0));
         _lastShares = shares;
-    }
-
-    function _onUnwind(address account, uint256 amount, uint256 fee, uint256 shares, uint256 minOut) internal {
-        asset.forceApprove(address(vaultManager), amount);
-        vaultManager.repay(marketId, amount, account);
-        // Reverts if the remaining position would exceed its borrow limit.
-        vaultManager.withdrawCollateralFor(account, collateralId, shares, address(this), new bytes[](0));
-        // Redeem only what idle cash can pay: the whole collateral (debt + equity) can exceed the pool's cash
-        // at moderate utilisation, while the flash repayment never does. Unpaid equity stays in pMUSD.
-        uint256 redeemed = Math.min(shares, pool.maxRedeem(address(this)));
-        if (redeemed > 0) pool.redeem(redeemed, address(this), address(this));
-        uint256 balance = asset.balanceOf(address(this));
-        uint256 owed = amount + fee;
-        if (balance < owed) revert InsufficientLiquidity();
-        uint256 out = balance - owed;
-        uint256 returned = shares - redeemed;
-        if (out + pool.convertToAssets(returned) < minOut) revert SlippageExceeded();
-        if (out > 0) asset.safeTransfer(account, out);
-        if (returned > 0) IERC20(address(pool)).safeTransfer(account, returned);
-        _lastOut = out;
-        _lastSharesReturned = returned;
     }
 
     function _flash(uint256 amount, bytes memory data) internal {

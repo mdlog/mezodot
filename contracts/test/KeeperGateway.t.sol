@@ -101,4 +101,14 @@ contract KeeperGatewayTest is CrossChainFixture {
         assertEq(keeper.balance, 1 ether - 4);
         assertEq(address(gateway).balance, 0);
     }
+
+    /// Review: BTC sent to the gateway outside a liquidation used to be excluded from every refund, forever.
+    function test_strayBtcIsNotStuck() public {
+        _underwaterLocal();
+        vm.deal(address(gateway), 0.5 ether); // e.g. a BTC precompile transfer by mistake
+        vm.prank(keeper);
+        gateway.triggerLiquidation(alice, musdMarket, 1_000e18, pMezoCollateral, 0, bytes32(0), noUpdates());
+        assertEq(keeper.balance, 0.5 ether);
+        assertEq(address(gateway).balance, 0);
+    }
 }
