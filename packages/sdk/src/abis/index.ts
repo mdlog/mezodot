@@ -9,3 +9,4 @@ export { wormholeAbi } from './wormholeAbi';
 export { interestRateModelAbi } from './interestRateModelAbi';
 export { mockPythAbi } from './mockPythAbi';
 export { supraPullAbi } from './supraPullAbi';
+export { priceSourceAbi } from './priceSourceAbi';

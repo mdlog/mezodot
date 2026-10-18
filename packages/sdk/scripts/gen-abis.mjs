@@ -21,6 +21,7 @@ const CONTRACTS = {
   InterestRateModel: 'interestRateModelAbi',
   MockPyth: 'mockPythAbi',
   'SupraSource:ISupraOraclePull': 'supraPullAbi',
+  IPriceSource: 'priceSourceAbi',
 };
 
 mkdirSync(target, { recursive: true });

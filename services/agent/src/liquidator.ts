@@ -6,6 +6,7 @@ import {
   PRICE_SYMBOLS,
   keeperGatewayAbi,
   oracleRouterAbi,
+  pricesAfterUpdate,
   readPosition,
   readProtocol,
   riskCheckSymbols,
@@ -21,7 +22,7 @@ import {
   type ProtocolState,
 } from '@mezodot/sdk';
 import type { Context } from './context';
-import { OracleRelay } from './oracle/relay';
+import { OracleRelay, relayCanServe } from './oracle/relay';
 import { JsonStore } from './store';
 
 export type { UsdPrices };
@@ -212,11 +213,11 @@ export class Liquidator {
       else this.ctx.log('liquidator', 'position read failed', { account: accounts[i], error: errorLine(r.reason) });
     });
     const symbols = PRICE_SYMBOLS.filter((s) => positions.some((p) => riskCheckSymbols(protocol, p).includes(s)));
-    const { oracle, prices } = await this.relay.pricing(symbols).catch(async (err: unknown) => {
+    const { oracle, prices } = await this.keeperPricing(symbols).catch(async (err: unknown) => {
       // Pull prices down (e.g. Supra unreachable): keep going with what the router already accepts.
       this.ctx.log('liquidator', 'pull prices unavailable', { error: errorLine(err) });
       const oracle = await this.relay.oracle();
-      return { oracle, prices: usablePrices(oracle) };
+      return { oracle, prices: usablePrices(oracle), updates: [] as Hex[] };
     });
     const evaluations = positions.map((p) => evaluateAccount(protocol, p, prices, inventory));
     this.lastEvaluations = evaluations;
@@ -224,11 +225,20 @@ export class Liquidator {
     return { protocol, evaluations, oracle };
   }
 
-  /** Pull updates a liquidation of `e` must attach right now (cached by the relay for a few seconds). */
+  /**
+   * Prices a liquidation sees after attaching every pull update the relay can serve for `symbols`. A keeper
+   * posts the newest proof itself, so a stored but outdated pull price must not hide a liquidatable account.
+   */
+  async keeperPricing(symbols: PriceSymbol[]): Promise<{ oracle: OracleState; prices: UsdPrices; updates: Hex[] }> {
+    const oracle = await this.relay.oracle();
+    const servable = symbols.filter((s) => relayCanServe(oracle[s], this.ctx.config.env));
+    const update = servable.length > 0 ? await this.relay.update(servable) : { updates: [], prices: {}, missing: [] };
+    return { oracle, prices: pricesAfterUpdate(oracle, update.prices), updates: update.updates };
+  }
+
+  /** Pull updates a liquidation of `e` attaches (the relay caches proofs for a few seconds). */
   async updatesFor(e: AccountEvaluation): Promise<Hex[]> {
-    const { update, unpriced } = await this.relay.pricing(e.symbols);
-    if (unpriced.length > 0) throw new Error(`No acceptable price for ${unpriced.join(', ')}`);
-    return update.updates;
+    return (await this.keeperPricing(e.symbols)).updates;
   }
 
   private async inventory(protocol: ProtocolState): Promise<Record<number, bigint>> {

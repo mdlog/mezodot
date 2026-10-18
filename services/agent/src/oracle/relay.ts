@@ -39,6 +39,10 @@ const supraPair = (s: OracleStatus): number | null => {
   return leg ? Number(BigInt(leg.id)) : null;
 };
 
+/** Whether the relay can refresh `s`: any key with a Supra leg; on the devnet also mocked Pyth primaries. */
+export const relayCanServe = (s: OracleStatus, env: string): boolean =>
+  supraPair(s) !== null || (env === 'devnet' && s.feed?.primary.source === SOURCE_TAG.PYTH);
+
 export type Pricing = {
   oracle: OracleState;
   /** Pull updates the transaction must attach. */

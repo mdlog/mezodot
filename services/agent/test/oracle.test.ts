@@ -30,10 +30,12 @@ function fakeClient(blockTime: bigint, calls: string[] = []) {
   const symbolOf = (key: Hex) => PRICE_SYMBOLS.find((s) => PRICE_KEYS[s] === key)!;
   return {
     readContract: async ({ functionName, args }: { functionName: string; args: [Hex] }) => {
-      const s = symbolOf(args[0]);
+      const s = functionName === 'sources' || functionName === 'latest' ? 'MUSD' : symbolOf(args[0]);
       if (functionName === 'feeds') return { ...FEEDS[s], maxConfBps: 500, maxDivergenceBps: 150 };
       if (functionName === 'getPriceInfo') return s === 'MUSD' ? [true, 10n ** 18n, blockTime + 3_000n] : [false, 0n, 0n];
       if (functionName === 'getPriceUnsafe') return [0n, 0n];
+      if (functionName === 'sources') return `0x${String(args[0]).padStart(40, '0')}`;
+      if (functionName === 'latest') return [0n, 0n, 0n];
       throw new Error(functionName);
     },
     simulateContract: async ({ functionName, args }: { functionName: string; args: [Hex] }) => {
@@ -143,6 +145,7 @@ describe('oracle health', () => {
     validUntil: 0,
     lastPrice: 0n,
     publishTime: 0,
+    legs: [],
     ...s,
   });
   const supra = { source: SOURCE_TAG.SUPRA, maxAge: 120, id: pair(19) };
@@ -176,6 +179,7 @@ describe('Pyth pusher plan (only with PYTH_API_KEY)', () => {
     validUntil: 0,
     lastPrice: 10n ** 18n,
     publishTime: 0,
+    legs: [],
     ...s,
   });
 

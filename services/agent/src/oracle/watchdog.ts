@@ -1,6 +1,6 @@
 import { PRICE_SYMBOLS, SOURCE_TAG, type FeedLeg, type OracleState, type PriceSymbol } from '@mezodot/sdk';
 import type { Context } from '../context';
-import type { OracleRelay } from './relay';
+import { relayCanServe, type OracleRelay } from './relay';
 
 /** A feed is "expiring" once less than this share of its longest max age remains. */
 const EXPIRING_SHARE = 0.2;
@@ -75,11 +75,7 @@ export class OracleWatchdog {
   async check(): Promise<OracleHealth> {
     try {
       const oracle = await this.relay.oracle();
-      const devnet = this.ctx.config.env === 'devnet';
-      const health = oracleHealth(oracle, Math.floor(this.now() / 1000), (s) => {
-        const legs = [oracle[s].feed?.primary, oracle[s].feed?.secondary];
-        return legs.some((l) => l?.source === SOURCE_TAG.SUPRA) || (devnet && oracle[s].feed?.primary.source === SOURCE_TAG.PYTH);
-      });
+      const health = oracleHealth(oracle, Math.floor(this.now() / 1000), (s) => relayCanServe(oracle[s], this.ctx.config.env));
       for (const f of health.feeds) {
         const before = this.last?.feeds.find((x) => x.symbol === f.symbol)?.status;
         if (before !== f.status && (f.status === 'expiring' || f.status === 'unavailable' || before === 'unavailable')) {

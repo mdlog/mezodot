@@ -9,11 +9,15 @@ import {
   fetchPriceUpdate,
   fetchSupraProof,
   positionSymbols,
+  pricesAfterUpdate,
+  readOracle,
   riskCheckSymbols,
   staleSymbols,
   tagUpdate,
   usablePrices,
   verifySupraProof,
+  type HubDeployment,
+  type LegState,
   type OracleState,
   type OracleStatus,
   type PositionState,
@@ -126,6 +130,7 @@ describe('price selection', () => {
     validUntil: 0,
     lastPrice: 0n,
     publishTime: 0,
+    legs: [],
     ...s,
   });
   const oracle: OracleState = {
@@ -189,5 +194,80 @@ describe('price selection', () => {
     expect(riskCheckSymbols(protocol, p)).toEqual([]);
     expect(riskCheckSymbols(protocol, p, 'MUSD')).toEqual(['MUSD', 'ETH']);
     expect(positionSymbols(protocol, p)).toEqual(['ETH']); // what it holds, for display
+  });
+});
+
+describe('prices after attaching pull updates (keepers)', () => {
+  const E18 = 10n ** 18n;
+  const leg = (source: number, usable: boolean, price = 0n): LegState => ({ source, maxAge: 120, id: '0x01', price, conf: 0n, publishTime: 0, usable });
+  const st = (symbol: PriceSymbol, legs: LegState[], price: bigint): OracleStatus => ({
+    symbol,
+    feed: { primary: legs[0], secondary: legs[1] ?? null, maxConfBps: 200, maxDivergenceBps: 150 },
+    ok: price > 0n,
+    price,
+    validUntil: 0,
+    lastPrice: price,
+    publishTime: 0,
+    legs,
+  });
+  const oracle: OracleState = {
+    // devnet: Pyth primary refreshed by the relay itself
+    MUSD: st('MUSD', [leg(1, true, E18)], E18),
+    MEZO: st('MEZO', [leg(1, false)], 0n),
+    // Pyth ETH never pushed: the Supra secondary (stored at $3,200) is what the router selects
+    ETH: st('ETH', [leg(1, false), leg(2, true, 3_200n * E18)], 3_200n * E18),
+    // Pyth USDC fresh (Mezo's push): it stays selected whatever Supra says
+    USDC: st('USDC', [leg(1, true, E18), leg(2, false)], E18),
+  };
+
+  it('a fresh price counts only where the router would select the refreshed leg', () => {
+    const fresh = {
+      MUSD: { price: 0.99, publishTime: 1, source: 'pyth' as const },
+      ETH: { price: 2_800, publishTime: 1, source: 'supra' as const },
+      USDC: { price: 0.97, publishTime: 1, source: 'supra' as const },
+    };
+    expect(pricesAfterUpdate(oracle, fresh)).toEqual({ MUSD: 0.99, ETH: 2_800, USDC: 1 });
+    expect(pricesAfterUpdate(oracle, {})).toEqual({ MUSD: 1, ETH: 3_200, USDC: 1 });
+  });
+});
+
+describe('readOracle', () => {
+  it('reads every leg through its source and marks the usable ones', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const key = (s: PriceSymbol) => PRICE_KEYS[s];
+    const SOURCES: Record<number, `0x${string}`> = { 1: '0x00000000000000000000000000000000000000a1', 2: '0x00000000000000000000000000000000000000a2' };
+    const feeds: Record<string, unknown> = {
+      [key('ETH')]: {
+        primary: { source: 1, maxAge: 120, id: '0xe7' },
+        secondary: { source: 2, maxAge: 120, id: '0x13' },
+        maxConfBps: 200,
+        maxDivergenceBps: 150,
+      },
+    };
+    const none = { primary: { source: 0, maxAge: 0, id: '0x00' }, secondary: { source: 0, maxAge: 0, id: '0x00' }, maxConfBps: 0, maxDivergenceBps: 0 };
+    const client = {
+      readContract: async ({ address, functionName, args }: { address: string; functionName: string; args: unknown[] }) => {
+        if (functionName === 'feeds') return feeds[args[0] as string] ?? none;
+        if (functionName === 'getPriceInfo') return args[0] === key('ETH') ? [true, 2_400n * 10n ** 18n, BigInt(now + 100)] : [false, 0n, 0n];
+        if (functionName === 'getPriceUnsafe') return args[0] === key('ETH') ? [2_400n * 10n ** 18n, BigInt(now - 20)] : [0n, 0n];
+        if (functionName === 'sources') return SOURCES[args[0] as number];
+        if (functionName === 'latest') {
+          // Pyth leg: 2 h old (unusable); Supra leg: 20 s old (usable)
+          if (address === SOURCES[1]) return [2_390n * 10n ** 18n, 0n, BigInt(now - 7_200)];
+          return [2_400n * 10n ** 18n, 0n, BigInt(now - 20)];
+        }
+        throw new Error(functionName);
+      },
+    } as unknown as PublicClient;
+    const hub = { contracts: { oracleRouter: '0x0000000000000000000000000000000000000003' } } as unknown as HubDeployment;
+    const o = await readOracle(client, hub);
+    expect(o.ETH.ok).toBe(true);
+    expect(o.ETH.legs.map((l) => [l.source, l.usable])).toEqual([
+      [1, false],
+      [2, true],
+    ]);
+    expect(o.ETH.legs[1].price).toBe(2_400n * 10n ** 18n);
+    expect(o.MUSD.feed).toBeNull();
+    expect(o.MUSD.legs).toEqual([]);
   });
 });

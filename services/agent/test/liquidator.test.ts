@@ -195,6 +195,48 @@ describe('liquidator against RPC limits and fees (final review I4 / M3 / M8)', (
     expect(liq.store.get().cursor).toBe(25_001n);
   });
 
+  it('values with the prices a liquidation will post, not an outdated stored pull price', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const leg = (source: number, usable: boolean, price: bigint) => ({ source, maxAge: 120, id: '0x13' as const, price, conf: 0n, publishTime: 0, usable });
+    const status = (symbol: string, legs: ReturnType<typeof leg>[], price: bigint) => ({
+      symbol,
+      feed: { primary: legs[0], secondary: legs[1] ?? null, maxConfBps: 200, maxDivergenceBps: 150 },
+      ok: true,
+      price,
+      validUntil: 0,
+      lastPrice: price,
+      publishTime: 0,
+      legs,
+    });
+    // Stored Supra ETH is still fresh at $3,200 but the latest proof says $2,800 (Pyth ETH never pushed).
+    const oracle = {
+      MUSD: status('MUSD', [leg(1, true, E18)], E18),
+      MEZO: status('MEZO', [leg(1, true, E18 / 100n)], E18 / 100n),
+      ETH: status('ETH', [leg(1, false, 0n), leg(2, true, 3_200n * E18)], 3_200n * E18),
+      USDC: status('USDC', [leg(1, true, E18), leg(2, false, 0n)], E18),
+    };
+    const asked: string[][] = [];
+    const relay = {
+      oracle: async () => oracle,
+      update: async (symbols: string[]) => (
+        asked.push(symbols),
+        { updates: ['0x02aa'], prices: { ETH: { price: 2_800, publishTime: 1, source: 'supra' } }, missing: [] }
+      ),
+    };
+    const ctx = { config: { stateDir: mkdtempSync(join(tmpdir(), 'mezodot-liq-')), env: 'testnet' }, hub: {}, spokes: [], log: () => {} };
+    const liq = new Liquidator(ctx as never, relay as never);
+    const { prices, updates } = await liq.keeperPricing(['MUSD', 'ETH']);
+    expect(asked).toEqual([['ETH']]); // MUSD is a Pyth push feed on testnet: nothing to pull
+    expect(prices.ETH).toBe(2_800);
+    expect(updates).toEqual(['0x02aa']);
+    const e = evaluateAccount(protocol, position(E18, 2_350n * E18), prices);
+    expect(e.healthFactor).toBeLessThan(1); // at the stored $3,200 it would look healthy (HF 1.09)
+    expect(e.plan).not.toBeNull();
+  });
+
   it('pays the Wormhole message fee when seizing remote collateral', async () => {
     const { Liquidator } = await import('../src/liquidator');
     const { mkdtempSync } = await import('node:fs');

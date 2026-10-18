@@ -1,5 +1,5 @@
 import { concatHex, encodeAbiParameters, toHex, type Address, type Hex, type PublicClient } from 'viem';
-import { oracleRouterAbi, supraPullAbi } from './abis';
+import { oracleRouterAbi, priceSourceAbi, supraPullAbi } from './abis';
 import type { HubDeployment } from './deployments';
 import { PRICE_KEYS, PRICE_SYMBOLS, symbolForPriceKey, type PositionState, type PriceSymbol, type ProtocolState } from './reader';
 import type { UsdPrices } from './valuation';
@@ -26,6 +26,8 @@ export const tagUpdate = (tag: SourceTag, payload: Hex): Hex => concatHex([toHex
 
 export type FeedLeg = { source: number; maxAge: number; id: Hex };
 export type OracleFeed = { primary: FeedLeg; secondary: FeedLeg | null; maxConfBps: number; maxDivergenceBps: number };
+/** A leg's stored value, read from its source; `usable` applies the router's age and confidence rules. */
+export type LegState = FeedLeg & { price: bigint; conf: bigint; publishTime: number; usable: boolean };
 
 export type OracleStatus = {
   symbol: PriceSymbol;
@@ -40,13 +42,31 @@ export type OracleStatus = {
   /** Newest stored value across the legs, without freshness checks (views only), and its publish time. */
   lastPrice: bigint;
   publishTime: number;
+  /** Primary then secondary leg (empty when unconfigured). */
+  legs: LegState[];
 };
 
 export type OracleState = Record<PriceSymbol, OracleStatus>;
 
-/** Reads feed config, strict availability and the last stored value for every price symbol. */
+const BPS = 10_000n;
+
+/** Reads feed config, strict availability, every leg's stored value and the last value for each symbol. */
 export async function readOracle(client: PublicClient, hub: HubDeployment): Promise<OracleState> {
   const address = hub.contracts.oracleRouter;
+  const nowSec = BigInt(Math.floor(Date.now() / 1000));
+  const sourceAddress = new Map<number, Promise<Address>>();
+  const sourceOf = (tag: number) => {
+    if (!sourceAddress.has(tag)) sourceAddress.set(tag, client.readContract({ address, abi: oracleRouterAbi, functionName: 'sources', args: [tag] }));
+    return sourceAddress.get(tag)!;
+  };
+  const readLeg = async (leg: FeedLeg, maxConfBps: number): Promise<LegState> => {
+    const [price, conf, publishTime] = await client
+      .readContract({ address: await sourceOf(leg.source), abi: priceSourceAbi, functionName: 'latest', args: [leg.id] })
+      .catch(() => [0n, 0n, 0n] as const); // the router treats a reverting source as missing too
+    const age = nowSec > publishTime ? nowSec - publishTime : 0n;
+    const usable = price > 0n && publishTime > 0n && age <= BigInt(leg.maxAge) && conf * BPS <= price * BigInt(maxConfBps);
+    return { ...leg, price, conf, publishTime: Number(publishTime), usable };
+  };
   const rows = await Promise.all(
     PRICE_SYMBOLS.map(async (symbol): Promise<OracleStatus> => {
       const key = PRICE_KEYS[symbol];
@@ -58,14 +78,17 @@ export async function readOracle(client: PublicClient, hub: HubDeployment): Prom
       const leg = (l: { source: number; maxAge: number; id: Hex }): FeedLeg | null =>
         l.source === 0 ? null : { source: l.source, maxAge: l.maxAge, id: l.id };
       const primary = leg(feed.primary);
+      const secondary = leg(feed.secondary);
+      const legs = await Promise.all([primary, secondary].filter((l): l is FeedLeg => l !== null).map((l) => readLeg(l, feed.maxConfBps)));
       return {
         symbol,
-        feed: primary ? { primary, secondary: leg(feed.secondary), maxConfBps: feed.maxConfBps, maxDivergenceBps: feed.maxDivergenceBps } : null,
+        feed: primary ? { primary, secondary, maxConfBps: feed.maxConfBps, maxDivergenceBps: feed.maxDivergenceBps } : null,
         ok,
         price,
         validUntil: Number(validUntil),
         lastPrice,
         publishTime: Number(publishTime),
+        legs,
       };
     }),
   );
@@ -119,6 +142,24 @@ export function usablePrices(oracle: OracleState, fresh: Partial<Record<PriceSym
   for (const s of PRICE_SYMBOLS) {
     if (oracle[s]?.ok) out[s] = wadToNumber(oracle[s].price);
     else if (fresh[s]) out[s] = fresh[s].price;
+  }
+  return out;
+}
+
+/**
+ * Prices a transaction sees after attaching `fresh` pull updates (what a keeper should value with).
+ * A refreshed leg changes the price only where the router would select it: it is the primary, or the
+ * primary is not usable. Elsewhere the stored strict price stands (e.g. USDC while Mezo's Pyth push
+ * is fresh). Divergence between legs is left to the transaction simulation.
+ */
+export function pricesAfterUpdate(oracle: OracleState, fresh: Partial<Record<PriceSymbol, FreshPrice>>): UsdPrices {
+  const out = usablePrices(oracle);
+  for (const s of PRICE_SYMBOLS) {
+    const f = fresh[s];
+    const primary = oracle[s]?.legs[0];
+    if (!f || !primary) continue;
+    const tag = f.source === 'supra' ? SOURCE_TAG.SUPRA : SOURCE_TAG.PYTH;
+    if (primary.source === tag || !primary.usable) out[s] = f.price;
   }
   return out;
 }
