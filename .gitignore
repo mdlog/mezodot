@@ -7,6 +7,7 @@ dist/
 contracts/out/
 contracts/cache/
 contracts/broadcast/*/31337/
+contracts/broadcast/*/31338/
 .devnet/
 services/agent/.state/
 .superpowers/
