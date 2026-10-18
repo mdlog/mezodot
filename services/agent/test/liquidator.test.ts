@@ -296,6 +296,7 @@ describe('keeper liveness (audit r2-keeper-liveness)', () => {
     let receiptStatus = 'success';
     const client = {
       readContract: async ({ functionName }: { functionName: string }) => (functionName === 'allowance' ? 10n ** 30n : 0n),
+      estimateContractGas: async () => 100_000n,
       simulateContract: async () => ({ result: 123n, request: { functionName: 'triggerLiquidation', address: '0x02', args: [] } }),
       waitForTransactionReceipt: async () => ({ status: receiptStatus }),
     };

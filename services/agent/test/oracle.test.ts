@@ -256,6 +256,7 @@ describe('Pyth pusher entitlements (a real key: ETH/USDC entitled, MUSD/MEZO 403
       hub: {
         client: {
           readContract: async () => 0n,
+          estimateContractGas: async () => 100_000n,
           simulateContract: async ({ args }: { args: unknown[] }) => ({ request: { args } }),
           waitForTransactionReceipt: async () => ({ status: 'success' }),
         },

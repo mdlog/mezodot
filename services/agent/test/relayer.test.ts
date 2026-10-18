@@ -171,6 +171,7 @@ describe('relayer scanning and delivery (audit: agent)', () => {
       getBlockNumber: async () => 0n,
       getContractEvents: async () => [],
       readContract: async () => false, // not consumed yet
+      estimateContractGas: async () => 100_000n,
       waitForTransactionReceipt: async () => ({ status: 'reverted' }),
     };
     const spokeClient = { getBlockNumber: async () => 0n, getContractEvents: async () => [] };
@@ -207,5 +208,76 @@ describe('relayer scanning and delivery (audit: agent)', () => {
     expect(m.status).toBe('ready');
     expect(m.attempts).toBe(1);
     expect(m.lastError).toMatch(/reverted/);
+  });
+});
+
+describe('gas buffer on Mezo (testnet: a redeem estimated exactly ran out of gas)', () => {
+  it('relayer deliveries carry the node estimate plus the buffer', async () => {
+    const { Relayer } = await import('../src/relayer');
+    const sentGas: (bigint | undefined)[] = [];
+    const hubClient = {
+      getBlockNumber: async () => 0n,
+      getContractEvents: async () => [],
+      readContract: async () => false,
+      estimateContractGas: async () => 100_000n,
+      waitForTransactionReceipt: async () => ({ status: 'success' }),
+    };
+    const wallet = {
+      account: { address: '0x00000000000000000000000000000000000000ee' },
+      writeContract: async (req: { gas?: bigint }) => (sentGas.push(req.gas), '0x' + '33'.repeat(32)),
+    };
+    const spokeClient = { getBlockNumber: async () => 0n, getContractEvents: async () => [] };
+    const ctx = {
+      config: { stateDir: mkdtempSync(join(tmpdir(), 'mezodot-relayer-')), env: 'devnet', devGuardianKey: null },
+      hub: {
+        network: 'devnet-hub',
+        client: hubClient,
+        wallet,
+        deployment: {
+          startBlock: 0,
+          wormholeChainId: 50,
+          contracts: { wormholeAdapter: '0x00000000000000000000000000000000000000ad', keeperGateway: '0x00000000000000000000000000000000000000ee' },
+        },
+      },
+      spokes: [
+        {
+          network: 'base-sepolia',
+          client: spokeClient,
+          wallet: null,
+          deployment: { startBlock: 0, wormholeChainId: 10004, contracts: { spokeGateway: '0x00000000000000000000000000000000000000ab' } },
+        },
+      ],
+      log: () => {},
+    };
+    const vaa = await signDevVaa('0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6', {
+      timestamp: 1,
+      nonce: 0,
+      emitterChain: 10004,
+      emitter: '0x00000000000000000000000000000000000000ab',
+      sequence: 2n,
+      consistencyLevel: 1,
+      payload: '0xbeef',
+    });
+    const relayer = new Relayer(ctx as never, fetch, () => 0);
+    relayer.store.update((s) => {
+      s.messages['g'] = {
+        id: 'g',
+        direction: 'deposit',
+        source: 'base-sepolia',
+        target: 'devnet-hub',
+        emitterChain: 10004,
+        emitter: '0x00000000000000000000000000000000000000ab',
+        sequence: 2n,
+        txHash: '0x01',
+        blockNumber: 1n,
+        status: 'ready',
+        attempts: 0,
+        observedAt: 0,
+        vaa,
+      };
+    });
+    await relayer.tick();
+    expect(sentGas).toEqual([150_000n]); // 100,000 × 1.3 + 20,000
+    expect(relayer.store.get().messages['g'].status).toBe('delivered');
   });
 });

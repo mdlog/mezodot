@@ -15,6 +15,8 @@ import {
   fetchPriceUpdate,
   fetchSignedVaa,
   getHubDeployment,
+  getSpokeDeployment,
+  NETWORKS,
   healthStatus,
   isDeployed,
   parseAmount,
@@ -158,11 +160,24 @@ describe('services', () => {
 });
 
 describe('deployments', () => {
-  it('devnet is deployed, testnet placeholders are not', () => {
+  it('each network is either a placeholder (null everywhere) or a deployment of its role', () => {
     expect(isDeployed('devnet-hub')).toBe(true);
-    expect(getHubDeployment('devnet-hub')?.contracts.vaultManager).toMatch(/^0x/);
-    expect(isDeployed('mezo-testnet')).toBe(false);
-    expect(getHubDeployment('mezo-testnet')).toBeNull();
+    for (const name of Object.keys(NETWORKS) as (keyof typeof NETWORKS)[]) {
+      const hub = getHubDeployment(name);
+      const spoke = getSpokeDeployment(name);
+      if (!isDeployed(name)) {
+        expect(hub).toBeNull();
+        expect(spoke).toBeNull();
+      } else if (NETWORKS[name].role === 'hub') {
+        expect(hub?.contracts.vaultManager).toMatch(/^0x[0-9a-fA-F]{40}$/);
+        expect(hub?.chainId).toBe(NETWORKS[name].chain.id);
+        expect(spoke).toBeNull();
+      } else {
+        expect(spoke?.contracts.spokeGateway).toMatch(/^0x[0-9a-fA-F]{40}$/);
+        expect(spoke?.chainId).toBe(NETWORKS[name].chain.id);
+        expect(hub).toBeNull();
+      }
+    }
   });
 });
 

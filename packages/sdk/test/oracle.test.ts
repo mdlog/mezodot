@@ -271,3 +271,11 @@ describe('readOracle', () => {
     expect(o.MUSD.legs).toEqual([]);
   });
 });
+
+describe('gas buffer (Mezo testnet: a redeem with limit 77,882 ran out of gas at 77,823)', () => {
+  it('adds 30% plus 20k gas to a node estimate', async () => {
+    const { gasWithBuffer } = await import('../src');
+    expect(gasWithBuffer(77_882n)).toBe(121_246n);
+    expect(gasWithBuffer(0n)).toBe(20_000n);
+  });
+});

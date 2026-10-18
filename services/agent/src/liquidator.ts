@@ -25,6 +25,7 @@ import {
 } from '@mezodot/sdk';
 import type { Context } from './context';
 import { OracleRelay, relayCanServe } from './oracle/relay';
+import { writeWithBuffer } from './tx';
 import { JsonStore } from './store';
 
 export type { UsdPrices };
@@ -258,7 +259,7 @@ export class Liquidator {
     const { client, wallet } = this.ctx.hub;
     if (!wallet || shares === 0n) return;
     try {
-      const hash = await wallet.writeContract({
+      const hash = await writeWithBuffer(client, wallet, {
         address: pToken,
         abi: pTokenAbi,
         functionName: 'redeem',
@@ -313,7 +314,7 @@ export class Liquidator {
 
     const allowance = await client.readContract({ address: market.asset, abi: erc20Abi, functionName: 'allowance', args: [wallet.account.address, gateway] });
     if (allowance < plan.repayAmount && !dryRun) {
-      const tx = await wallet.writeContract({ address: market.asset, abi: erc20Abi, functionName: 'approve', args: [gateway, maxUint256] });
+      const tx = await writeWithBuffer(client, wallet, { address: market.asset, abi: erc20Abi, functionName: 'approve', args: [gateway, maxUint256] });
       await client.waitForTransactionReceipt({ hash: tx });
     }
     const oracleFee = await client.readContract({
@@ -344,7 +345,7 @@ export class Liquidator {
       value: fee,
     });
     if (dryRun) return { simulated: result, txHash: null };
-    const txHash = await wallet.writeContract(request);
+    const txHash = await writeWithBuffer(client, wallet, request);
     const receipt = await client.waitForTransactionReceipt({ hash: txHash });
     if (receipt.status !== 'success') throw new Error(`liquidation transaction ${txHash} reverted`);
     this.ctx.log('liquidator', 'liquidated', { account: e.account, txHash, profitUsd: plan.profitUsd.toFixed(2), remote: plan.isRemote });

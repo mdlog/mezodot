@@ -2,6 +2,7 @@ import { PRICE_SYMBOLS, SOURCE_TAG, fetchPriceUpdate, oracleRouterAbi, tagUpdate
 import type { Hex } from 'viem';
 import type { Context } from '../context';
 import type { OracleRelay } from './relay';
+import { writeWithBuffer } from '../tx';
 
 /** Push feeds are refreshed once this little validity is left (≈ Mezo's hourly pusher running 50 min late). */
 const PUSH_FEED_LEAD_SEC = 900;
@@ -93,7 +94,7 @@ export class PythPusher {
       args: [tagged],
       value: fee,
     });
-    const txHash = await wallet.writeContract(request);
+    const txHash = await writeWithBuffer(client, wallet, request);
     const receipt = await client.waitForTransactionReceipt({ hash: txHash });
     if (receipt.status !== 'success') throw new Error(`Pyth push ${txHash} reverted`);
     this.lastPush = { symbols: pushed, txHash, at: now };

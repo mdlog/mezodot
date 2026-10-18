@@ -12,6 +12,7 @@ import {
   type NetworkName,
 } from '@mezodot/sdk';
 import type { Context, Wallet } from './context';
+import { writeWithBuffer } from './tx';
 import { JsonStore } from './store';
 
 export type Direction = 'deposit' | 'release';
@@ -270,14 +271,14 @@ export class Relayer {
 
   private async submit(m: RelayMessage, vaa: Hex, wallet: Wallet): Promise<Hex> {
     if (m.direction === 'deposit') {
-      return wallet.writeContract({
+      return writeWithBuffer(this.ctx.hub.client, wallet, {
         address: this.ctx.hub.deployment.contracts.keeperGateway,
         abi: keeperGatewayAbi,
         functionName: 'relayMessage',
         args: [vaa],
       });
     }
-    return wallet.writeContract({
+    return writeWithBuffer(this.clientFor(m.target), wallet, {
       address: this.spoke(m.target).deployment.contracts.spokeGateway,
       abi: spokeGatewayAbi,
       functionName: 'receiveMessage',

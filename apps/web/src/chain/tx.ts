@@ -1,7 +1,8 @@
 import { useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAccount, useConfig } from 'wagmi';
-import { switchChain, waitForTransactionReceipt, writeContract } from 'wagmi/actions';
+import { getPublicClient, switchChain, waitForTransactionReceipt, writeContract } from 'wagmi/actions';
+import { gasWithBuffer } from '@mezodot/sdk';
 import type { Hash, TransactionReceipt } from 'viem';
 import { explainError } from '../lib/errors';
 import { useUi } from '../state/UiContext';
@@ -23,7 +24,7 @@ export type TxResult = { ok: true; receipts: TransactionReceipt[] } | { ok: fals
 export function useTx() {
   const config = useConfig();
   const queryClient = useQueryClient();
-  const { chainId } = useAccount();
+  const { chainId, address } = useAccount();
   const { showToast } = useUi();
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -40,8 +41,11 @@ export function useTx() {
             await switchChain(config, { chainId: step.chainId });
             current = step.chainId;
           }
+          // Explicit gas limit: Mezo's estimates can be exact to the unit and run out in the executing block.
+          const client = getPublicClient(config, { chainId: step.chainId });
+          const gas = client && address ? gasWithBuffer(await client.estimateContractGas({ ...request, account: address })) : undefined;
           setBusy(`${step.label} — confirm in wallet`);
-          const hash: Hash = await writeContract(config, { ...request, chainId: step.chainId });
+          const hash: Hash = await writeContract(config, { ...request, chainId: step.chainId, ...(gas ? { gas } : {}) });
           setBusy(`${step.label} — waiting for confirmation`);
           const receipt = await waitForTransactionReceipt(config, { hash, chainId: step.chainId });
           if (receipt.status !== 'success') throw new Error(`${step.label} reverted`);
@@ -57,7 +61,7 @@ export function useTx() {
         void queryClient.invalidateQueries();
       }
     },
-    [chainId, config, queryClient, showToast],
+    [address, chainId, config, queryClient, showToast],
   );
 
   return { run, busy };
