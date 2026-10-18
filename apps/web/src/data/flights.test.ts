@@ -1,9 +1,20 @@
-import { describe, expect, it } from 'vitest';
-import { encodeAbiParameters, encodeEventTopics, type Address, type Hex, type Log } from 'viem';
+import { describe, expect, it, vi } from 'vitest';
+import { encodeAbiParameters, encodeEventTopics, type Address, type Hex, type Log, type PublicClient } from 'viem';
 import { spokeGatewayAbi, wormholeAdapterAbi } from '@mezodot/sdk';
 import { HUB, SPOKES } from '../chain/env';
 import type { ActivityItem } from './activity';
-import { flightId, isCurrentFlight, parseFlightStore, pendingFlightId, recoverFlights, sequenceFromLogs, serializeFlightStore, type Flight } from './flights';
+import {
+  findReleaseOutcome,
+  flightId,
+  isCurrentFlight,
+  parseFlightStore,
+  pendingFlightId,
+  recoverFlights,
+  releaseHeld,
+  sequenceFromLogs,
+  serializeFlightStore,
+  type Flight,
+} from './flights';
 
 const spoke = SPOKES.find((s) => s.deployment)!;
 const gateway = spoke.deployment!.contracts.spokeGateway;
@@ -113,6 +124,16 @@ describe('recovering flights from on-chain events', () => {
     expect(recoverFlights([item({ message: undefined })], empty, now)).toEqual([]);
     expect(recoverFlights([item({ message: { ...item().message!, emitter: OLD } })], empty, now)).toEqual([]);
   });
+
+  it('does not bring back a flight the user stopped tracking before its sequence was known (final review WEB-6)', () => {
+    // "Stop tracking" while the lock's receipt was pending dismissed the pending id; the Deposited event that the
+    // next activity scan finds names the sequence id instead.
+    const dismissedPending = { flights: [], dismissed: [pendingFlightId(TX)] };
+    expect(recoverFlights([item()], dismissedPending, now)).toEqual([]);
+    expect(recoverFlights([item({ txHash: `0x${'AB'.repeat(32)}` })], dismissedPending, now)).toEqual([]);
+    // Another transaction's message is still recovered.
+    expect(recoverFlights([item({ txHash: `0x${'cd'.repeat(32)}` })], dismissedPending, now)).toHaveLength(1);
+  });
 });
 
 describe('sequence from a source receipt', () => {
@@ -140,5 +161,64 @@ describe('sequence from a source receipt', () => {
     );
     expect(sequenceFromLogs({ direction: 'release' }, [sent])).toBe('9');
     expect(sequenceFromLogs({ direction: 'deposit' }, [sent])).toBeNull();
+  });
+});
+
+describe('a delivered release is held for a claim only if its own delivery was deferred (final review WEB-1)', () => {
+  const usdc = spoke.deployment!.tokens.USDC;
+  const weth = spoke.deployment!.tokens.WETH;
+  const claimOf = (token: Address, on = spoke) => ({ spoke: on, token });
+
+  it('does not flag a release that was delivered normally because another one waits on the same spoke', () => {
+    // A deferred 50 USDC waits on this spoke; this WETH release was delivered and transferred to the wallet.
+    expect(releaseHeld(release(), true, { deferred: false }, [claimOf(usdc)])).toBe(false);
+    // Not looked up (or not found): nothing says this release was held.
+    expect(releaseHeld(release(), true, null, [claimOf(usdc)])).toBe(false);
+  });
+
+  it('flags a release whose delivery was deferred while its token is still claimable on that spoke', () => {
+    expect(releaseHeld(release(), true, { deferred: true, token: usdc }, [claimOf(usdc)])).toBe(true);
+    expect(releaseHeld(release(), true, { deferred: true, token: usdc.toLowerCase() as Address }, [claimOf(usdc)])).toBe(true);
+    // Claimed since, a claim on another spoke, not delivered yet, or a deposit: nothing is held for this flight.
+    expect(releaseHeld(release(), true, { deferred: true, token: usdc }, [claimOf(weth)])).toBe(false);
+    expect(
+      releaseHeld(release(), true, { deferred: true, token: usdc }, [
+        claimOf(
+          usdc,
+          SPOKES.find((s) => s.name !== spoke.name)!,
+        ),
+      ]),
+    ).toBe(false);
+    expect(releaseHeld(release(), false, { deferred: true, token: usdc }, [claimOf(usdc)])).toBe(false);
+    expect(releaseHeld(deposit(), true, { deferred: true, token: usdc }, [claimOf(usdc)])).toBe(false);
+  });
+
+  it('reads the outcome from the event its delivery emitted, scanning back from the newest range', async () => {
+    const digest: Hex = `0x${'11'.repeat(32)}`;
+    const another: Hex = `0x${'22'.repeat(32)}`;
+    const events = [
+      { blockNumber: 950n, eventName: 'ReleaseDeferred', args: { vaaHash: digest, recipient: gateway, token: usdc, amount: 50n } },
+      { blockNumber: 990n, eventName: 'Released', args: { vaaHash: another, recipient: gateway, token: weth, amount: 1n } },
+    ];
+    const getLogs = vi.fn(async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) =>
+      events.filter((e) => e.blockNumber >= fromBlock && e.blockNumber <= toBlock),
+    );
+    const client = { getLogs } as unknown as Pick<PublicClient, 'getLogs'>;
+    expect(await findReleaseOutcome(client, gateway, digest, { latest: 1_000n, floor: 0n, chunk: 20n })).toEqual({ deferred: true, token: usdc });
+    // Another release's event in a newer range is skipped; the scan stops at the first match.
+    expect(getLogs.mock.calls.map(([q]) => [q.fromBlock, q.toBlock])).toEqual([
+      [981n, 1_000n],
+      [961n, 980n],
+      [941n, 960n],
+    ]);
+    expect(await findReleaseOutcome(client, gateway, another, { latest: 1_000n, floor: 0n, chunk: 20n })).toEqual({ deferred: false });
+    // Outside [floor, latest]: unknown, and nothing below the floor is read.
+    getLogs.mockClear();
+    expect(await findReleaseOutcome(client, gateway, digest, { latest: 1_000n, floor: 955n, chunk: 20n })).toBeNull();
+    expect(getLogs.mock.calls.map(([q]) => [q.fromBlock, q.toBlock])).toEqual([
+      [981n, 1_000n],
+      [961n, 980n],
+      [955n, 960n],
+    ]);
   });
 });

@@ -7,7 +7,7 @@ import { borrowSteps, postCollateralSteps, repaySteps, supplySteps, withdrawColl
 import { useTx } from '../chain/tx';
 import { borrowBlocked, postBlocked, supplyBlocked, useHubFlags } from '../data/guards';
 import { useHubClient, useProtocol, useValuedPosition, useWalletBalances } from '../data/hooks';
-import { borrowBound, exactUnits, sharePostBound, supplyBound, tightest, truncatedUnits, type Bound } from '../data/limits';
+import { borrowBound, exactUnits, sharePostBound, supplyBound, tightest, truncatedUnits, type Bound, borrowHeadroomUsd } from '../data/limits';
 import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { fmt, fmtApy, fmtHealth, money, units } from '../lib/format';
 import { assetsFor, sharesFor } from '../lib/shares';
@@ -83,7 +83,7 @@ function ActionBody({ modal }: { modal: AmountModal }) {
     const unpostMax = unpostAll
       ? assetsFor(market, postedShares)
       : floorUnits(collateral && valued ? maxWithdrawableUnits(valued, collateral.id) : 0, market.decimals);
-    const headroom = floorUnits(price > 0 ? ((valued?.availableUsd ?? 0) / price) * 0.999 : 0, market.decimals);
+    const headroom = floorUnits(price > 0 ? borrowHeadroomUsd(valued) / price : 0, market.decimals);
     // Posting is also capped by the room left under the collateral cap (in shares); MAX then posts exactly that.
     const post = collateral ? sharePostBound(market, collateral, walletShares) : { ...shareBalance, shares: walletShares };
 

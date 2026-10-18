@@ -10,6 +10,12 @@ export const SECONDS_PER_YEAR = 365 * 24 * 3600;
 export const FLASH_FEE_BPS = 9;
 /** VaultManager.CLOSE_FACTOR_BPS */
 export const CLOSE_FACTOR_BPS = 5_000;
+/**
+ * Borrowing power a withdrawal preview keeps spare, as a share of the debt that stays (1%). Prices move between the
+ * preview and inclusion (a pull proof attached at signing, or a push of up to the pusher's deviation trigger), and a
+ * withdrawal sized to end exactly at the limit reverts on the smallest move against it, however large the debt.
+ */
+export const WITHDRAW_BUFFER_BPS = 100;
 
 export type RateModel = { base: number; slope1: number; kink: number; slope2: number };
 
@@ -51,7 +57,8 @@ export const perSecondToApy = (ratePerSecondWad: bigint): number => aprToApy(per
 
 /**
  * A lending pool in token units with its InterestRateModel and reserve factor: enough to price it at any
- * projected state (see `marketPoolState` for a live market). Caps default to none.
+ * projected state. `marketPoolState` builds it for a live market as a transaction will find it, with the interest
+ * the pool accrues before it checks a cap already in `borrows` and `reserves`. Caps default to none.
  */
 export type PoolState = {
   cash: number;

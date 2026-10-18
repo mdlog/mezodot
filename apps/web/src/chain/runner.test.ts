@@ -10,6 +10,7 @@ import {
   priceUpdatesIn,
   ranOutOfGas,
   runSteps,
+  waitForBlock,
   type TxClient,
   type TxDriver,
   type TxRequest,
@@ -40,7 +41,7 @@ function fake({ estimate = 100_000n, receiptFor, startChain = HUB_CHAIN }: { est
   const switches: number[] = [];
   const explained: (TxRequest | null)[] = [];
   const client = {
-    estimateContractGas: vi.fn(async () => estimate),
+    estimateContractGas: vi.fn<(args?: unknown) => Promise<bigint>>(async () => estimate),
     waitForTransactionReceipt: vi.fn(async ({ hash, onReplaced }: { hash: Hash; onReplaced?: (r: { reason: string }) => void }) => {
       const gas = writes.find((w) => w.hash === hash)!.gas;
       return (receiptFor ?? ((h) => Promise.resolve(receipt(h, 'success'))))(hash, gas, (reason) => onReplaced?.({ reason }));
@@ -48,6 +49,8 @@ function fake({ estimate = 100_000n, receiptFor, startChain = HUB_CHAIN }: { est
     simulateContract: vi.fn(async () => {
       throw new Error('CapExceeded');
     }),
+    // Receipts land in block 7: an RPC at that head already has every step's state.
+    getBlockNumber: vi.fn<(args?: unknown) => Promise<bigint>>(async () => 7n),
   };
   const driver: TxDriver = {
     wallet: () => ({ address: ACCOUNT, chainId }),
@@ -266,5 +269,100 @@ describe('gas limits from node estimates (mezo-gas-estimate-oog)', () => {
     const outcome = await runSteps(driver, [step('Approve MUSD', HUB_CHAIN, () => approve)]);
     expect(outcome.ok).toBe(true);
     expect(writes.map((w) => w.gas)).toEqual([FALLBACK_GAS]);
+  });
+});
+
+describe('steps after one that landed wait for an RPC that has its block (final review WEB-5)', () => {
+  const approve = (log: string[]) => step('Approve MUSD', HUB_CHAIN, () => (log.push('build approve'), request('approve')));
+  const supply = (log: string[]) => step('Supply MUSD', HUB_CHAIN, () => (log.push('build supply'), request('deposit')));
+
+  it('builds and estimates the next step only once the RPC reports the block the approve landed in', async () => {
+    const { driver, client } = fake(); // receipts land in block 7
+    const log: string[] = [];
+    const heads = [7n, 6n, 6n, 7n]; // the approve's estimate, then a replica one block behind for two polls
+    client.getBlockNumber.mockImplementation(async () => {
+      const head = heads.shift() ?? 7n;
+      log.push(`head ${head}`);
+      return head;
+    });
+    client.estimateContractGas.mockImplementation(async () => (log.push('estimate'), 100_000n));
+    const outcome = await runSteps(driver, [approve(log), supply(log)], { landed: new Map([[HUB_CHAIN, 7n]]), blockPollMs: 0 });
+    expect(outcome.ok).toBe(true);
+    expect(log).toEqual(['head 7', 'build approve', 'estimate', 'head 6', 'head 6', 'head 7', 'build supply', 'estimate']);
+  });
+
+  it('remembers a head that stays below the stored block (a restarted devnet), so later runs do not wait again', async () => {
+    const { driver, client } = fake();
+    client.getBlockNumber.mockImplementation(async () => 3n); // the chain restarted below block 7
+    const landed = new Map([[HUB_CHAIN, 7n]]);
+    const outcome = await runSteps(driver, [supply([])], { landed, blockPollMs: 0 });
+    expect(outcome.ok).toBe(true);
+    // The supply landed in block 7 (the fake's receipts), above the lowered head: that is what is remembered.
+    expect(landed.get(HUB_CHAIN)).toBe(7n);
+    landed.set(HUB_CHAIN, 9n);
+    await runSteps(driver, [supply([])], { landed, blockPollMs: 0 });
+    expect(landed.get(HUB_CHAIN)).toBe(7n);
+  });
+
+  it('estimates once more when a lagging replica reverts the step after an approve, instead of failing the run', async () => {
+    const { driver, client, writes } = fake();
+    client.getBlockNumber.mockImplementation(async () => 8n);
+    let supplyEstimates = 0;
+    client.estimateContractGas.mockImplementation(async (args: unknown) => {
+      if ((args as TxRequest).functionName !== 'deposit') return 100_000n;
+      supplyEstimates++;
+      // The first answer comes from a replica without the approve's block.
+      if (supplyEstimates === 1) throw new Error('ERC20InsufficientAllowance');
+      return 100_000n;
+    });
+    const outcome = await runSteps(driver, [approve([]), supply([])], { landed: new Map(), blockPollMs: 0 });
+    expect(outcome.ok).toBe(true);
+    expect(supplyEstimates).toBe(2);
+    expect(writes.map((w) => w.functionName)).toEqual(['approve', 'deposit']);
+  });
+
+  it('fails as before when nothing landed earlier in the run, or the estimate keeps reverting', async () => {
+    const { driver, client } = fake();
+    client.getBlockNumber.mockImplementation(async () => 8n);
+    client.estimateContractGas.mockImplementation(async () => {
+      throw new Error('BorrowCapExceeded');
+    });
+    const alone = await runSteps(driver, [supply([])], { landed: new Map(), blockPollMs: 0 });
+    expect(!alone.ok && alone.error).toBe('explained: BorrowCapExceeded');
+    expect(client.estimateContractGas).toHaveBeenCalledTimes(1);
+
+    client.estimateContractGas.mockImplementation(async (args: unknown) => {
+      if ((args as TxRequest).functionName === 'deposit') throw new Error('BorrowCapExceeded');
+      return 100_000n;
+    });
+    const after = await runSteps(driver, [approve([]), supply([])], { landed: new Map(), blockPollMs: 0 });
+    expect(!after.ok && after.error).toBe('explained: BorrowCapExceeded');
+    expect(!after.ok && after.steps.map((s) => s.status)).toEqual(['done', 'not-sent']);
+  });
+
+  it('remembers the block across runs, so a retry right after a failed run reads the approve it already paid for', async () => {
+    const landed = new Map<number, bigint>();
+    const { driver, client } = fake();
+    await runSteps(driver, [approve([])], { landed, blockPollMs: 0 });
+    expect(landed.get(HUB_CHAIN)).toBe(7n);
+    // The retry's first step reads the allowance: not before the RPC reports the block the approve landed in.
+    const log: string[] = [];
+    const heads = [6n, 7n];
+    client.getBlockNumber.mockImplementation(async () => {
+      const head = heads.shift() ?? 7n;
+      log.push(`head ${head}`);
+      return head;
+    });
+    await runSteps(driver, [approve(log)], { landed, blockPollMs: 0 });
+    expect(log.slice(0, 3)).toEqual(['head 6', 'head 7', 'build approve']);
+  });
+
+  it('gives up waiting after a bounded number of polls, or at once when the RPC cannot tell', async () => {
+    const behind = { getBlockNumber: vi.fn(async () => 5n) } as unknown as TxClient;
+    expect(await waitForBlock(behind, 7n, 3, 0)).toBe(false);
+    expect(behind.getBlockNumber).toHaveBeenCalledTimes(3);
+    const failing = { getBlockNumber: vi.fn().mockRejectedValue(new Error('429')) } as unknown as TxClient;
+    expect(await waitForBlock(failing, 7n, 3, 0)).toBe(false);
+    expect(failing.getBlockNumber).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,11 +1,24 @@
-import { BPS, FLASH_FEE_BPS, extendPosition, flashFee, poolRates, poolSupplied, type AccountTotals, type PoolState, type PositionSummary } from './math';
+import {
+  BPS,
+  FLASH_FEE_BPS,
+  WITHDRAW_BUFFER_BPS,
+  extendPosition,
+  flashFee,
+  poolRates,
+  poolSupplied,
+  type AccountTotals,
+  type PoolState,
+  type PositionSummary,
+} from './math';
 
 /**
  * Previews of the one-transaction leverage products: LeverageManager (MUSD → pMUSD loop on the pool's flash
  * loan, unwound by netting the debt against the posted pMUSD) and SwapLeverageManager (a BTC long through a
- * Tigris flash swap, with no flash fee). Amounts are token units, values USD. Given `pool`, a preview prices the
- * carry at the state the position leaves the pool in and checks its liquidity and caps; given `account`, it
- * runs VaultManager's borrow check on the whole account rather than on the new position alone.
+ * Tigris flash swap, with no flash fee). Amounts are token units, values USD. Given `pool` (marketPoolState: with
+ * the interest the pool accrues before its checks), a preview prices the carry at the state the position leaves the
+ * pool in and checks its liquidity and caps; given `account`, it runs VaultManager's borrow check on the whole
+ * account rather than on the new position alone. VaultManager prices every debt strictly, so a preview that cannot
+ * price one (see `account.unpricedDebts`) reports the revert instead of a plan.
  */
 
 /** LeverageManager.MAX_LEVERAGE */
@@ -14,12 +27,26 @@ export const MAX_LOOP_LEVERAGE = 10;
 export const QUOTE_DEVIATION_BPS = 100;
 /** MUSD a BTC close raises beyond the debt, for interest accrued before the transaction lands (0.1%). */
 export const CLOSE_BUFFER_BPS = 10;
-/** Share of the computed headroom a withdrawal uses, leaving room for price moves before inclusion. */
-const WITHDRAW_MARGIN = 0.999;
+/** Largest shortfall of a Tigris quote against the oracle price at which BTC previews still plan an open (10%). */
+export const MAX_QUOTE_SHORTFALL_BPS = 1_000;
 
 const FLASH_FEE = FLASH_FEE_BPS / BPS;
 const amount = (n: number, digits = 2) => n.toLocaleString('en-US', { maximumFractionDigits: digits });
 const percent = (ratio: number) => `${(ratio * 100).toFixed(2)}%`;
+
+/**
+ * The account as VaultManager values it. `unpricedDebts` (ValuedPosition) lists debts without a usable price: the
+ * borrow check prices every debt strictly, so while it is non-empty any borrow reverts.
+ */
+export type LeverageAccount = AccountTotals & { unpricedDebts?: readonly string[] };
+
+const unpricedDebts = (account: LeverageAccount | undefined): readonly string[] => account?.unpricedDebts ?? [];
+
+/** Why no borrow can pass VaultManager's strict debt pricing right now; null when every debt has a price. */
+function debtPriceError(account: LeverageAccount | undefined, what: string): string | null {
+  const unpriced = unpricedDebts(account);
+  return unpriced.length > 0 ? `No usable ${unpriced.join(' / ')} price for your debt right now: debt is priced strictly, so ${what} would revert` : null;
+}
 
 // --- MUSD loop (LeverageManager.loop) ----------------------------------------------------------
 
@@ -33,8 +60,13 @@ export type LoopTerms = {
   /** The MUSD pool before the loop: prices the carry at the state the loop leaves and checks liquidity and caps. */
   pool?: PoolState;
   /** The account before the loop, valued like VaultManager: the borrow check and health then cover all of it. */
-  account?: AccountTotals;
-  /** USD per MUSD, to value the loop inside `account` (default 1). */
+  account?: LeverageAccount;
+  /**
+   * Usable USD price of MUSD. VaultManager prices the loop's borrow strictly, so the plan is an error without one:
+   * when this is not a positive number, or left out while `account` is given (an account valued at usable prices
+   * without MUSD among them). Left out without `account` the plan is a what-if at $1: the loop's own pMUSD and debt
+   * are both MUSD, so only the account check depends on the price.
+   */
   musdPrice?: number;
   /** pMUSD the VaultManager collateral cap still accepts, in MUSD at the exchange rate (default: uncapped). */
   collateralRoom?: number;
@@ -78,13 +110,21 @@ export type LoopPlan = {
   error: string | null;
 };
 
+/** The loop's borrow cannot be priced (no usable MUSD price, or an unpriced debt): why, else null. */
+function loopPriceError(p: Pick<LoopTerms, 'musdPrice' | 'account'>): string | null {
+  const missing = p.musdPrice !== undefined ? !(p.musdPrice > 0) : p.account !== undefined;
+  if (missing) return "No usable MUSD price right now: the loop's borrow is priced strictly and would revert";
+  return debtPriceError(p.account, "the loop's borrow");
+}
+
 /**
  * Largest principal LeverageManager.loop accepts at `leverage`: the flash loan comes out of the pool's idle cash,
  * the gross deposit must fit the supply cap and the pMUSD collateral cap, and the new debt the borrow cap. Past the
- * leverage the pMUSD supports on its own, the account's spare borrowing power bounds it too.
+ * leverage the pMUSD supports on its own, the account's spare borrowing power bounds it too. 0 while the borrow
+ * cannot be priced (see LoopTerms.musdPrice).
  */
 export function maxLoopPrincipal(leverage: number, terms: LoopTerms): number {
-  if (!(leverage > 1)) return 0;
+  if (!(leverage > 1) || loopPriceError(terms) !== null) return 0;
   const debtPerPrincipal = (leverage - 1) * (1 + FLASH_FEE);
   let max = Math.max(0, terms.collateralRoom ?? Infinity) / leverage;
   const pool = terms.pool;
@@ -115,7 +155,9 @@ export function planLoop(principal: number, leverage: number, p: LoopTerms): Loo
   const ltv = gross > 0 ? debt / gross : 0;
   const healthFactor = debt > 0 ? (gross * p.ltBps) / BPS / debt : Infinity;
   const maxLeverage = 1 / (1 - ltvMax);
-  const musdPrice = p.musdPrice ?? 1;
+  const priceError = loopPriceError(p);
+  // Values the loop inside `account`; with no usable price the plan is an error and these figures are only indicative.
+  const musdPrice = p.musdPrice !== undefined && p.musdPrice > 0 ? p.musdPrice : 1;
 
   // Supply and debt land in the same pool: cash + principal (the flash goes out and comes back with the fee),
   // borrows + debt, reserves + fee. Plain supply would only add the principal to cash.
@@ -144,6 +186,7 @@ export function planLoop(principal: number, leverage: number, p: LoopTerms): Loo
   if (!Number.isFinite(principal) || principal <= 0) error = 'Enter a valid amount';
   else if (leverage <= 1) error = 'Leverage must be above 1×';
   else if (leverage > MAX_LOOP_LEVERAGE) error = `Leverage is capped at ${MAX_LOOP_LEVERAGE}×`;
+  else if (priceError) error = priceError;
   else if (pool && flashAmount > pool.cash)
     error =
       pool.cash > 0
@@ -242,15 +285,18 @@ export function planUnwind(p: UnwindTerms): UnwindPlan {
   // Other markets' debt, also when it has no price at all to value it by.
   const otherDebt = restDebt > 0 || rest?.debtPriced === false;
 
-  // pMUSD is left only when the MUSD debt is gone, so only other markets' debt can hold it back.
+  // pMUSD is left only when the MUSD debt is gone, so only other markets' debt can hold it back. What stays posted
+  // must cover that debt with WITHDRAW_BUFFER_BPS of it to spare: a margin on the debt, not on the amount withdrawn,
+  // so a small price move before inclusion cannot revert the whole unwind however large the other debt is.
   let withdrawn = left;
   if (left > 0 && otherDebt) {
     const restLimit = rest?.borrowLimitUsd ?? 0;
     const limitPerUnit = ((p.musdPrice ?? 0) * (p.ltvBps ?? 0)) / BPS;
+    const required = restDebt * (1 + WITHDRAW_BUFFER_BPS / BPS);
     if (!rest?.debtPriced) withdrawn = 0;
-    else if (restDebt <= restLimit) withdrawn = left;
-    else if (limitPerUnit > 0) withdrawn = Math.min(left, Math.max(0, (left - (restDebt - restLimit) / limitPerUnit) * WITHDRAW_MARGIN));
-    else withdrawn = 0;
+    else if (limitPerUnit > 0) withdrawn = Math.min(left, Math.max(0, left - Math.max(0, required - restLimit) / limitPerUnit));
+    // pMUSD that adds nothing to the limit changes nothing by leaving: all of it may go while the rest covers the debt.
+    else withdrawn = restDebt <= restLimit ? left : 0;
   }
   const out = Math.min(withdrawn, Math.max(0, p.cash));
 
@@ -291,15 +337,20 @@ export type BtcLeverageTerms = {
   quotedBackMusd?: number;
   /** Quote-vs-oracle gap above which the plan flags the quote (default QUOTE_DEVIATION_BPS). */
   maxDeviationBps?: number;
+  /** Shortfall of the quote against the oracle price above which the plan refuses the open (default MAX_QUOTE_SHORTFALL_BPS). */
+  maxShortfallBps?: number;
   /** The MUSD pool: the open needs idle cash for the borrow and room under the borrow cap; prices the carry after it. */
   pool?: PoolState;
   /** Current MUSD borrow APY, used without `pool`. */
   borrowApy?: number;
   /** The account before the open; `btcUnits` is the BTC it already has posted (for the liquidation price). */
-  account?: AccountTotals & { btcUnits?: number };
+  account?: LeverageAccount & { btcUnits?: number };
   /** BTC the VaultManager collateral cap still accepts (default: uncapped). */
   collateralRoom?: number;
 };
+
+/** A Tigris quote for the open's swap: `boughtBtc` for borrowing `borrowMusd` (pair.getAmountOut). */
+export type BtcSwapQuote = { borrowMusd: number; boughtBtc: number };
 
 export type BtcLeveragePlan = {
   principal: number;
@@ -334,25 +385,37 @@ export type BtcLeveragePlan = {
   yearlyCarryMusd: number;
   /** The account after the open (with `account`): what VaultManager's borrow check sees. */
   accountAfter: PositionSummary | null;
+  /** Largest principal the open accepts at this leverage, sized at this plan's quote (see maxBtcPrincipal). */
+  maxPrincipal: number;
   error: string | null;
 };
+
+/** BTC a swap returns per BTC the oracle price implies: the quote's ratio, 1 without a quote (or a quote of no borrow). */
+function quoteRatio(quote: BtcSwapQuote | undefined, btcPrice: number, musdPrice: number): number {
+  if (!quote || !(quote.borrowMusd > 0)) return 1;
+  return quote.boughtBtc > 0 ? (quote.boughtBtc * btcPrice) / (quote.borrowMusd * musdPrice) : 0;
+}
 
 /**
  * Largest principal (BTC) SwapLeverageManager.open accepts at `leverage`: the borrow must fit the MUSD pool's idle
  * cash and borrow cap, the posted BTC the collateral cap, and past the leverage the BTC supports on its own, the
- * account's spare borrowing power. Assumes a swap at the oracle price less `slippageBps`.
+ * account's spare borrowing power. The swap is sized at `quote`'s BTC per MUSD less `slippageBps` (else at the oracle
+ * price). On a constant-product pool a smaller swap returns at least as much per MUSD: below the quoted size the
+ * borrow-limit bound only loosens, while each BTC of principal posts more, so the collateral-cap bound counts the BTC
+ * bought at no less than the oracle price (postedPerPrincipal). 0 while a debt has no usable price or the quote
+ * returns no BTC.
  */
 export function maxBtcPrincipal(
   leverage: number,
-  terms: Pick<BtcLeverageTerms, 'btcPrice' | 'musdPrice' | 'ltvBps' | 'slippageBps' | 'pool' | 'account' | 'collateralRoom'>,
+  terms: Pick<BtcLeverageTerms, 'btcPrice' | 'musdPrice' | 'ltvBps' | 'slippageBps' | 'pool' | 'account' | 'collateralRoom'> & { quote?: BtcSwapQuote },
 ): number {
-  if (!(leverage > 1) || !(terms.btcPrice > 0) || !(terms.musdPrice > 0)) return 0;
+  if (!(leverage > 1) || !(terms.btcPrice > 0) || !(terms.musdPrice > 0) || unpricedDebts(terms.account).length > 0) return 0;
+  const ratio = quoteRatio(terms.quote, terms.btcPrice, terms.musdPrice);
+  if (!(ratio > 0)) return 0;
   const borrowPerBtc = (terms.btcPrice * (leverage - 1)) / terms.musdPrice;
-  // At the oracle price each BTC of principal posts `leverage` BTC.
-  let max = Math.max(0, terms.collateralRoom ?? Infinity) / leverage;
+  let max = Math.max(0, terms.collateralRoom ?? Infinity) / postedPerPrincipal(leverage, ratio);
   if (terms.pool) max = Math.min(max, terms.pool.cash / borrowPerBtc, ((terms.pool.borrowCap ?? Infinity) - terms.pool.borrows) / borrowPerBtc);
-  const worstPosted = 1 + (leverage - 1) * (1 - (terms.slippageBps ?? 0) / BPS);
-  const excessUsd = terms.btcPrice * (leverage - 1 - (worstPosted * terms.ltvBps) / BPS);
+  const excessUsd = btcExcessUsd(leverage, terms, ratio);
   if (excessUsd > 0) {
     const headroom = terms.account ? terms.account.borrowLimitUsd - terms.account.debtUsd : 0;
     max = Math.min(max, Math.max(0, headroom) / excessUsd);
@@ -361,9 +424,44 @@ export function maxBtcPrincipal(
 }
 
 /**
+ * BTC each BTC of principal posts (itself plus what the swap buys with its borrow), as the collateral cap must allow
+ * for it. A quote short of the oracle price prices the quoted size, and a smaller swap buys closer to the pool's spot
+ * price, so the bought BTC is counted at no less than the oracle price.
+ */
+function postedPerPrincipal(leverage: number, ratio: number): number {
+  return 1 + Math.max(ratio, 1) * (leverage - 1);
+}
+
+/**
+ * Borrowing power each BTC of principal uses beyond what the BTC it posts adds, at the worst accepted swap (USD):
+ * debt P·B·(L − 1) against a limit of (P + bought·(1 − slippage))·B·LTV, with bought = ratio·P·(L − 1).
+ */
+function btcExcessUsd(leverage: number, terms: Pick<BtcLeverageTerms, 'btcPrice' | 'ltvBps' | 'slippageBps'>, ratio: number): number {
+  const worstPosted = 1 + ratio * (leverage - 1) * (1 - (terms.slippageBps ?? 0) / BPS);
+  return terms.btcPrice * (leverage - 1 - (worstPosted * terms.ltvBps) / BPS);
+}
+
+/**
+ * Highest leverage the borrow check allows for `principal` at the worst accepted swap at `ratio` BTC per oracle BTC:
+ * (L − 1)·(1 − LTV·ratio·(1 − slippage)) ≤ LTV + headroom / (P·B). Infinity when no leverage reaches the limit.
+ */
+function btcLeverageCeiling(
+  principal: number,
+  terms: Pick<BtcLeverageTerms, 'btcPrice' | 'ltvBps' | 'slippageBps'>,
+  ratio: number,
+  headroomUsd: number,
+): number {
+  const ltv = terms.ltvBps / BPS;
+  const denominator = 1 - ltv * ratio * (1 - (terms.slippageBps ?? 0) / BPS);
+  if (!(denominator > 0)) return Infinity;
+  return 1 + (ltv + headroomUsd / (principal * terms.btcPrice)) / denominator;
+}
+
+/**
  * SwapLeverageManager.open preview: `principal` BTC taken to `leverage`× by a flash swap of BTC from the Tigris
  * MUSD/BTC pool, paid for by borrowing MUSD. The borrow check uses the worst swap the transaction accepts (quote
- * minus `slippageBps`), so a plan that passes here does not revert on the borrow limit.
+ * minus `slippageBps`), so a plan that passes here does not revert on the borrow limit. A quote of no BTC, or one
+ * more than `maxShortfallBps` short of the oracle price, is refused: the open would revert or lose that much at once.
  */
 export function planBtcLeverage(p: BtcLeverageTerms): BtcLeveragePlan {
   const borrowMusd = p.musdPrice > 0 ? (p.principal * p.btcPrice * (p.leverage - 1)) / p.musdPrice : 0;
@@ -395,24 +493,47 @@ export function planBtcLeverage(p: BtcLeverageTerms): BtcLeveragePlan {
   const liquidationPrice = btcAfter > 0 ? Math.max(0, ((p.account?.debtUsd ?? 0) + debtUsd - otherAdjustedUsd) / ((btcAfter * p.ltBps) / BPS)) : 0;
 
   const worstLimitUsd = ((p.principal + minBoughtBtc) * p.btcPrice * p.ltvBps) / BPS;
+  const headroomUsd = p.account ? p.account.borrowLimitUsd - p.account.debtUsd : 0;
   const overLimit = p.account ? p.account.debtUsd + debtUsd > p.account.borrowLimitUsd + worstLimitUsd : debtUsd > worstLimitUsd;
-  const atMost = () => `at most ${amount(maxBtcPrincipal(p.leverage, p), 6)} BTC at ${p.leverage}×`;
+  // Sizes at this plan's own quote, so "at most" points at an amount the same quote accepts.
+  const quote = p.quotedBtc !== undefined && borrowMusd > 0 ? { borrowMusd, boughtBtc: p.quotedBtc } : undefined;
+  const ratio = quoteRatio(quote, p.btcPrice, p.musdPrice);
+  const maxPrincipal = maxBtcPrincipal(p.leverage, { ...p, quote });
+  const atMost = `at most ${amount(maxPrincipal, 6)} BTC at ${p.leverage}×`;
+  // Nothing fits at this amount's quote: a smaller amount swaps at a better price, so name no "at most 0".
+  const poolFit = maxPrincipal > 0 ? `: ${atMost}` : '';
+  const ceiling = p.principal > 0 && p.btcPrice > 0 ? btcLeverageCeiling(p.principal, p, ratio, headroomUsd) : maxLeverage;
+  const atQuote = quoteDeviates && priceImpact > 0 ? ` at this quote (${percent(priceImpact)} fewer BTC than the oracle price)` : '';
+  const shortfallBps = p.maxShortfallBps ?? MAX_QUOTE_SHORTFALL_BPS;
+  const debtError = debtPriceError(p.account, "the open's borrow");
 
   let error: string | null = null;
   if (!Number.isFinite(p.principal) || p.principal <= 0) error = 'Enter a valid amount';
   else if (p.leverage <= 1) error = 'Leverage must be above 1×';
   else if (!(p.btcPrice > 0) || !(p.musdPrice > 0)) error = 'No usable BTC and MUSD prices right now';
+  else if (debtError) error = debtError;
+  // SwapLeverageManager.open reverts (SlippageExceeded) when the swap buys nothing.
+  else if (p.quotedBtc !== undefined && !(p.quotedBtc > 0))
+    error = `Tigris quotes no BTC for this ${amount(borrowMusd)} MUSD borrow: its pool cannot fill the swap right now`;
   else if (pool && borrowMusd > pool.cash)
-    error = `The MUSD pool has ${amount(Math.max(0, pool.cash))} MUSD of idle cash for this ${amount(borrowMusd)} MUSD borrow: ${atMost()}`;
+    error = `The MUSD pool has ${amount(Math.max(0, pool.cash))} MUSD of idle cash for this ${amount(borrowMusd)} MUSD borrow${poolFit}`;
   else if (pool && pool.borrows + borrowMusd > (pool.borrowCap ?? Infinity))
-    error = `The ${amount(borrowMusd)} MUSD borrow would pass the pool's borrow cap: ${atMost()}`;
+    error = `The ${amount(borrowMusd)} MUSD borrow would pass the pool's borrow cap${poolFit}`;
+  else if (p.quotedBtc !== undefined && priceImpact * BPS > shortfallBps)
+    error = `Tigris quotes ${percent(priceImpact)} fewer BTC than the oracle price implies, more than the ${percent(shortfallBps / BPS)} a position may lose on the way in: its pool is off the market or too thin for this size, so try a smaller amount or wait for it to rebalance`;
   else if (postedBtc > (p.collateralRoom ?? Infinity))
-    // Sized at this quote's BTC per principal, which may beat the oracle price that maxBtcPrincipal assumes.
-    error = `The ${amount(postedBtc, 6)} BTC to post would pass the BTC collateral cap: at most ${amount((Math.max(0, p.collateralRoom ?? 0) * p.principal) / postedBtc, 6)} BTC at ${p.leverage}×`;
+    // Sized like maxBtcPrincipal: at this quote's BTC per principal when it beats the oracle price, else at the oracle's.
+    error = `The ${amount(postedBtc, 6)} BTC to post would pass the BTC collateral cap: at most ${amount(Math.max(0, p.collateralRoom ?? 0) / postedPerPrincipal(p.leverage, ratio), 6)} BTC at ${p.leverage}×`;
   else if (overLimit)
-    error = p.account
-      ? `${p.leverage}× exceeds your borrow limit at the worst accepted swap: ${atMost()}`
-      : `${p.leverage}× exceeds the ${p.ltvBps / 100}% max LTV (max ≈ ${maxLeverage.toFixed(2)}× before swap costs)`;
+    error = !p.account
+      ? `${p.leverage}× exceeds the ${p.ltvBps / 100}% max LTV at the worst accepted swap${atQuote} (max ≈ ${ceiling.toFixed(2)}×)`
+      : headroomUsd < 0
+        ? 'Your account is already over its borrow limit: repay debt or add collateral first'
+        : maxPrincipal > 0
+          ? `${p.leverage}× exceeds your borrow limit at the worst accepted swap${atQuote}: ${atMost}`
+          : // No spare borrowing power, and the BTC this swap buys does not carry the borrow: the shortfall grows with
+            // the amount, so a smaller one fails too while a lower leverage passes.
+            `${p.leverage}× exceeds your borrow limit at the worst accepted swap${atQuote}: lower the leverage to ≈ ${Math.max(1, ceiling).toFixed(2)}× or less`;
 
   return {
     principal: p.principal,
@@ -433,6 +554,7 @@ export function planBtcLeverage(p: BtcLeverageTerms): BtcLeveragePlan {
     borrowApy,
     yearlyCarryMusd: debtMusd * borrowApy,
     accountAfter,
+    maxPrincipal,
     error,
   };
 }
@@ -445,7 +567,11 @@ export type BtcCloseTerms = {
   slippageBps?: number;
   /** A quote for selling `sellBtc` (this plan's first pass): sizes the sale at that amount's own average price. */
   quote?: { sellBtc: number; musd: number };
-  /** Oracle prices, to flag a quote far from them (default threshold QUOTE_DEVIATION_BPS). */
+  /**
+   * Usable oracle prices (USD), to flag a quote far from them (default threshold QUOTE_DEVIATION_BPS). The gap is
+   * measured only when both are positive: the close itself needs no price, so a lapsed MUSD feed must not read as a
+   * quote far off the market.
+   */
   btcPrice?: number;
   musdPrice?: number;
   maxDeviationBps?: number;
@@ -465,7 +591,7 @@ export type BtcClosePlan = {
   collateralBack: number;
   /** MUSD returned beyond the debt (estimate). */
   musdBack: number;
-  /** Shortfall of the quote's average price against the oracle (0.02 = Tigris pays 2% less); 0 without `btcPrice`. */
+  /** Shortfall of the quote's average price against the oracle (0.02 = Tigris pays 2% less); 0 without both prices. */
   priceGap: number;
   quoteDeviates: boolean;
   warning: string | null;
@@ -491,7 +617,9 @@ export function planBtcClose(p: BtcCloseTerms): BtcClosePlan {
   const expected = sellBtc * avgPrice;
   const minProceeds = Math.max(owed, Math.min(target, expected * (1 - slippage)));
 
-  const priceGap = p.btcPrice && p.btcPrice > 0 && avgPrice > 0 ? 1 - (avgPrice * (p.musdPrice ?? 1)) / p.btcPrice : 0;
+  // Oracle MUSD per BTC is btcPrice / musdPrice: with either missing (0 included) there is nothing to compare against.
+  const priceGap =
+    p.btcPrice !== undefined && p.btcPrice > 0 && p.musdPrice !== undefined && p.musdPrice > 0 && avgPrice > 0 ? 1 - (avgPrice * p.musdPrice) / p.btcPrice : 0;
   const quoteDeviates = Math.abs(priceGap) * BPS > (p.maxDeviationBps ?? QUOTE_DEVIATION_BPS);
   const warning = !quoteDeviates
     ? null

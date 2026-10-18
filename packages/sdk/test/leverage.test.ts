@@ -13,6 +13,7 @@ import {
   planUnwind,
   supplyRate,
   utilization,
+  WITHDRAW_BUFFER_BPS,
   type PoolState,
 } from '../src';
 
@@ -168,7 +169,7 @@ describe('BTC close preview', () => {
     expect(c.priceGap).toBeCloseTo(0.042, 9);
     expect(c.quoteDeviates).toBe(true);
     expect(c.warning).toMatch(/4\.20% less than the oracle/);
-    expect(planBtcClose({ collateralBtc: 2.5, debtMusd: 120_000, quotedMusdForAll: 199_900, btcPrice: 80_000 }).warning).toBeNull();
+    expect(planBtcClose({ collateralBtc: 2.5, debtMusd: 120_000, quotedMusdForAll: 199_900, btcPrice: 80_000, musdPrice: 1 }).warning).toBeNull();
   });
 
   it('needs no price without other debt; other debt must stay covered without the BTC', () => {
@@ -235,7 +236,7 @@ describe('MUSD loop preview at the rates it leaves the pool at', () => {
   it('checks the whole account: other collateral can carry more, other debt less', () => {
     // $10,000 of WETH at 75% LTV: $7,500 of borrowing power.
     const weth = { collateralUsd: 10_000, borrowLimitUsd: 7_500, adjustedCollateralUsd: 8_000, debtUsd: 0 };
-    const loopOnly = { ltvBps: 8_000, ltBps: 8_500 };
+    const loopOnly = { ltvBps: 8_000, ltBps: 8_500, musdPrice: 1 };
     expect(planLoop(1_000, 6, loopOnly).error).toMatch(/max LTV/);
     expect(planLoop(1_000, 6, { ...loopOnly, account: weth }).error).toBeNull();
     // With $7,000 already borrowed only $500 of headroom is left: L ≤ (500 / 1,000 + 1.0009) / (1.0009 − 0.8).
@@ -286,10 +287,11 @@ describe('MUSD loop unwind (debt netted against pMUSD)', () => {
   });
 
   it('keeps the pMUSD that other debt needs posted, and only then needs prices', () => {
-    // 500 USD of MEZO debt with no other collateral: 500 / 0.8 = 625 MUSD of pMUSD must stay.
+    // 500 USD of MEZO debt with no other collateral: 500 × 1.01 / 0.8 = 631.25 MUSD of pMUSD must stay (the debt
+    // plus its 1% buffer).
     const rest = { collateral: false, debtUsd: 500, borrowLimitUsd: 0, debtPriced: true };
     const u = planUnwind({ debt: 2_001.8, collateral: 3_000, cash: 10_000, rest, musdPrice: 1, ltvBps: 8_000 });
-    expect(u.withdrawn).toBeCloseTo((998.2 - 625) * 0.999, 9);
+    expect(u.withdrawn).toBeCloseTo(998.2 - 631.25, 9);
     expect(u.kept).toBeCloseTo(998.2 - u.withdrawn, 9);
     expect(u.withdrawAll).toBe(false);
     expect(u.needsPrices).toBe(true);
@@ -322,5 +324,149 @@ describe('liquidation split', () => {
     expect(s.toProtocol).toBeCloseTo(10, 9);
     expect(s.toLiquidator).toBeCloseTo(1_090, 9);
     expect(liquidatorShare(1_100, 1_000, 0).toProtocol).toBe(0);
+  });
+});
+
+describe('previews refuse borrows VaultManager cannot price (final review sdk-loop-no-price-check)', () => {
+  const pool: PoolState = { cash: 1_000, borrows: 0, reserves: 0, reserveFactor: 0.1, model: RATE_MODELS.MUSD };
+  const loop = { ltvBps: 8_000, ltBps: 8_500, pool };
+  // An account valued at usable prices: $10,000 of WETH, nothing owed.
+  const weth = { collateralUsd: 10_000, borrowLimitUsd: 7_500, adjustedCollateralUsd: 8_000, debtUsd: 0 };
+
+  it('makes a loop without a usable MUSD price an error, not a plan at $1', () => {
+    // simulate_loop with an address: the account was valued at usable prices, and MUSD (Pyth push only) had none.
+    const p = planLoop(10, 3, { ...loop, account: weth, musdPrice: undefined });
+    expect(p.error).toBe("No usable MUSD price right now: the loop's borrow is priced strictly and would revert");
+    expect(p.maxPrincipal).toBe(0);
+    expect(maxLoopPrincipal(3, { ...loop, account: weth })).toBe(0);
+    // A price passed as 0 (no usable one) is the same, with or without an account.
+    expect(planLoop(10, 3, { ...loop, musdPrice: 0 }).error).toMatch(/^No usable MUSD price right now/);
+    expect(planLoop(10, 3, { ...loop, musdPrice: Number.NaN }).error).toMatch(/^No usable MUSD price right now/);
+    // Priced, the same loop plans; a what-if without an account still values the loop at $1.
+    expect(planLoop(10, 3, { ...loop, account: weth, musdPrice: 1 }).error).toBeNull();
+    expect(planLoop(10, 3, loop).error).toBeNull();
+  });
+
+  it('blocks the loop and the BTC open while any debt has no usable price (every debt is priced strictly)', () => {
+    // A MEZO debt valuePosition could not price: listed in unpricedDebts and valued at $0.
+    const owing = { ...weth, unpricedDebts: ['MEZO'] };
+    const p = planLoop(10, 3, { ...loop, account: owing, musdPrice: 1 });
+    expect(p.error).toBe("No usable MEZO price for your debt right now: debt is priced strictly, so the loop's borrow would revert");
+    expect(p.maxPrincipal).toBe(0);
+    const open = planBtcLeverage({ ...BTC, principal: 0.1, leverage: 2, account: owing });
+    expect(open.error).toBe("No usable MEZO price for your debt right now: debt is priced strictly, so the open's borrow would revert");
+    expect(open.maxPrincipal).toBe(0);
+    expect(maxBtcPrincipal(2, { ...BTC, account: owing })).toBe(0);
+    expect(planBtcLeverage({ ...BTC, principal: 0.1, leverage: 2, account: { ...owing, unpricedDebts: [] } }).error).toBeNull();
+  });
+});
+
+describe('withdrawals keep a buffer on the debt that stays (final review sdk-unwind-margin-on-headroom)', () => {
+  const buffer = WITHDRAW_BUFFER_BPS / 10_000;
+
+  it('leaves the review case 1% of the MEZO debt spare instead of $0.60', () => {
+    // 9,000 MUSD of pMUSD against 2,000 MUSD of debt, $5,000 of MEZO debt and no other collateral.
+    const rest = { collateral: false, debtUsd: 5_000, borrowLimitUsd: 0, debtPriced: true };
+    const u = planUnwind({ debt: 2_000, collateral: 9_000, cash: 1_000_000, rest, musdPrice: 1, ltvBps: 8_000 });
+    expect(u.withdrawn).toBeCloseTo(7_000 - 5_050 / 0.8, 9);
+    expect(u.kept * 0.8 - 5_000).toBeCloseTo(50, 9);
+    // MEZO 0.5% higher (or MUSD 0.5% lower) when it lands still passes the withdrawal's risk check.
+    expect(u.kept * 0.8).toBeGreaterThan(5_000 * 1.005);
+  });
+
+  it('scales the spare with the debt the pMUSD keeps backing, not with the amount withdrawn', () => {
+    for (const debtUsd of [500, 5_000, 50_000]) {
+      const rest = { collateral: false, debtUsd, borrowLimitUsd: 0, debtPriced: true };
+      const u = planUnwind({ debt: 2_000, collateral: 100_000, cash: 1e9, rest, musdPrice: 1, ltvBps: 8_000 });
+      expect(u.kept * 0.8 - debtUsd).toBeCloseTo(debtUsd * buffer, 6);
+    }
+  });
+
+  it('keeps some pMUSD when other collateral only just covers the other debt', () => {
+    // $501 of other borrowing power for $500 of MEZO debt: withdrawing all the pMUSD would leave $1 spare.
+    const rest = { collateral: true, debtUsd: 500, borrowLimitUsd: 501, debtPriced: true };
+    const u = planUnwind({ debt: 2_001.8, collateral: 3_000, cash: 10_000, rest, musdPrice: 1, ltvBps: 8_000 });
+    expect(u.withdrawAll).toBe(false);
+    expect(u.kept).toBeCloseTo((505 - 501) / 0.8, 9);
+    // pMUSD that adds nothing to the limit (disabled, or no MUSD price) changes nothing by leaving: all of it goes.
+    expect(planUnwind({ debt: 2_001.8, collateral: 3_000, cash: 10_000, rest, musdPrice: 0, ltvBps: 8_000 }).withdrawAll).toBe(true);
+  });
+});
+
+describe('BTC opens sized at the Tigris quote (final review sdk-btc-max-ignores-quote)', () => {
+  const pool: PoolState = { cash: 100_000, borrows: 0, reserves: 0, reserveFactor: 0.1, model: RATE_MODELS.MUSD };
+  const empty = { collateralUsd: 0, borrowLimitUsd: 0, adjustedCollateralUsd: 0, debtUsd: 0 };
+  const terms = { ...BTC, slippageBps: 100, pool, account: empty };
+  /** A 3× quote 7% below the oracle: each BTC of principal borrows 160,000 MUSD for 2 × 0.93 BTC. */
+  const shortQuote = (principal: number, leverage = 3) => principal * (leverage - 1) * 0.93;
+
+  it('says to lower the leverage when the quote cannot carry it, instead of pointing at the pool cash', () => {
+    const p = planBtcLeverage({ ...terms, principal: 0.1, leverage: 3, quotedBtc: shortQuote(0.1) });
+    expect(p.error).toBe(
+      '3× exceeds your borrow limit at the worst accepted swap at this quote (7.00% fewer BTC than the oracle price): lower the leverage to ≈ 2.97× or less',
+    );
+    expect(p.maxPrincipal).toBe(0);
+    // At the oracle price the pool's idle cash was the only bound: the old "at most 0.625 BTC at 3×".
+    expect(maxBtcPrincipal(3, terms)).toBeCloseTo(0.625, 12);
+    // The leverage it suggests passes at the same quote.
+    expect(planBtcLeverage({ ...terms, principal: 0.1, leverage: 2.95, quotedBtc: shortQuote(0.1, 2.95) }).error).toBeNull();
+    // An amount past the pool's idle cash, quoted that short: no "at most 0 BTC" (a smaller swap gets a better price).
+    expect(planBtcLeverage({ ...terms, principal: 10, leverage: 3, quotedBtc: shortQuote(10) }).error).toBe(
+      'The MUSD pool has 100,000 MUSD of idle cash for this 1,600,000 MUSD borrow',
+    );
+    expect(planBtcLeverage({ ...terms, principal: 10, leverage: 3 }).error).toBe(
+      'The MUSD pool has 100,000 MUSD of idle cash for this 1,600,000 MUSD borrow: at most 0.625 BTC at 3×',
+    );
+  });
+
+  it('bounds the principal at the BTC the quote buys, so MAX and "at most" pass the plan', () => {
+    // $1,000 of spare borrowing power and a deep MUSD pool.
+    const deep = { ...terms, pool: { ...pool, cash: 10_000_000 }, account: { ...empty, borrowLimitUsd: 1_000 } };
+    const max = maxBtcPrincipal(3, { ...deep, quote: { borrowMusd: 16_000, boughtBtc: shortQuote(0.1) } });
+    expect(max).toBeCloseTo(1_000 / (80_000 * (2 - 0.7 * (1 + 2 * 0.93 * 0.99))), 9);
+    expect(planBtcLeverage({ ...deep, principal: max * 0.999, leverage: 3, quotedBtc: shortQuote(max * 0.999) }).error).toBeNull();
+    const over = planBtcLeverage({ ...deep, principal: max * 1.01, leverage: 3, quotedBtc: shortQuote(max * 1.01) });
+    expect(over.maxPrincipal).toBeCloseTo(max, 9);
+    expect(over.error).toBe(
+      `3× exceeds your borrow limit at the worst accepted swap at this quote (7.00% fewer BTC than the oracle price): at most ${max.toLocaleString('en-US', { maximumFractionDigits: 6 })} BTC at 3×`,
+    );
+    // The collateral cap counts the BTC the quote buys: 4% more BTC than the oracle price leaves room for less principal.
+    expect(maxBtcPrincipal(2, { ...BTC, collateralRoom: 1.5, quote: { borrowMusd: 80_000, boughtBtc: 1.04 } })).toBeCloseTo(1.5 / 2.04, 12);
+    // A quote 7% short prices only the quoted size: a smaller swap buys more per MUSD, so the cap is sized at the
+    // oracle price (0.75 BTC), not at the quote (0.777 BTC, which would post past the cap at a smaller size's quote).
+    expect(maxBtcPrincipal(2, { ...BTC, collateralRoom: 1.5, quote: { borrowMusd: 80_000, boughtBtc: 0.93 } })).toBeCloseTo(0.75, 12);
+    const capped = planBtcLeverage({ ...BTC, principal: 1, leverage: 2, collateralRoom: 1.5, quotedBtc: 0.93 });
+    expect(capped.error).toBe('The 1.93 BTC to post would pass the BTC collateral cap: at most 0.75 BTC at 2×');
+    expect(capped.maxPrincipal).toBeCloseTo(0.75, 12);
+    // At that amount even a quote at the oracle price (the best a smaller swap can do here) stays under the cap.
+    expect(planBtcLeverage({ ...BTC, principal: 0.75, leverage: 2, collateralRoom: 1.5, quotedBtc: 0.75 }).error).toBeNull();
+  });
+
+  it('refuses a quote of no BTC, or one far below the oracle price', () => {
+    // An unseeded pool quotes nothing: SwapLeverageManager.open reverts (SlippageExceeded) when nothing is bought.
+    expect(planBtcLeverage({ ...BTC, principal: 0.1, leverage: 1.5, quotedBtc: 0 }).error).toBe(
+      'Tigris quotes no BTC for this 4,000 MUSD borrow: its pool cannot fill the swap right now',
+    );
+    expect(maxBtcPrincipal(1.5, { ...BTC, quote: { borrowMusd: 4_000, boughtBtc: 0 } })).toBe(0);
+    // A dust quote would not revert, but would lose almost the whole borrow at once.
+    expect(planBtcLeverage({ ...BTC, principal: 0.1, leverage: 1.5, quotedBtc: 1e-15 }).error).toMatch(
+      /fewer BTC than the oracle price implies, more than the 10\.00% a position may lose/,
+    );
+    // Up to the bound it stays a warning.
+    const near = planBtcLeverage({ ...BTC, principal: 0.1, leverage: 1.5, quotedBtc: 0.05 * 0.91 });
+    expect(near.error).toBeNull();
+    expect(near.warning).toMatch(/9\.00% fewer BTC/);
+    expect(planBtcLeverage({ ...BTC, principal: 0.1, leverage: 1.5, quotedBtc: 0.05 * 0.91, maxShortfallBps: 500 }).error).toMatch(/more than the 5\.00%/);
+  });
+});
+
+describe('BTC close without a usable MUSD price (final review WEB-3)', () => {
+  const terms = { collateralBtc: 0.02, debtMusd: 1_000, quotedMusdForAll: 1_990, slippageBps: 50, btcPrice: 100_000 };
+
+  it('measures no quote gap instead of reading Tigris as paying 100% less', () => {
+    // The page passes 0 while MUSD (Pyth push only) has lapsed; the close itself needs no price.
+    expect(planBtcClose({ ...terms, musdPrice: 0 })).toMatchObject({ priceGap: 0, quoteDeviates: false, warning: null, error: null });
+    expect(planBtcClose(terms).priceGap).toBe(0);
+    expect(planBtcClose({ ...terms, musdPrice: 1 }).priceGap).toBeCloseTo(0.005, 9);
   });
 });

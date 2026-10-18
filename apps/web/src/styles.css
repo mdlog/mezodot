@@ -4976,3 +4976,26 @@ a.nav-link {
 .claim-row .button {
   flex: none;
 }
+.claim-item {
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+.claim-item > .claim-row {
+  padding: 0;
+  border-top: 0;
+}
+.claim-other {
+  margin-top: 6px;
+  padding: 0;
+}
+.claim-recipient {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+.claim-recipient .inline-error {
+  margin: 0;
+}
+.claim-recipient .amount-input input {
+  font-size: 12.5px;
+}

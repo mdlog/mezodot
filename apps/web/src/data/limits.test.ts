@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { maxUint256, type Address } from 'viem';
 import { BTC_GAS_RESERVE, MEZO_BTC } from '../lib/btc';
 import { assetsFor, sharesFor } from '../lib/shares';
-import { borrowBound, exactUnits, sharePostBound, supplyBound, tightest, tokenPostBound, truncatedUnits } from './limits';
+import { borrowBound, exactUnits, sharePostBound, supplyBound, tightest, tokenPostBound, truncatedUnits, borrowHeadroomUsd } from './limits';
 
 const MUSD = 10n ** 18n;
 // 1 pMUSD (24 decimals) = 1.1 MUSD (18 decimals); 1,000 MUSD supplied, 400 lent out.
@@ -98,5 +98,15 @@ describe('MAX labels', () => {
     expect(truncatedUnits(10n ** 18n, 18, 4)).toBe('1');
     expect(truncatedUnits(1_234_500_000_000_000_000_000n, 18, 2)).toBe('1,234.5');
     expect(truncatedUnits(1n, 18, 6)).toBe('0');
+  });
+});
+
+describe('borrow headroom', () => {
+  it('keeps the limit buffer spare, so MAX survives a small price move however large the debt', () => {
+    const v = { borrowLimitUsd: 10_100, debtUsd: 9_000, availableUsd: 1_100 };
+    expect(borrowHeadroomUsd(v)).toBeCloseTo(10_100 / 1.01 - 9_000, 9); // 1,000, not 0.999 × 1,100
+    expect(borrowHeadroomUsd({ borrowLimitUsd: 10_000, debtUsd: 9_950, availableUsd: 50 })).toBe(0);
+    expect(borrowHeadroomUsd({ borrowLimitUsd: 10_000, debtUsd: 0, availableUsd: 0 })).toBe(0); // borrowing blocked
+    expect(borrowHeadroomUsd(null)).toBe(0);
   });
 });

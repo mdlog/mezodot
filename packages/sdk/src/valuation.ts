@@ -1,5 +1,5 @@
 import { maxUint256 } from 'viem';
-import { BPS, summarizePosition, type PoolState, type PositionSummary } from './math';
+import { BPS, WITHDRAW_BUFFER_BPS, summarizePosition, type PoolState, type PositionSummary } from './math';
 import { symbolForPriceKey, type CollateralState, type MarketState, type PositionState, type PriceSymbol, type ProtocolState } from './reader';
 
 export type UsdPrices = Partial<Record<PriceSymbol, number>>;
@@ -62,18 +62,45 @@ const toNumber = (v: bigint, decimals: number) => Number(v) / 10 ** decimals;
 export const pTokenUnits = (market: MarketState, shares: bigint): number =>
   toNumber(shares, market.shareDecimals) * toNumber(market.exchangeRate, market.decimals);
 
+/** Seconds between reading a pool and the transaction that relies on the read landing on-chain (generous). */
+export const INCLUSION_SECONDS = 600n;
+
+const nowSeconds = (): bigint => BigInt(Math.floor(Date.now() / 1000));
+
 /**
- * A market's pool in token units with its InterestRateModel, for rate projections; null when the model was not read.
- * Uncapped (type(uint256).max) caps become Infinity.
+ * Interest a pool adds to its borrows between `since` (its accrualTimestamp) and a transaction landing
+ * INCLUSION_SECONDS after `nowSec`, in base units. MezodotPool accrues before it checks a cap (simple interest at the
+ * stored rate over the elapsed time), so a cap room computed from stored totals must leave this much spare. Without
+ * `since` only the inclusion window counts (e.g. on top of totalAssets, which is read with pending interest included).
  */
-export function marketPoolState(market: MarketState): PoolState | null {
+export function pendingInterest(
+  m: Pick<MarketState, 'totalBorrows'> & Partial<Pick<MarketState, 'borrowRatePerSecond' | 'accrualTimestamp'>>,
+  since: bigint | undefined,
+  nowSec: bigint = nowSeconds(),
+): bigint {
+  if (!m.borrowRatePerSecond || m.totalBorrows === 0n) return 0n;
+  const elapsed = (since !== undefined && nowSec > since ? nowSec - since : 0n) + INCLUSION_SECONDS;
+  return (m.totalBorrows * m.borrowRatePerSecond * elapsed) / 10n ** 18n;
+}
+
+/**
+ * A market's pool in token units with its InterestRateModel, as a transaction sent now finds it: borrows and reserves
+ * include the interest accrued since the pool's last accrual and until inclusion (pendingInterest), because the pool
+ * accrues before it checks its borrow cap and PToken.maxDeposit measures the accrued supply. Cap rooms and rate
+ * projections built on it (leverage previews, borrowRoomAt) therefore match what the contracts check. Null when the
+ * model was not read. Uncapped (type(uint256).max) caps become Infinity.
+ */
+export function marketPoolState(market: MarketState, nowSec: bigint = nowSeconds()): PoolState | null {
   if (!market.rateModel) return null;
   const n = (v: bigint) => toNumber(v, market.decimals);
   const cap = (v: bigint) => (v === maxUint256 ? Infinity : n(v));
+  const interest = pendingInterest(market, market.accrualTimestamp, nowSec);
+  // MezodotPool._accrued: the reserve factor's share of the interest goes to reserves, the rest to suppliers.
+  const toReserves = (interest * market.reserveFactor) / 10n ** 18n;
   return {
     cash: n(market.cash),
-    borrows: n(market.totalBorrows),
-    reserves: n(market.totalReserves),
+    borrows: n(market.totalBorrows + interest),
+    reserves: n(market.totalReserves + toReserves),
     reserveFactor: Number(market.reserveFactor) / 1e18,
     model: market.rateModel,
     supplyCap: cap(market.supplyCap),
@@ -141,8 +168,9 @@ export function valuePosition(protocol: ProtocolState, position: PositionState, 
 }
 
 /**
- * Units of collateral `collateralId` that can be withdrawn while keeping Σ value × LTV ≥ debt
- * (VaultManager's rule), with a 0.1% safety margin for price movement before inclusion.
+ * Units of collateral `collateralId` that can be withdrawn while keeping Σ value × LTV ≥ debt (VaultManager's rule),
+ * with WITHDRAW_BUFFER_BPS of the debt kept spare for price moves before inclusion: the margin scales with the debt
+ * the remaining collateral backs, not with the amount withdrawn.
  * Collateral without a usable price, or disabled, adds nothing to the limit: it can leave in full while the rest
  * covers the debt, and not at all otherwise (the check runs on what remains). With a debt that has no usable price
  * nothing can leave (the risk check reverts).
@@ -159,7 +187,7 @@ export function maxWithdrawableUnits(
   const ltvBps = row.collateral.enabled === false ? 0 : row.collateral.ltvBps;
   const headroomUsd = valued.borrowLimitUsd - valued.debtUsd;
   if (row.priced === false || row.price <= 0 || ltvBps === 0) return headroomUsd >= 0 ? row.units : 0;
-  if (headroomUsd <= 0) return 0;
-  const units = (headroomUsd / (row.price * (ltvBps / BPS))) * 0.999;
-  return Math.min(row.units, units);
+  const spareUsd = valued.borrowLimitUsd - valued.debtUsd * (1 + WITHDRAW_BUFFER_BPS / BPS);
+  if (spareUsd <= 0) return 0;
+  return Math.min(row.units, spareUsd / (row.price * (ltvBps / BPS)));
 }

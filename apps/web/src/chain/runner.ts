@@ -35,7 +35,7 @@ export type TxStep = {
 /** The parts of a `writeContract` request the runner looks at. */
 export type TxRequest = { address: Address; abi: Abi; functionName: string; args?: readonly unknown[]; value?: bigint };
 
-export type TxClient = Pick<PublicClient, 'estimateContractGas' | 'waitForTransactionReceipt' | 'simulateContract'>;
+export type TxClient = Pick<PublicClient, 'estimateContractGas' | 'waitForTransactionReceipt' | 'simulateContract' | 'getBlockNumber'>;
 
 /** What the runner needs from the wallet and the chains (wagmi in the app, fakes in tests). */
 export type TxDriver = {
@@ -59,6 +59,10 @@ export type RunHooks = {
   /** Aborting stops waiting for the current receipt; the transaction itself may still land. */
   signal?: AbortSignal;
   receiptTimeoutMs?: number;
+  /** Block each chain last had a step land in; shared by every run unless given (tests). */
+  landed?: Map<number, bigint>;
+  /** Pause between block-number polls while an RPC catches up (default BLOCK_POLL_MS). */
+  blockPollMs?: number;
 };
 
 export type StepStatus = 'done' | 'skipped' | 'failed' | 'pending' | 'not-sent';
@@ -81,6 +85,15 @@ export const RECEIPT_TIMEOUT_MS = 10 * 60_000;
 
 /** A reverted transaction that used this share of its limit ran out of gas. */
 const OUT_OF_GAS_BPS = 9_800n;
+
+/** Pause between polls, and most polls, while waiting for an RPC to report the block an earlier step landed in. */
+export const BLOCK_POLL_MS = 1_000;
+const BLOCK_POLLS = 10;
+/** Polls spent waiting for one more block before estimating a step again (devnets mine only on transactions). */
+const RETRY_POLLS = 3;
+
+/** Block each chain's latest step was mined in, across runs: a retry right after a failed run waits for it too. */
+const LANDED = new Map<number, bigint>();
 
 // --- Price updates attached by actions.ts ---------------------------------------------------------------
 
@@ -157,6 +170,25 @@ export async function gasLimitFor(client: TxClient, step: Pick<TxStep, 'gasFloor
 
 export const isUserRejection = (err: unknown): boolean => err instanceof BaseError && Boolean(err.walk((e) => e instanceof UserRejectedRequestError));
 
+/**
+ * Polls `client` until it reports `block`, at most `polls` times; false when it never did or cannot tell (the step
+ * then goes ahead, and its estimate decides). Public RPCs are load-balanced: a replica a block behind answers reads
+ * and estimates without the state an earlier step just wrote (an allowance), so the next step waits for that block.
+ */
+export async function waitForBlock(client: TxClient, block: bigint, polls = BLOCK_POLLS, pollMs = BLOCK_POLL_MS): Promise<boolean> {
+  for (let i = 0; i < polls; i++) {
+    let head: bigint;
+    try {
+      head = await client.getBlockNumber({ cacheTime: 0 });
+    } catch {
+      return false;
+    }
+    if (head >= block) return true;
+    if (i < polls - 1) await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return false;
+}
+
 // --- Runner -------------------------------------------------------------------------------------------------
 
 class StillPending extends Error {
@@ -218,6 +250,10 @@ export async function runSteps(driver: TxDriver, steps: readonly TxStep[], hooks
   const reports: StepReport[] = steps.map((s) => ({ label: s.label, chainId: s.chainId, status: 'not-sent' }));
   const receipts: TransactionReceipt[] = [];
   const explain = (err: unknown, request: TxRequest | null) => (driver.explain ? driver.explain(err, request) : explainError(err));
+  const landed = hooks.landed ?? LANDED;
+  const pollMs = hooks.blockPollMs ?? BLOCK_POLL_MS;
+  /** Chains an earlier step of this run landed on, with its block: the steps after it may depend on its state. */
+  const landedHere = new Map<number, bigint>();
   let request: TxRequest | null = null;
 
   for (const [index, step] of steps.entries()) {
@@ -227,6 +263,15 @@ export async function runSteps(driver: TxDriver, steps: readonly TxStep[], hooks
       for (let attempt = 0; ; attempt++) {
         hooks.onPhase?.(index, 'preparing', attempt);
         request = null; // a failure while building is explained without the previous step's request
+        // What the step reads while it is built (an allowance, a preview) must include what earlier steps wrote.
+        const known = landed.get(step.chainId);
+        const reader = driver.client(step.chainId);
+        if (known !== undefined && reader && !(await waitForBlock(reader, known, BLOCK_POLLS, pollMs))) {
+          // A head that stays below the remembered block (a restarted devnet, a reorg) must not cost every later step
+          // the full wait: remember the head instead.
+          const head = await reader.getBlockNumber({ cacheTime: 0 }).catch(() => undefined);
+          if (head !== undefined && head < known) landed.set(step.chainId, head);
+        }
         request = (await step.request()) as TxRequest | null;
         if (!request) {
           report.status = 'skipped'; // e.g. the allowance already covers the amount
@@ -244,7 +289,18 @@ export async function runSteps(driver: TxDriver, steps: readonly TxStep[], hooks
         const client = driver.client(step.chainId);
         if (!client) throw new Error(`No RPC client for chain ${step.chainId}`);
         // Explicit gas limit: Mezo's estimates can be exact to the unit, or ignore contract code entirely.
-        const gas = await gasLimitFor(client, step, request, address, attempt > 0 ? lastGas * 2n : 0n);
+        const minimum = attempt > 0 ? lastGas * 2n : 0n;
+        let gas: bigint;
+        try {
+          gas = await gasLimitFor(client, step, request, address, minimum);
+        } catch (err) {
+          // Right after an earlier step of this run landed here, a replica without its block estimates against the
+          // old state (no allowance yet) and reverts: give the RPC one more block, then estimate once again.
+          const after = landedHere.get(step.chainId);
+          if (after === undefined || isUserRejection(err)) throw err;
+          await waitForBlock(client, after + 1n, RETRY_POLLS, pollMs);
+          gas = await gasLimitFor(client, step, request, address, minimum);
+        }
 
         hooks.onPhase?.(index, 'signing', attempt);
         const hash = await driver.write(request, step.chainId, gas);
@@ -253,6 +309,9 @@ export async function runSteps(driver: TxDriver, steps: readonly TxStep[], hooks
         hooks.onPhase?.(index, 'confirming', attempt);
         const receipt = await waitForReceipt(client, hash, hooks);
         if (receipt.status === 'success') {
+          const previous = landed.get(step.chainId);
+          if (previous === undefined || receipt.blockNumber > previous) landed.set(step.chainId, receipt.blockNumber);
+          landedHere.set(step.chainId, receipt.blockNumber);
           receipts.push(receipt);
           report.status = 'done';
           hooks.onStepDone?.(index, 'done');

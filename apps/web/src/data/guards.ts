@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { usePublicClient } from 'wagmi';
 import { isAddressEqual, maxUint256, zeroHash, type Address, type PublicClient } from 'viem';
 import {
+  pendingInterest,
   pTokenAbi,
   spokeGatewayAbi,
   toBytes32,
@@ -59,21 +60,10 @@ export function useHubFlags() {
 /** Amount that still fits under a cap (maxUint256 = uncapped). */
 const room = (cap: bigint, used: bigint): bigint => (cap === maxUint256 ? maxUint256 : cap > used ? cap - used : 0n);
 
-/** Seconds between reading a pool and the transaction that relies on the read landing on-chain (generous). */
-export const INCLUSION_SECONDS = 600n;
+// One formula for every cap room: the SDK's, which also sizes the leverage desks (marketPoolState).
+export { INCLUSION_SECONDS, pendingInterest } from '@mezodot/sdk';
 
 type Accrual = Partial<Pick<MarketState, 'borrowRatePerSecond' | 'accrualTimestamp'>> & Pick<MarketState, 'totalBorrows'>;
-
-/**
- * Interest a pool adds to its borrows (and, at most, to its supply) between `since` and a transaction landing
- * INCLUSION_SECONDS from now. MezodotPool accrues before it checks a cap, so a room computed from stored values
- * must leave this much spare or MAX would revert.
- */
-export function pendingInterest(m: Accrual, since: bigint | undefined, nowSec = BigInt(Math.floor(Date.now() / 1000))): bigint {
-  if (!m.borrowRatePerSecond || m.totalBorrows === 0n) return 0n;
-  const elapsed = (since !== undefined && nowSec > since ? nowSec - since : 0n) + INCLUSION_SECONDS;
-  return (m.totalBorrows * m.borrowRatePerSecond * elapsed) / 10n ** 18n;
-}
 
 /**
  * Underlying the pool still accepts (PToken.maxDeposit without the pause). totalAssets is read with pending interest

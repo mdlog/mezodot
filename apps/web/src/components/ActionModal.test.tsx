@@ -80,6 +80,7 @@ const position: PositionState = {
 const wallet: WalletBalances = { hub: { native: E18, tokens: { MUSD: 50n * E18, pMUSD: 10n * SHARE, BTC: E18 } }, spokes: {}, spokeErrors: {} };
 // $1,000 of borrowing power left, no debt.
 const valued = {
+  borrowLimitUsd: 1_000,
   availableUsd: 1_000,
   adjustedCollateralUsd: 1_200,
   debtUsd: 0,
@@ -166,7 +167,8 @@ describe('hub action modal', () => {
 
   it('caps borrowing at the borrow cap, and borrowing does not wait on the wallet', () => {
     fake.balances = { data: undefined, error: new Error('rpc down'), refetch: async () => undefined };
-    const { text, submit } = open({ type: 'borrow', marketId: 0, preset: '60' }, { markets: [{ ...musd, borrowCap: 450n * E18 }] });
+    // No interest accruing, so the room is exactly cap − borrows (pending interest is covered in guards.test.ts).
+    const { text, submit } = open({ type: 'borrow', marketId: 0, preset: '60' }, { markets: [{ ...musd, borrowCap: 450n * E18, borrowRatePerSecond: 0n }] });
     expect(text).toContain('Max 50 MUSD');
     expect(text).toContain('Amount exceeds what the MUSD pool can still lend under its borrow cap: at most 50 MUSD.');
     expect(submit).toContain('disabled');

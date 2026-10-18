@@ -1,5 +1,5 @@
 import { formatUnits } from 'viem';
-import type { CollateralState, MarketState } from '@mezodot/sdk';
+import { WITHDRAW_BUFFER_BPS, type CollateralState, type MarketState, type ValuedPosition } from '@mezodot/sdk';
 import { BTC_GAS_RESERVE, isGasToken, spendableBtc } from '../lib/btc';
 import { assetsFor } from '../lib/shares';
 import { borrowRoom, collateralRoom, supplyRoom } from './guards';
@@ -76,4 +76,14 @@ export function truncatedUnits(value: bigint, decimals: number, digits: number):
   const [whole, fraction] = exactUnits(value, decimals).split('.');
   const cut = fraction?.slice(0, digits).replace(/0+$/, '');
   return cut ? `${whole}.${cut}` : whole;
+}
+
+/**
+ * USD the account can still borrow, keeping WITHDRAW_BUFFER_BPS of its borrow limit spare: prices can move between
+ * the preview and inclusion, and a borrow sized to end exactly at the limit reverts on the smallest move, however
+ * large the debt. Zero whenever VaultManager would refuse any borrow (availableUsd is 0 then).
+ */
+export function borrowHeadroomUsd(v: Pick<ValuedPosition, 'borrowLimitUsd' | 'debtUsd' | 'availableUsd'> | null | undefined): number {
+  if (!v || v.availableUsd <= 0) return 0;
+  return Math.max(0, v.borrowLimitUsd / (1 + WITHDRAW_BUFFER_BPS / 10_000) - v.debtUsd);
 }

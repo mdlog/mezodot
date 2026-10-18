@@ -9,6 +9,7 @@ import {
   vaultManagerAbi,
   type BlockRange,
   type CollateralState,
+  type MarketState,
   type NetworkName,
   type ProtocolState,
 } from '@mezodot/sdk';
@@ -57,7 +58,62 @@ export function collateralUnits(protocol: ProtocolState, c: CollateralState): { 
 /** VaultManager.repayWithCollateral exists from the v4 hub on; its event is read only when the ABI has it. */
 const HAS_REPAID_WITH_COLLATERAL = (vaultManagerAbi as Abi).some((x) => x.type === 'event' && x.name === 'RepaidWithCollateral');
 
-async function hubActivity(client: PublicClient, protocol: ProtocolState, account: Address, range: BlockRange): Promise<ActivityItem[]> {
+type RowAmount = Pick<ActivityItem, 'asset' | 'amount' | 'decimals' | 'detail'>;
+type Units = { symbol: string; decimals: number };
+const amountText = (value: bigint, unit: Units, digits = 2) => `${fmt(units(value, unit.decimals), digits)} ${unit.symbol}`;
+
+/**
+ * The row for LeverageManager's Unwound event. The unwind nets the MUSD debt against posted pMUSD (`repaid`), then
+ * pays the withdrawn equity in MUSD as far as the pool's idle cash allows (`out`) and returns the rest as pMUSD
+ * (`sharesReturned`): the MUSD paid out alone can be far below the equity, or nothing at all. The amount is what came
+ * back in MUSD, else the pMUSD returned in its place, else (debt netted, nothing withdrawn) the debt repaid; the
+ * detail names the rest.
+ */
+export function unwindRow(
+  args: { repaid?: bigint; shares?: bigint; out?: bigint; sharesReturned?: bigint },
+  musd: Pick<MarketState, 'symbol' | 'decimals' | 'receiptSymbol' | 'shareDecimals'>,
+): RowAmount {
+  const { repaid = 0n, out = 0n, sharesReturned = 0n } = args;
+  const asset: Units = { symbol: musd.symbol, decimals: musd.decimals };
+  const share: Units = { symbol: musd.receiptSymbol, decimals: musd.shareDecimals };
+  const netted = repaid > 0n ? `repaid ${amountText(repaid, asset)} with ${share.symbol}` : null;
+  const join = (...parts: (string | null)[]) => {
+    const text = parts.filter((p): p is string => p !== null).join(' · ');
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  };
+  if (out > 0n) {
+    const returned = sharesReturned > 0n ? `${amountText(sharesReturned, share)} returned on top (the pool's idle cash was short)` : 'equity paid out';
+    return { asset: asset.symbol, amount: out, decimals: asset.decimals, detail: join(netted, returned) };
+  }
+  if (sharesReturned > 0n) {
+    return {
+      asset: share.symbol,
+      amount: sharesReturned,
+      decimals: share.decimals,
+      detail: join(netted, `equity returned as ${share.symbol} (the pool's idle cash was short)`),
+    };
+  }
+  return { asset: asset.symbol, amount: repaid, decimals: asset.decimals, detail: `Debt repaid with posted ${share.symbol} · nothing withdrawn` };
+}
+
+/** The row for SwapLeverageManager's Closed event: the BTC that came back, with the debt repaid, the BTC sold and the MUSD left over. */
+export function closeRow(
+  args: { repaid?: bigint; sold?: bigint; collateralOut?: bigint; debtAssetOut?: bigint },
+  btc: Units = { symbol: 'BTC', decimals: 18 },
+  musd: Units = { symbol: 'MUSD', decimals: 18 },
+): RowAmount {
+  const { repaid = 0n, sold = 0n, collateralOut = 0n, debtAssetOut = 0n } = args;
+  const back = debtAssetOut > 0n ? ` · ${amountText(debtAssetOut, musd)} returned` : '';
+  return {
+    asset: btc.symbol,
+    amount: collateralOut,
+    decimals: btc.decimals,
+    detail: `BTC leverage closed · repaid ${amountText(repaid, musd)}, sold ${amountText(sold, btc, 6)}${back}`,
+  };
+}
+
+/** The account's hub events in `range`, as activity rows (exported for tests). */
+export async function hubActivity(client: PublicClient, protocol: ProtocolState, account: Address, range: BlockRange): Promise<ActivityItem[]> {
   const dep = HUB.deployment!;
   const vm = dep.contracts.vaultManager;
   const items: ActivityItem[] = [];
@@ -230,17 +286,9 @@ async function hubActivity(client: PublicClient, protocol: ProtocolState, accoun
       blockNumber: x.blockNumber,
       logIndex: x.logIndex,
     });
-  for (const x of unwinds)
-    push({
-      kind: 'Unwind',
-      asset: 'MUSD',
-      amount: x.args.out!,
-      decimals: 18,
-      detail: 'Loop closed, equity returned',
-      txHash: x.transactionHash,
-      blockNumber: x.blockNumber,
-      logIndex: x.logIndex,
-    });
+  // LeverageManager loops the MUSD market; the rows fall back to its usual units if a deployment lists none.
+  const musd = protocol.markets.find((m) => m.symbol === 'MUSD') ?? { symbol: 'MUSD', decimals: 18, receiptSymbol: 'pMUSD', shareDecimals: 24 };
+  for (const x of unwinds) push({ kind: 'Unwind', ...unwindRow(x.args, musd), txHash: x.transactionHash, blockNumber: x.blockNumber, logIndex: x.logIndex });
   for (const x of opened) {
     const principal = Number(x.args.principal!);
     push({
@@ -254,13 +302,11 @@ async function hubActivity(client: PublicClient, protocol: ProtocolState, accoun
       logIndex: x.logIndex,
     });
   }
+  const btc = protocol.collaterals.find((c) => !c.isRemote && !c.isShare && c.symbol === 'BTC');
   for (const x of closed)
     push({
       kind: 'Unwind',
-      asset: 'BTC',
-      amount: x.args.collateralOut!,
-      decimals: 18,
-      detail: `BTC leverage closed · repaid ${(Number(x.args.repaid!) / 1e18).toFixed(2)} MUSD, sold ${(Number(x.args.sold!) / 1e18).toFixed(6)} BTC`,
+      ...closeRow(x.args, { symbol: 'BTC', decimals: btc?.decimals ?? 18 }, { symbol: musd.symbol, decimals: musd.decimals }),
       txHash: x.transactionHash,
       blockNumber: x.blockNumber,
       logIndex: x.logIndex,
@@ -311,6 +357,12 @@ async function spokeActivity(client: PublicClient, spoke: (typeof SPOKES)[number
   return withTimestamps(client, spoke.name, items);
 }
 
+/**
+ * Scanned rows are kept with their text (see scanIncremental): a new version rebuilds hub history once, so rows whose
+ * wording changed are not left behind (v2: unwinds and BTC closes name everything they returned).
+ */
+const HUB_ROWS_VERSION = 'v2';
+
 /** Spoke history is scanned for a recent window (see spokeHistoryStart); hub history is complete. */
 export type ActivityResult = { items: ActivityItem[]; spokeErrors: string[] };
 
@@ -328,7 +380,7 @@ export function useActivity() {
       const hubLatest = await hub!.getBlockNumber();
       // Chunked, incremental and kept per browser: public RPCs cap eth_getLogs ranges (Mezo: 5,000 blocks).
       const hubItems = await scanIncremental(
-        `${ENV_NAME}:hub:${dep.contracts.vaultManager}:${address}`.toLowerCase(),
+        `${ENV_NAME}:hub:${HUB_ROWS_VERSION}:${dep.contracts.vaultManager}:${address}`.toLowerCase(),
         BigInt(dep.startBlock),
         hubLatest,
         (r) => hubActivity(hub!, protocol.data!, address!, r),

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowDownLeft, ArrowRight, BadgeCheck, Bitcoin, Check, Shield, TriangleAlert, Waves, X } from 'lucide-react';
 import { useAccount, usePublicClient } from 'wagmi';
-import type { Hash, PublicClient } from 'viem';
+import { isAddressEqual, type Address, type Hash, type PublicClient } from 'viem';
 import { maxWithdrawableUnits } from '@mezodot/sdk';
 import { HubPending, QueryError } from '../components/StatusBanners';
 import { AmountInput, ConnectGate, InfoBar, NotDeployed, PageTitle, PanelTitle, Spinner, SummaryStrip, TxLink, PriceNotice } from '../components/ui';
@@ -10,15 +10,15 @@ import { HUB, HUB_DEPLOYED, SPOKES, networkByName, spokeByWormholeChain, type Sp
 import { claimSteps, relayHubSteps, relaySpokeSteps, spokeDepositSteps, withdrawRemoteSteps } from '../chain/actions';
 import { useTx } from '../chain/tx';
 import { useActivity } from '../data/activity';
-import { useSpokeClaims, type SpokeClaim } from '../data/claims';
-import { flightId, pendingFlightId, recoverFlights, sequenceFromLogs, useFlightStatus } from '../data/flights';
+import { claimRecipient, useSpokeClaims, type SpokeClaim } from '../data/claims';
+import { flightId, pendingFlightId, recoverFlights, releaseHeld, sequenceFromLogs, useFlightStatus, useReleaseOutcome } from '../data/flights';
 import { lockBlocked, lockRoom, useSpokeLockState } from '../data/guards';
 import { readError, useHubClient, usePosition, usePrices, useSpokeClients, useValuedPosition, useWalletBalances } from '../data/hooks';
 import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { spendableWeth, wrapNeeded } from '../lib/wrap';
 import { finalityEta, formatWait } from '../lib/eta';
 import { ChainLogo, TokenLogo } from '../components/Logos';
-import { fmt, money, timeAgo, units } from '../lib/format';
+import { fmt, money, shortAddress, timeAgo, units } from '../lib/format';
 import { useUi, type Flight } from '../state/UiContext';
 
 type Asset = 'WETH' | 'USDC';
@@ -276,9 +276,13 @@ function FlightRow({ flight }: { flight: Flight }) {
   useEffect(() => {
     if (flight.recovered && status?.delivered) removeFlight(flight.id);
   }, [flight.recovered, flight.id, status?.delivered, removeFlight]);
-  // Delivered, but the gateway could not transfer the tokens (ReleaseDeferred): they wait in "Ready to claim".
+  // Delivered, but the gateway could not transfer the tokens (ReleaseDeferred): they wait in "Ready to claim". That is
+  // decided per message: only while the account has a claim on this spoke is this release's own delivery looked up.
   const claims = useSpokeClaims().data?.claims;
-  const deferred = flight.direction === 'release' && Boolean(status?.delivered) && Boolean(claims?.some((c) => c.spoke.name === flight.target));
+  const delivered = Boolean(status?.delivered);
+  const claimOnTarget = flight.direction === 'release' && delivered && Boolean(claims?.some((c) => c.spoke.name === flight.target));
+  const lookedUp = useReleaseOutcome(flight, status?.vaa ?? null, claimOnTarget && !status?.outcome).data;
+  const deferred = releaseHeld(flight, delivered, status?.outcome ?? lookedUp, claims);
 
   const source = networkByName(flight.source);
   const target = networkByName(flight.target);
@@ -371,42 +375,96 @@ function FlightRow({ flight }: { flight: Flight }) {
 function ClaimsPanel() {
   const { address } = useAccount();
   const bitcoinWallet = useBitcoinWallet();
-  const { run, busy } = useTx();
-  const clients = useSpokeClients();
   const claims = useSpokeClaims().data?.claims ?? [];
   if (!address || claims.length === 0) return null;
-
-  const claim = (c: SpokeClaim) => {
-    const client = clients[SPOKES.indexOf(c.spoke)];
-    if (client) void run(`Claim ${c.symbol} on ${c.spoke.label}`, claimSteps(address, c.spoke, client, c.token, c.symbol));
-  };
 
   return (
     <section className="panel route-panel" aria-label="Releases ready to claim">
       <PanelTitle label="Ready to claim" meta="SpokeGateway.claim" />
       <p className="muted-note">
-        These releases reached the spoke, but the token transfer to your wallet failed on delivery, so the gateway holds them for you.
+        These releases reached the spoke, but the token transfer to your wallet failed on delivery, so the gateway holds them for you. Claim them to your
+        wallet, or to another address you control if the token refuses transfers to this one.
       </p>
       <div className="claim-list">
         {claims.map((c) => (
-          <div className="claim-row" key={`${c.spoke.name}-${c.symbol}`}>
-            <div className="collateral-detail">
-              <TokenLogo symbol={c.symbol} network={c.spoke.name} size={23} />
-              <span>
-                <b>
-                  {fmt(units(c.amount, c.decimals), 6)} {c.symbol}
-                </b>
-                <small>Held by the {c.spoke.label} gateway</small>
-              </span>
-            </div>
-            <button className="button button--outline" onClick={() => claim(c)} disabled={Boolean(busy) || bitcoinWallet}>
-              {busy ?? 'Claim to wallet'}
-            </button>
-          </div>
+          <ClaimRow key={`${c.spoke.name}-${c.symbol}`} claim={c} account={address} />
         ))}
       </div>
       {bitcoinWallet && <p className="muted-note">Claiming means signing on the spoke: connect an EVM wallet (MetaMask, Rabby) to claim.</p>}
     </section>
+  );
+}
+
+/** One claimable balance: SpokeGateway.claim(token, to), to the wallet or to an address the user enters. */
+function ClaimRow({ claim, account }: { claim: SpokeClaim; account: Address }) {
+  const bitcoinWallet = useBitcoinWallet();
+  const { run, busy } = useTx();
+  const clients = useSpokeClients();
+  // null: claim to the connected wallet; text: the other recipient being entered.
+  const [other, setOther] = useState<string | null>(null);
+  // A claim to the wallet failed: the token may refuse it, which is what deferred the release in the first place.
+  const [walletFailed, setWalletFailed] = useState(false);
+  const gateway = claim.spoke.deployment?.contracts.spokeGateway;
+  const recipient = gateway ? claimRecipient(other ?? '', { account, token: claim.token, gateway }) : null;
+  const toWallet = recipient?.to ? isAddressEqual(recipient.to, account) : false;
+  const inputId = `claim-to-${claim.spoke.name}-${claim.symbol}`;
+
+  const send = async () => {
+    const client = clients[SPOKES.indexOf(claim.spoke)];
+    if (!client || !recipient?.to) return;
+    const result = await run(
+      `Claim ${claim.symbol} on ${claim.spoke.label}`,
+      claimSteps(account, claim.spoke, client, claim.token, claim.symbol, recipient.to),
+    );
+    // Only a transfer the token refused points to claiming elsewhere; a declined signature is just a retry.
+    if (!result.ok && !result.pending && !result.rejected && toWallet) setWalletFailed(true);
+  };
+
+  return (
+    <div className="claim-item">
+      <div className="claim-row">
+        <div className="collateral-detail">
+          <TokenLogo symbol={claim.symbol} network={claim.spoke.name} size={23} />
+          <span>
+            <b>
+              {fmt(units(claim.amount, claim.decimals), 6)} {claim.symbol}
+            </b>
+            <small>Held by the {claim.spoke.label} gateway</small>
+          </span>
+        </div>
+        <button className="button button--outline" onClick={() => void send()} disabled={Boolean(busy) || bitcoinWallet || !recipient?.to}>
+          {busy ?? (toWallet ? 'Claim to wallet' : recipient?.to ? `Claim to ${shortAddress(recipient.to)}` : 'Claim to this address')}
+        </button>
+      </div>
+      {other === null ? (
+        <button className="text-link claim-other" onClick={() => setOther('')}>
+          Send to another address
+        </button>
+      ) : (
+        <div className="claim-recipient">
+          <label className="field-label" htmlFor={inputId}>
+            RECIPIENT <span>Empty: your wallet</span>
+          </label>
+          <div className="amount-input">
+            <input id={inputId} type="text" placeholder="0x…" spellCheck={false} autoComplete="off" value={other} onChange={(e) => setOther(e.target.value)} />
+            <button type="button" onClick={() => setOther(null)}>
+              WALLET
+            </button>
+          </div>
+          {recipient?.error && (
+            <p className="inline-error" role="alert">
+              {recipient.error}
+            </p>
+          )}
+        </div>
+      )}
+      {walletFailed && toWallet && (
+        <p className="muted-note">
+          The claim to your wallet did not go through. If the token refuses transfers to this wallet (a blacklisted address, for example), send it to another
+          address you control instead.
+        </p>
+      )}
+    </div>
   );
 }
 

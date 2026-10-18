@@ -12,7 +12,10 @@ import { priceUpdatesIn, runSteps, type StepReport, type TxClient, type TxDriver
 export { explainError };
 export type { TxStep };
 
-export type TxResult = { ok: true; receipts: TransactionReceipt[] } | { ok: false; pending?: { hash: Hash; chainId: number } };
+export type TxResult =
+  | { ok: true; receipts: TransactionReceipt[] }
+  /** `rejected`: the user declined a signature (nothing was attempted on-chain). */
+  | { ok: false; pending?: { hash: Hash; chainId: number }; rejected?: boolean };
 
 export type RunOptions = {
   /** Called with each step's hash as soon as the wallet returns it, before the receipt (e.g. to record a flight). */
@@ -141,7 +144,7 @@ export function useTx() {
           // A declined signature is the user's own choice: no need to keep it on screen.
           sticky: !outcome.rejected,
         });
-        return outcome.pending ? { ok: false, pending: outcome.pending } : { ok: false };
+        return outcome.pending ? { ok: false, pending: outcome.pending } : { ok: false, rejected: outcome.rejected };
       } finally {
         end(owner);
         void queryClient.invalidateQueries();

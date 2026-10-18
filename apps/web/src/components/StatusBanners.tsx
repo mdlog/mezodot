@@ -52,7 +52,7 @@ export function BalancesBanner() {
   );
 }
 
-/** The agent relay supplies the pull prices (Supra proofs) that ETH and USDC collateral need. */
+/** The agent relay supplies the pull prices (Supra proofs) that ETH, USDC and BTC collateral need. */
 export function RelayBanner() {
   const prices = usePrices().data;
   const queryClient = useQueryClient();

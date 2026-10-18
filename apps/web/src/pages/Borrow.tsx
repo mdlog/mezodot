@@ -10,6 +10,7 @@ import { HUB_DEPLOYED, spokeByWormholeChain } from '../chain/env';
 import { REPAY_WITH_COLLATERAL, borrowSteps, repayWithCollateralSteps } from '../chain/actions';
 import { useTx } from '../chain/tx';
 import { borrowBlocked, borrowRoom, repayWithSharesPlan, useHubFlags } from '../data/guards';
+import { borrowHeadroomUsd } from '../data/limits';
 import { useHubClient, useValuedPosition } from '../data/hooks';
 import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { fmt, fmtApy, fmtHealth, money, pct, units } from '../lib/format';
@@ -29,10 +30,10 @@ export function Borrow() {
   const market = protocol?.markets[marketId];
   const priceSymbol = market ? symbolForPriceKey(market.priceKey) : undefined;
   const price = priceSymbol ? (prices?.[priceSymbol] ?? 0) : 0;
-  const availableUnits = valued && price > 0 ? Math.max(0, valued.availableUsd / price) : 0;
+  const availableUnits = price > 0 ? borrowHeadroomUsd(valued) / price : 0;
   const liquidity = market ? units(market.cash, market.decimals) : 0;
-  // Exact bigint limit: fresh-price headroom (floored, 0.1% margin) capped by pool cash and the borrow cap.
-  const maxBorrow = market ? [floorUnits(availableUnits * 0.999, market.decimals), market.cash, borrowRoom(market)].reduce((a, b) => (b < a ? b : a)) : 0n;
+  // Exact bigint limit: fresh-price headroom (floored, with the limit buffer) capped by pool cash and the borrow cap.
+  const maxBorrow = market ? [floorUnits(availableUnits, market.decimals), market.cash, borrowRoom(market)].reduce((a, b) => (b < a ? b : a)) : 0n;
   const blocked = market ? borrowBlocked(market, flags) : null;
 
   const parsed = market ? parseInput(amount, market.decimals) : null;
@@ -84,7 +85,7 @@ export function Borrow() {
             VAULTMANAGER <i>/</i> CROSS-CHAIN HEALTH FACTOR
           </>
         }
-        time="Prices: Pyth on Mezo · Supra pull for ETH/USDC"
+        time="Prices: Pyth on Mezo · Supra pull for ETH/USDC/BTC"
         icon={Shield}
       />
       {!HUB_DEPLOYED && <NotDeployed />}
@@ -193,7 +194,8 @@ export function Borrow() {
           {blocked && <p className="action-blocked">{blocked}</p>}
           <PriceNotice unpriced={unpriced} relayError={relayError} unpricedDebts={unpricedDebts} />
           <div className="small-disclosure">
-            <LockKeyhole size={14} /> MUSD/MEZO prices come from Pyth, pushed on Mezo. ETH/USDC prices are attached to the borrow as a signed Supra proof.
+            <LockKeyhole size={14} /> MUSD/MEZO prices come from Pyth, pushed on Mezo. ETH, USDC and BTC also have a Supra leg: a signed Supra proof goes along
+            with the borrow whenever their stored price would not stay fresh until it lands.
           </div>
         </section>
 

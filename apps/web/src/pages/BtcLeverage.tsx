@@ -6,6 +6,7 @@ import {
   borrowRoomAt,
   healthStatus,
   marketPoolState,
+  MAX_QUOTE_SHORTFALL_BPS,
   maxBtcPrincipal,
   parseAmount,
   perSecondToApy,
@@ -83,20 +84,34 @@ export function BtcLeverage() {
   };
   const walletBtc = balances?.hub.tokens.BTC;
   const spendable = spendableBtc(walletBtc ?? 0n);
+  // What can be funded with a swap at the oracle price; the quote for an amount resizes it below (plan.maxPrincipal).
   const fundable = maxBtcPrincipal(leverage, terms);
+  // The oracle price sets the MUSD to borrow; the pool's own quote for it sets the BTC the flash swap delivers.
+  const borrowWeiFor = (principal: number) => (musd ? floorUnits(planBtcLeverage({ ...terms, principal, leverage }).borrowMusd, musd.decimals) : 0n);
   // Suggested: the largest round amount that keeps the MUSD pool at or below its kink (borrow rates jump past it),
   // within what can be funded at all and what the wallet can commit.
   const atKink =
     terms.pool && btcPrice > 0 && musdPrice > 0 ? (borrowRoomAt(terms.pool, terms.pool.model.kink) * musdPrice) / (btcPrice * (leverage - 1)) : Infinity;
   const walletUnits = btc && walletBtc !== undefined && spendable > 0n ? units(spendable, btc.decimals) : Infinity;
-  const suggested = Math.min(atKink >= MIN_SUGGESTED_BTC ? Math.min(atKink, fundable) : fundable, walletUnits) * LIQUIDITY_USE;
-  const amount = typed ?? (btc && btcPrice > 0 && musdPrice > 0 ? roundedInput(suggested) : '');
+  const draft =
+    btc && btcPrice > 0 && musdPrice > 0
+      ? roundedInput(Math.min(atKink >= MIN_SUGGESTED_BTC ? Math.min(atKink, fundable) : fundable, walletUnits) * LIQUIDITY_USE)
+      : '';
+  // The swap may return fewer BTC than the oracle price implies: while suggesting, a quote for the draft resizes it at
+  // the BTC Tigris pays (that quote depends only on the draft, so the suggestion settles in one step).
+  const draftPrincipal = parseAmount(draft) ?? 0;
+  const draftBorrowWei = typed === null ? borrowWeiFor(draftPrincipal) : 0n;
+  const draftQuote = useTigrisPoolQuote(musd?.asset, draftBorrowWei).data;
+  const draftPlan =
+    draftQuote !== undefined && btc && musd
+      ? planBtcLeverage({ ...terms, principal: draftPrincipal, leverage, quotedBtc: units(draftQuote, btc.decimals) })
+      : null;
+  const suggested = draftPlan?.error && draftPlan.maxPrincipal * LIQUIDITY_USE < draftPrincipal ? roundedInput(draftPlan.maxPrincipal * LIQUIDITY_USE) : draft;
+  const amount = typed ?? suggested;
   const principal = parseAmount(amount) ?? 0;
   const principalWei = btc ? parseInput(amount, btc.decimals) : null;
 
-  // The oracle price sets the MUSD to borrow; the pool's own quote for it sets the BTC the flash swap delivers.
-  const borrowMusd = planBtcLeverage({ ...terms, principal, leverage }).borrowMusd;
-  const borrowWei = musd ? floorUnits(borrowMusd, musd.decimals) : 0n;
+  const borrowWei = borrowWeiFor(principal);
   const buy = useTigrisPoolQuote(musd?.asset, borrowWei);
   // Selling that BTC straight back prices the round trip.
   const sellBack = useTigrisPoolQuote(btc?.token, buy.data ?? 0n);
@@ -110,10 +125,15 @@ export function BtcLeverage() {
   const after = plan.accountAfter;
 
   const overBalance = principalWei !== null && walletBtc !== undefined && principalWei > spendable;
-  // MAX: what the wallet can commit, capped at what the pool and the caps can fund (exact base units).
+  // What the pool, the caps and the borrow limit fund at this amount's quote (the oracle price until it is quoted).
+  const fundableNow = plan.maxPrincipal;
+  // MAX: what the wallet can commit, capped at that (exact base units).
+  // Past the quote-shortfall gate this size is refused whatever the pool funds: MAX must not fill in an amount the
+  // desk itself rejects (a smaller amount moves the pool less and may pass).
+  const quoteTooShort = plan.priceImpact * 10_000 > MAX_QUOTE_SHORTFALL_BPS;
   const maxWei = (() => {
-    if (!btc || walletBtc === undefined) return null;
-    return Number.isFinite(fundable) ? minBig(spendable, floorUnits(fundable * LIQUIDITY_USE, btc.decimals)) : spendable;
+    if (!btc || walletBtc === undefined || quoteTooShort) return null;
+    return Number.isFinite(fundableNow) ? minBig(spendable, floorUnits(fundableNow * LIQUIDITY_USE, btc.decimals)) : spendable;
   })();
 
   const ctx = address && hub && protocol ? { account: address, hub, protocol, position: position ?? null } : null;
@@ -126,9 +146,14 @@ export function BtcLeverage() {
     (!pairDeployed ? 'This deployment names no Tigris MUSD/BTC pool to quote' : null) ??
     (buy.error ? `No Tigris quote right now: ${readError(buy.error)}` : null);
   const quoting = principal > 0 && openBlocked === null && buy.data === undefined;
-  // With no amount suggested because nothing fits, say why (what a nominal position runs into) rather than asking for one.
+  // With no amount suggested because nothing fits, say why (what a nominal position runs into, or what the draft
+  // amount runs into at its quote) rather than asking for one.
   const shownBlock =
-    amount.trim() !== '' ? openBlocked : fundable < MIN_SUGGESTED_BTC && btcPrice > 0 ? planBtcLeverage({ ...terms, principal: 0.0001, leverage }).error : null;
+    amount.trim() !== ''
+      ? openBlocked
+      : fundable < MIN_SUGGESTED_BTC && btcPrice > 0
+        ? planBtcLeverage({ ...terms, principal: 0.0001, leverage }).error
+        : (draftPlan?.error ?? null);
   const canOpen =
     deployed &&
     ctx !== null &&
@@ -162,7 +187,16 @@ export function BtcLeverage() {
   const sellAll = useTigrisPoolQuote(btc?.token, hasPosition ? postedWei : 0n).data;
   const closeTerms: BtcCloseTerms | null =
     hasPosition && btc && musd && sellAll !== undefined && rest !== null
-      ? { collateralBtc: postedBtc, debtMusd, quotedMusdForAll: units(sellAll, musd.decimals), slippageBps: SLIPPAGE_BPS, btcPrice, musdPrice, rest }
+      ? {
+          collateralBtc: postedBtc,
+          debtMusd,
+          quotedMusdForAll: units(sellAll, musd.decimals),
+          slippageBps: SLIPPAGE_BPS,
+          // Usable prices only, to flag a quote far off the market: a lapsed MUSD feed leaves nothing to compare against.
+          btcPrice: prices?.BTC,
+          musdPrice: prices?.MUSD,
+          rest,
+        }
       : null;
   const draftClose = closeTerms ? planBtcClose(closeTerms) : null;
   // Second pass: size the sale at the average price of the amount actually sold (a smaller sale fetches more per BTC).
@@ -238,7 +272,9 @@ export function BtcLeverage() {
               YOUR BTC{' '}
               <span>
                 Wallet · {walletBtc !== undefined ? fmt(units(walletBtc, btc.decimals), 6) : '—'} BTC (keeps {fmt(units(BTC_GAS_RESERVE, 18), 4)} for gas)
-                {terms.pool && Number.isFinite(fundable) ? ` · pool funds ≤ ${fmt(fundable, 6)} at ${leverage}×` : ''}
+                {terms.pool && Number.isFinite(fundableNow) && !quoteTooShort && unpricedDebts.length === 0
+                  ? ` · pool funds ≤ ${fmt(fundableNow, 6)} at ${leverage}×`
+                  : ''}
               </span>
             </label>
             <AmountInput

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useAccount } from 'wagmi';
-import type { Address, PublicClient } from 'viem';
+import { getAddress, isAddress, isAddressEqual, zeroAddress, type Address, type PublicClient } from 'viem';
 import { spokeGatewayAbi } from '@mezodot/sdk';
 import { SPOKES, type SpokeInfo } from '../chain/env';
 import { QK, readError, useSpokeClients } from './hooks';
@@ -47,6 +47,28 @@ export async function readSpokeClaims(account: Address, spokes: readonly SpokeIn
   // Stable order for the UI: spokes as configured, then tokens.
   claims.sort((a, b) => spokes.indexOf(a.spoke) - spokes.indexOf(b.spoke) || a.symbol.localeCompare(b.symbol));
   return { claims, errors };
+}
+
+export type ClaimRecipient = { to: Address; error: null } | { to: null; error: string };
+
+/**
+ * Where a deferred release is claimed to (SpokeGateway.claim(token, to)): the connected wallet while `input` is empty,
+ * else the address typed, which must be a valid EVM address (all lowercase, or with a correct EIP-55 checksum) that
+ * can hold the tokens. A release deferred because the token refuses the wallet itself (a blacklisted recipient) can
+ * only be collected this way: a claim back to the wallet hits the same failing transfer.
+ */
+export function claimRecipient(input: string, { account, token, gateway }: { account: Address; token: Address; gateway: Address }): ClaimRecipient {
+  const text = input.trim();
+  if (text === '') return { to: account, error: null };
+  if (!isAddress(text, { strict: false })) return { to: null, error: 'Enter an address: 0x followed by 40 hexadecimal characters' };
+  // Mixed case carries an EIP-55 checksum: a mistyped or truncated copy fails it.
+  if (!isAddress(text)) return { to: null, error: 'That address fails its checksum: copy it again' };
+  const to = getAddress(text);
+  if (isAddressEqual(to, zeroAddress)) return { to: null, error: 'The zero address cannot receive tokens' };
+  if (isAddressEqual(to, token) || isAddressEqual(to, gateway)) {
+    return { to: null, error: 'That is the token or the gateway contract itself: tokens sent there cannot be recovered' };
+  }
+  return { to, error: null };
 }
 
 export function useSpokeClaims() {

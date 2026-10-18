@@ -220,10 +220,11 @@ describe('maxWithdrawableUnits (final review I6)', () => {
 
   it('keeps the remaining limit at or above debt', async () => {
     const { maxWithdrawableUnits } = await import('../src');
-    // 1 WETH ($3,200 × 75% = $2,400 limit), $1,200 debt → may remove (2,400 − 1,200) / (3,200 × 0.75) = 0.5 WETH
+    // 1 WETH ($3,200 × 75% = $2,400 limit), $1,200 debt → may remove (2,400 − 1,200 × 1.01) / (3,200 × 0.75) WETH,
+    // keeping 1% of the debt spare for price moves before inclusion.
     const x = maxWithdrawableUnits(pos(1_200, [{ id: 2, units: 1, price: 3_200, ltvBps: 7_500, ltBps: 8_000 }]), 2);
     expect(x).toBeLessThanOrEqual(0.5);
-    expect(x).toBeGreaterThan(0.499);
+    expect(x).toBeCloseTo((2_400 - 1_212) / 2_400, 12);
     expect(maxWithdrawableUnits(pos(2_400, [{ id: 2, units: 1, price: 3_200, ltvBps: 7_500, ltBps: 8_000 }]), 2)).toBe(0);
   });
 

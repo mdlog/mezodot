@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { maxUint256, zeroAddress, type PublicClient } from 'viem';
-import { toBytes32, type CollateralState, type MarketState } from '@mezodot/sdk';
+import { RATE_MODELS, marketPoolState, maxBtcPrincipal, maxLoopPrincipal, toBytes32, type CollateralState, type MarketState } from '@mezodot/sdk';
 import { HUB, SPOKES } from '../chain/env';
 import {
   borrowBlocked,
@@ -63,6 +63,51 @@ describe('caps leave room for interest accrued before the transaction lands', ()
   it('changes nothing without a rate or when uncapped', () => {
     expect(pendingInterest({ totalBorrows: borrows }, now - 100n, now)).toBe(0n);
     expect(borrowRoom({ borrowCap: maxUint256, totalBorrows: borrows, borrowRatePerSecond: rate })).toBe(maxUint256);
+  });
+});
+
+describe('the leverage desks size against the same accrued rooms as the modals (final review WEB-4)', () => {
+  afterEach(() => vi.useRealTimers());
+  const E18 = 10n ** 18n;
+  const now = 1_800_000_000n;
+  // MUSD near its 4M borrow cap after a quiet 8 h: 3.99M lent at 10% a year, 2M idle, supply capped at 6.01M.
+  const m = {
+    ...market({ totalBorrows: 3_990_000n * E18, totalAssets: 5_990_000n * E18 }),
+    decimals: 18,
+    cash: 2_000_000n * E18,
+    totalReserves: 0n,
+    reserveFactor: E18 / 10n,
+    borrowCap: 4_000_000n * E18,
+    supplyCap: 6_010_000n * E18,
+    borrowRatePerSecond: 3_170_979_198n,
+    accrualTimestamp: now - 8n * 3_600n,
+    rateModel: RATE_MODELS.MUSD,
+  } as MarketState;
+  const units = (v: bigint) => Number(v) / 1e18;
+
+  it('leaves the BTC desk the borrow room borrowRoom leaves, so MAX (98% of it) cannot pass the cap', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Number(now) * 1000);
+    const pool = marketPoolState(m)!;
+    // About 364 MUSD accrued since the last accrual (plus the inclusion window) comes off the 10,000 of stored room.
+    expect(pool.borrowCap! - pool.borrows).toBeCloseTo(units(borrowRoom(m)), 6);
+    expect(units(borrowRoom(m))).toBeLessThan(10_000 - 364);
+    const btc = { btcPrice: 80_000, musdPrice: 1, ltvBps: 7_000, ltBps: 7_800, pool };
+    const maxBorrow = maxBtcPrincipal(2, btc) * 80_000 * 0.98;
+    expect(maxBorrow).toBeLessThanOrEqual(units(borrowRoom(m)));
+  });
+
+  it('sizes the loop against the supply PToken.maxDeposit measures when the loop lands', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Number(now) * 1000);
+    const uncappedBorrows = { ...m, borrowCap: maxUint256 };
+    // The cap less the stored supply plus 90% of the interest accrued by inclusion (10% goes to reserves).
+    const interest = (3_990_000n * E18 * m.borrowRatePerSecond * (8n * 3_600n + INCLUSION_SECONDS)) / E18;
+    const onChainRoom = units(m.supplyCap - (5_990_000n * E18 + (interest * 9n) / 10n));
+    const principal = maxLoopPrincipal(2, { ltvBps: 8_000, ltBps: 8_500, pool: marketPoolState(uncappedBorrows)! });
+    expect(principal * 2).toBeCloseTo(onChainRoom, 6);
+    // Measured against the stored 5.99M the desk offered 20,000 of deposit room; about 335 of it is gone by inclusion.
+    expect(principal * 2).toBeLessThan(20_000 - 300);
   });
 });
 

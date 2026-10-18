@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { maxUint256, type PublicClient } from 'viem';
 import {
+  INCLUSION_SECONDS,
   PRICE_KEYS,
   RATE_MODELS,
+  borrowRoomAt,
   marketPoolState,
+  maxBtcPrincipal,
+  maxLoopPrincipal,
   maxWithdrawableUnits,
+  pendingInterest,
+  planBtcLeverage,
+  planLoop,
   readRateModel,
   valuePosition,
   type CollateralState,
@@ -113,7 +120,8 @@ describe('valuation with a debt that has no usable price (audit: unpriced debt v
     expect(v.unpricedDebts).toEqual([]);
     expect(v.debts[0]).toMatchObject({ price: 1, priced: true });
     expect(v.availableUsd).toBeCloseTo(2_250 - 1_000, 9);
-    expect(maxWithdrawableUnits(v, 1)).toBeCloseTo((1_250 / (3_000 * 0.75)) * 0.999, 12);
+    // What stays must back the $1,000 debt plus its 1% buffer: (2,250 − 1,010) / (3,000 × 0.75) WETH may leave.
+    expect(maxWithdrawableUnits(v, 1)).toBeCloseTo((2_250 - 1_010) / (3_000 * 0.75), 12);
   });
 
   it('a debt-free account can withdraw everything without any price', () => {
@@ -143,6 +151,34 @@ describe('valuation with a debt that has no usable price (audit: unpriced debt v
     expect(v.borrowLimitUsd).toBe(0);
     expect(v.availableUsd).toBe(0);
     expect(v.unpricedDebts).toEqual(['MUSD']);
+  });
+});
+
+describe('valued accounts feed the leverage previews (final review sdk-loop-no-price-check)', () => {
+  it('a loop for an account whose MUSD has no usable price is an error, as simulate_loop builds it', () => {
+    // MUSD's push lapsed: valuePosition lists the MUSD debt as unpriced and the caller has no MUSD price to pass.
+    const v = valuePosition(protocol, position, { ETH: 3_000 });
+    const plan = planLoop(10, 3, { ltvBps: 8_000, ltBps: 8_500, account: v, musdPrice: undefined });
+    expect(plan.error).toMatch(/^No usable MUSD price right now/);
+    // With MUSD priced but MEZO debt unpriced, the strict debt pricing still blocks the borrow.
+    const mezoDebt = { ...position, debts: [position.debts[0], { marketId: 1, amount: 10n * E18 }] };
+    const w = valuePosition(protocol, mezoDebt, { ETH: 3_000, MUSD: 1 });
+    expect(w.unpricedDebts).toEqual(['MEZO']);
+    expect(planLoop(10, 3, { ltvBps: 8_000, ltBps: 8_500, account: w, musdPrice: 1 }).error).toMatch(/^No usable MEZO price for your debt/);
+    expect(planBtcLeverage({ principal: 0.1, leverage: 2, btcPrice: 80_000, musdPrice: 1, ltvBps: 7_000, ltBps: 7_800, account: w }).error).toMatch(
+      /^No usable MEZO price for your debt/,
+    );
+  });
+
+  it('a withdrawal keeps 1% of the debt spare, so a small price move cannot revert it (sdk-unwind-margin-on-headroom)', () => {
+    // 100 WETH at $1,000 ($75,000 limit) against $74,000: before, MAX left $1 of the limit spare (0.0014% of the debt).
+    const weth: PositionState = { ...position, collateral: [position.collateral[0], { id: 1, balance: 100n * E18, valueUsd: 0n }] };
+    const v = valuePosition(protocol, { ...weth, debts: [{ marketId: 0, amount: 74_000n * E18 }, position.debts[1]] }, { ETH: 1_000, MUSD: 1 });
+    const max = maxWithdrawableUnits(v, 1);
+    const limitLeft = v.borrowLimitUsd - max * 1_000 * 0.75;
+    expect(limitLeft).toBeCloseTo(74_000 * 1.01, 6);
+    // ETH 0.5% lower when the withdrawal lands still passes the check on what remains.
+    expect(limitLeft * 0.995).toBeGreaterThan(74_000);
   });
 });
 
@@ -206,6 +242,49 @@ describe('pool state for rate projections', () => {
       borrowCap: 500,
     });
     expect(marketPoolState(market(0, POOL_MUSD, 'MUSD'))).toBeNull();
+  });
+
+  it('includes the interest the pool accrues before it checks a cap (final review sdk-caps-ignore-pending-interest)', () => {
+    const now = 1_800_000_000n;
+    // MUSD at its 80% kink: 1,000,000 idle, 3,999,000 lent at 6% a year, last accrued 6 h ago, 4,000,000 borrow cap.
+    const rate = 1_902_587_519n; // 6% / 31,536,000 s (WAD)
+    const m: MarketState = {
+      ...market(0, POOL_MUSD, 'MUSD'),
+      cash: 1_000_000n * E18,
+      totalBorrows: 3_999_000n * E18,
+      borrowRatePerSecond: rate,
+      borrowCap: 4_000_000n * E18,
+      accrualTimestamp: now - 21_600n,
+      rateModel: RATE_MODELS.MUSD,
+    };
+    // MezodotPool._accrued: simple interest at the stored rate, until the transaction lands INCLUSION_SECONDS later.
+    const interest = (3_999_000n * E18 * rate * (21_600n + INCLUSION_SECONDS)) / E18;
+    expect(pendingInterest(m, m.accrualTimestamp, now)).toBe(interest);
+    const pool = marketPoolState(m, now)!;
+    expect(pool.borrows).toBeCloseTo(Number(3_999_000n * E18 + interest) / 1e18, 6);
+    expect(pool.borrows - 3_999_000).toBeCloseTo(168.9, 1);
+    // The reserve factor's 10% of it goes to reserves, the rest to suppliers.
+    expect(pool.reserves).toBeCloseTo(Number(interest) / 1e18 / 10, 6);
+
+    // A 900 MUSD borrow fits the stored 3,999,000 but not the accrued total: MezodotPool.borrow reverts BorrowCapExceeded.
+    const btc = { btcPrice: 80_000, musdPrice: 1, ltvBps: 7_000, ltBps: 7_800, pool };
+    expect(planBtcLeverage({ ...btc, principal: 900 / 80_000, leverage: 2 }).error).toMatch(/borrow would pass the pool's borrow cap/);
+    const room = 4_000_000 - pool.borrows;
+    expect(maxBtcPrincipal(2, btc) * 80_000).toBeCloseTo(room, 6);
+    expect(borrowRoomAt(pool, 1)).toBeCloseTo(room, 6);
+    expect(planBtcLeverage({ ...btc, principal: (room * 0.99) / 80_000, leverage: 2 }).error).toBeNull();
+
+    // The loop's deposit is checked against the accrued supply (PToken.maxDeposit): 300 MUSD of stored room is 148.
+    const capped = marketPoolState({ ...m, borrowCap: maxUint256, supplyCap: (4_999_000n + 300n) * E18 }, now)!;
+    const loop = { ltvBps: 8_000, ltBps: 8_500, pool: capped };
+    const supplyRoom = 300 - (Number(interest) / 1e18) * 0.9;
+    expect(maxLoopPrincipal(2, loop)).toBeCloseTo(supplyRoom / 2, 6);
+    expect(planLoop(100, 2, loop).error).toMatch(/would pass the pool's supply cap/);
+    expect(planLoop(70, 2, loop).error).toBeNull();
+    // A hand-built state without a rate is unchanged; one without accrualTimestamp still allows for the inclusion window.
+    expect(marketPoolState({ ...m, borrowRatePerSecond: 0n }, now)!.borrows).toBe(3_999_000);
+    const window = (3_999_000n * E18 * rate * INCLUSION_SECONDS) / E18;
+    expect(marketPoolState({ ...m, accrualTimestamp: undefined }, now)!.borrows).toBeCloseTo(Number(3_999_000n * E18 + window) / 1e18, 6);
   });
 
   it('reads a pool rate model once per client (the model and its parameters are immutable)', async () => {

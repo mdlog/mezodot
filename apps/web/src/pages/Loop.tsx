@@ -134,9 +134,10 @@ function MusdLoop() {
     supplyApy: musd ? perSecondToApy(musd.supplyRatePerSecond) : 0,
     borrowApy: musd ? perSecondToApy(musd.borrowRatePerSecond) : 0,
     pool: musd ? (marketPoolState(musd) ?? undefined) : undefined,
-    // The whole account VaultManager checks: the loop's pMUSD and debt are added to it.
+    // The whole account VaultManager checks (with its unpriced debts): the loop's pMUSD and debt are added to it.
     account: valued ?? undefined,
-    musdPrice: musdPrice ?? 1,
+    // 0 while there is no usable MUSD price: the loop's borrow is priced strictly, so the plan says it would revert.
+    musdPrice: musdPrice ?? 0,
     collateralRoom: musd && capShares !== maxUint256 ? pTokenUnits(musd, capShares) : undefined,
   };
   const wallet = balances?.hub.tokens.MUSD;
@@ -155,12 +156,11 @@ function MusdLoop() {
     return byPool !== undefined && byPool < wallet ? byPool : wallet;
   })();
 
-  // First reason the loop cannot be opened now; null when it can.
+  // First reason the loop cannot be opened now; null when it can (the plan covers missing MUSD and debt prices).
   const openBlocked =
     plan.error ??
     (collateral && !collateral.enabled ? 'pMUSD is not accepted as new collateral right now, so the loop has nothing to borrow against' : null) ??
     (musd ? borrowBlocked(musd, flags) : null) ??
-    (musdPrice === undefined ? "No usable MUSD price right now: the loop's borrow is priced strictly and would revert" : null) ??
     (overBalance ? 'Amount exceeds your MUSD balance' : null);
   const canOpen = openBlocked === null && unpricedDebts.length === 0 && principalWei !== null && !busy;
   // With no amount suggested because nothing fits, say why (what a nominal 1 MUSD loop runs into) rather than asking for one.
@@ -228,6 +228,8 @@ function MusdLoop() {
   const scenario = planLoop(SCENARIO.principal, SCENARIO.leverage, { ltvBps: terms.ltvBps, ltBps: terms.ltBps });
   const scenarioAmount = roundedInput(Math.min(SCENARIO.principal, fundable(SCENARIO.leverage)));
   const scenarioFits = scenarioAmount === String(SCENARIO.principal);
+  // Without the prices to borrow at, nothing is fundable for a reason that is not the pool's (the form says which).
+  const priceBlocked = musdPrice === undefined || unpricedDebts.length > 0;
 
   // Waiting on (or failing) the hub read: say which, instead of a form of zeros.
   if (!protocol) {
@@ -256,7 +258,7 @@ function MusdLoop() {
               INITIAL EQUITY{' '}
               <span>
                 Wallet · {wallet !== undefined ? fmt(units(wallet, musd.decimals), 2) : '—'} MUSD
-                {terms.pool ? ` · pool funds ≤ ${fmt(maxLoopPrincipal(leverage, terms), 2)} at ${leverage}×` : ''}
+                {terms.pool && !priceBlocked ? ` · pool funds ≤ ${fmt(maxLoopPrincipal(leverage, terms), 2)} at ${leverage}×` : ''}
               </span>
             </label>
             <AmountInput
@@ -476,6 +478,7 @@ function MusdLoop() {
             the flash loan in the same transaction — LTV {pct(scenario.ltv)}, health {fmtHealth(scenario.healthFactor)}.
             {!scenarioFits &&
               terms.pool &&
+              !priceBlocked &&
               ` The pool's idle cash and caps fund ${scenarioAmount ? `at most ${scenarioAmount} MUSD` : 'no loop'} at ${SCENARIO.leverage}× right now.`}
           </p>
         </div>

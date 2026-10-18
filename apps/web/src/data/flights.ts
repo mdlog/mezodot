@@ -1,9 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { usePublicClient } from 'wagmi';
-import { TransactionReceiptNotFoundError, isAddressEqual, parseEventLogs, type Address, type Hex, type PublicClient } from 'viem';
+import { TransactionReceiptNotFoundError, getAbiItem, isAddressEqual, parseEventLogs, type Address, type Hex, type PublicClient } from 'viem';
 import { fetchSignedVaa, spokeGatewayAbi, vaaDigest, wormholeAdapterAbi, type NetworkName } from '@mezodot/sdk';
 import { AGENT_URL, ENV_NAME, HUB, SPOKES, networkByName, type HubInfo, type SpokeInfo } from '../chain/env';
 import type { ActivityItem } from './activity';
+import type { SpokeClaim } from './claims';
+import { spokeHistoryStart } from './incremental';
 
 /** A cross-chain message the user started, tracked until delivered. */
 export type Flight = {
@@ -104,7 +106,9 @@ export const RECOVERY_WINDOW_MS = 24 * 3600_000;
 
 /**
  * Flights for recent cross-chain events of the account that the store does not know about: a lock sent from
- * another device, cleared storage, or a page reloaded before the receipt arrived.
+ * another device, cleared storage, or a page reloaded before the receipt arrived. A flight the user stopped
+ * tracking stays dismissed under either id: the sequence id, or the pending id (its transaction) when it was
+ * dismissed before its receipt told the sequence.
  */
 export function recoverFlights(items: readonly ActivityItem[], store: FlightStore, nowMs: number, deployments: Deployments = CURRENT): Flight[] {
   const known = new Set([...store.flights.map((f) => f.id), ...store.dismissed]);
@@ -114,7 +118,7 @@ export function recoverFlights(items: readonly ActivityItem[], store: FlightStor
     const m = item.message;
     if (!m || item.timestamp === null || nowMs - item.timestamp > RECOVERY_WINDOW_MS) continue;
     const id = flightId(m.emitterChain, m.emitter, m.sequence);
-    if (known.has(id) || knownTx.has(item.txHash.toLowerCase())) continue;
+    if (known.has(id) || known.has(pendingFlightId(item.txHash)) || knownTx.has(item.txHash.toLowerCase())) continue;
     const flight: Flight = {
       id,
       direction: m.direction,
@@ -158,9 +162,95 @@ export type FlightStatus = {
   sourcePending: boolean;
   /** The source transaction reverted: no message was sent. */
   failed: string | null;
+  /** How a delivered release ended, when the agent delivered it (devnet); else see useReleaseOutcome. */
+  outcome: ReleaseOutcome | null;
 };
 
-type AgentMessage = { id: string; status: string };
+/** A message as the agent's /messages lists it: `deferred` once a release it delivered was held for a claim. */
+type AgentMessage = { id: string; status: string; deliveredTx?: string; deferred?: { token: Address } };
+
+// --- Delivered releases: sent to the recipient, or held by the gateway ---------------------------------------
+
+/** How SpokeGateway.receiveMessage ended for one RELEASE: the transfer reached the recipient, or `token` waits for a claim. */
+export type ReleaseOutcome = { deferred: false } | { deferred: true; token: Address };
+
+const RELEASE_EVENTS = [getAbiItem({ abi: spokeGatewayAbi, name: 'Released' }), getAbiItem({ abi: spokeGatewayAbi, name: 'ReleaseDeferred' })] as const;
+
+/**
+ * How the delivery of the RELEASE with VAA digest `digest` ended on `gateway`: the delivery emits Released, or
+ * ReleaseDeferred when the token transfer failed, both indexed by that digest. Scans back from `latest` in
+ * `chunk`-block ranges (public RPCs cap eth_getLogs), newest first since deliveries are usually recent, and stops at
+ * the first match; null when neither event is in [floor, latest].
+ */
+export async function findReleaseOutcome(
+  client: Pick<PublicClient, 'getLogs'>,
+  gateway: Address,
+  digest: Hex,
+  { latest, floor, chunk }: { latest: bigint; floor: bigint; chunk: bigint },
+): Promise<ReleaseOutcome | null> {
+  for (let to = latest; to >= floor; to -= chunk) {
+    const from = to - chunk + 1n > floor ? to - chunk + 1n : floor;
+    const logs = await client.getLogs({ address: gateway, events: RELEASE_EVENTS, fromBlock: from, toBlock: to });
+    const hit = logs.find((log) => log.args.vaaHash?.toLowerCase() === digest.toLowerCase());
+    if (hit) return hit.eventName === 'ReleaseDeferred' && hit.args.token ? { deferred: true, token: hit.args.token } : { deferred: false };
+  }
+  return null;
+}
+
+/** Outcomes found so far, per spoke and digest: a delivered release never changes, so each is looked up once. */
+const OUTCOMES = new Map<string, ReleaseOutcome>();
+/** Scans that found nothing, per release: past OUTCOME_SCANS a global refetch answers from here instead of rescanning. */
+const MISSES = new Map<string, number>();
+/** Scans of the window before an outcome that was not found is left unknown, and the pause between them. */
+const OUTCOME_SCANS = 3;
+const OUTCOME_RESCAN_MS = 15_000;
+
+/**
+ * The outcome of a delivered release flight, read from its gateway's events (see findReleaseOutcome) over the window
+ * the activity view reads. Enable it only when it can matter: while the account has something to claim on that spoke.
+ */
+export function useReleaseOutcome(flight: Pick<Flight, 'direction' | 'target'>, vaa: Hex | null, enabled: boolean) {
+  const spoke = SPOKES.find((s) => s.name === flight.target);
+  const client = usePublicClient({ chainId: spoke?.chain.id }) as PublicClient | undefined;
+  const digest = vaa ? vaaDigest(vaa) : null;
+  return useQuery({
+    queryKey: ['releaseOutcome', flight.target, digest],
+    enabled: Boolean(enabled && flight.direction === 'release' && digest && spoke?.deployment && client),
+    staleTime: Infinity,
+    // Not found may be an RPC a block behind the one that reported the delivery: look twice more, then stop.
+    refetchInterval: (q) => (q.state.data === null && q.state.dataUpdateCount < OUTCOME_SCANS ? OUTCOME_RESCAN_MS : false),
+    queryFn: async (): Promise<ReleaseOutcome | null> => {
+      const key = `${flight.target}:${digest}`;
+      const known = OUTCOMES.get(key);
+      if (known) return known;
+      if ((MISSES.get(key) ?? 0) >= OUTCOME_SCANS) return null;
+      const latest = await client!.getBlockNumber();
+      const outcome = await findReleaseOutcome(client!, spoke!.deployment!.contracts.spokeGateway, digest!, {
+        latest,
+        floor: spokeHistoryStart(latest, BigInt(spoke!.deployment!.startBlock), spoke!.maxLogRange),
+        chunk: spoke!.maxLogRange,
+      });
+      if (outcome) OUTCOMES.set(key, outcome);
+      else MISSES.set(key, (MISSES.get(key) ?? 0) + 1);
+      return outcome;
+    },
+  });
+}
+
+/**
+ * Whether a release flight's tokens wait in the spoke gateway for a claim: its own delivery was deferred and that
+ * token is still claimable there. Another release's claim on the same spoke says nothing about this one, and a
+ * deferred release that was claimed since is done.
+ */
+export function releaseHeld(
+  flight: Pick<Flight, 'direction' | 'target'>,
+  delivered: boolean,
+  outcome: ReleaseOutcome | null | undefined,
+  claims: readonly Pick<SpokeClaim, 'spoke' | 'token'>[] | undefined,
+): boolean {
+  if (flight.direction !== 'release' || !delivered || !outcome?.deferred) return false;
+  return (claims ?? []).some((c) => c.spoke.name === flight.target && isAddressEqual(c.token, outcome.token));
+}
 
 /**
  * Tracks one Wormhole message: the source receipt (for flights recorded at signing), VAA availability from
@@ -179,7 +269,7 @@ export function useFlightStatus(flight: Flight) {
     refetchInterval: (q) => (q.state.data?.delivered || q.state.data?.failed ? false : 6_000),
     enabled: Boolean(source && target && sourceClient && targetClient && isCurrentFlight(flight)),
     queryFn: async (): Promise<FlightStatus> => {
-      const base = { vaa: null, delivered: false, relayer: null, sourcePending: false, failed: null };
+      const base = { vaa: null, delivered: false, relayer: null, sourcePending: false, failed: null, outcome: null };
       let sequence = flight.sequence;
       if (sequence === null) {
         const receipt = await sourceClient!.getTransactionReceipt({ hash: flight.txHash }).catch((err: unknown) => {
@@ -193,15 +283,16 @@ export function useFlightStatus(flight: Flight) {
       }
 
       let vaa: Hex | null = null;
-      let agentStatus: string | null = null;
+      let agent: AgentMessage | null = null;
       if (api) {
         vaa = await fetchSignedVaa(api, flight.emitterChain, flight.emitter, BigInt(sequence)).catch(() => null);
       } else {
         // Devnet: the agent signs VAAs; ask it for the message status.
         const res = await fetch(`${AGENT_URL}/messages`).catch(() => null);
         const messages = res?.ok ? ((await res.json()) as AgentMessage[]) : [];
-        agentStatus = messages.find((m) => m.id === `${flight.emitterChain}/${flight.emitter.toLowerCase()}/${sequence}`)?.status ?? null;
+        agent = messages.find((m) => m.id === `${flight.emitterChain}/${flight.emitter.toLowerCase()}/${sequence}`) ?? null;
       }
+      const agentStatus = agent?.status ?? null;
 
       let delivered = agentStatus === 'delivered';
       if (vaa) {
@@ -223,6 +314,15 @@ export function useFlightStatus(flight: Flight) {
               });
       }
       const signed = Boolean(vaa) || agentStatus === 'ready' || delivered;
+      // The agent knows how a release it delivered ended (it reads its own delivery receipt).
+      const outcome: ReleaseOutcome | null =
+        flight.direction !== 'release' || agentStatus !== 'delivered'
+          ? null
+          : agent?.deferred
+            ? { deferred: true, token: agent.deferred.token }
+            : agent?.deliveredTx
+              ? { deferred: false }
+              : null;
       return {
         ...base,
         stage: delivered ? 4 : signed ? 2 : 1,
@@ -230,6 +330,7 @@ export function useFlightStatus(flight: Flight) {
         delivered,
         sequence,
         relayer: api ? 'Mezodot agent or you (self-relay)' : 'Mezodot agent (devnet)',
+        outcome,
       };
     },
   });

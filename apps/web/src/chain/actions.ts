@@ -30,8 +30,8 @@ import { markPriceUpdates, type TxStep } from './runner';
 /**
  * Builders for every user action. Each returns the ordered wallet steps; approvals are skipped
  * when the allowance already covers the amount. Risk-checked calls attach the pull updates their
- * risk check needs (a Supra proof for ETH/USDC from the agent relay; nothing for Pyth feeds Mezo
- * keeps fresh) and pay the oracle fee, plus the Wormhole fee where a message is published.
+ * risk check needs (a Supra proof for ETH/USDC/BTC from the agent relay; nothing for the Pyth-only
+ * MUSD/MEZO feeds Mezo keeps fresh) and pay the oracle fee, plus the Wormhole fee where a message is published.
  */
 
 type Ctx = { account: Address; hub: PublicClient; protocol: ProtocolState; position: PositionState | null };
