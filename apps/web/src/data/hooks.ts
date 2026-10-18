@@ -1,8 +1,8 @@
-import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useCallback, useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAccount, useConfig, usePublicClient } from 'wagmi';
 import { getPublicClient } from 'wagmi/actions';
-import { erc20Abi, type Address, type PublicClient } from 'viem';
+import { BaseError, HttpRequestError, erc20Abi, type Address, type PublicClient } from 'viem';
 import {
   PRICE_SYMBOLS,
   SOURCE_TAG,
@@ -13,17 +13,18 @@ import {
   readOracle,
   readPosition,
   readProtocol,
-  symbolForPriceKey,
+  swapLeverageManagerAbi,
   usablePrices,
   valuePosition,
   type OracleState,
   type OracleStatus,
-  type PriceSymbol,
   type ProtocolState,
   type UsdPrices,
-  tigrisRouterAbi,
+  tigrisPoolAbi,
 } from '@mezodot/sdk';
 import { AGENT_URL, ENV_NAME, HUB, SPOKES } from '../chain/env';
+import { explainError } from '../lib/errors';
+import { protocolTotals } from '../lib/tvl';
 import { scanIncremental } from './incremental';
 
 /** Query keys shared with the transaction runner, which invalidates them after each write. */
@@ -35,8 +36,8 @@ export const QK = {
   balances: (a?: Address) => ['balances', a] as const,
   loopStats: ['loopStats'] as const,
   activity: (a?: Address) => ['activity', a] as const,
+  claims: (a?: Address) => ['claims', a] as const,
   agent: (path: string) => ['agent', path] as const,
-  tigrisQuote: (from?: Address, to?: Address, amount?: string) => ['tigrisQuote', from, to, amount] as const,
 };
 
 export const useHubClient = () => usePublicClient({ chainId: HUB.chain.id }) as PublicClient | undefined;
@@ -45,31 +46,6 @@ export const useHubClient = () => usePublicClient({ chainId: HUB.chain.id }) as 
 export function useSpokeClients(): (PublicClient | undefined)[] {
   const config = useConfig();
   return SPOKES.map((s) => getPublicClient(config, { chainId: s.chain.id }) as PublicClient | undefined);
-}
-
-/**
- * Tigris DEX quote: output of swapping `amountIn` of `from` into `to` on the volatile pool the BTC leverage uses.
- * Undefined until loaded or when Tigris is not configured.
- */
-export function useTigrisQuote(from: Address | undefined, to: Address | undefined, amountIn: bigint) {
-  const client = useHubClient();
-  const router = HUB.deployment?.contracts.tigrisRouter;
-  const factory = HUB.deployment?.contracts.tigrisFactory;
-  return useQuery({
-    queryKey: QK.tigrisQuote(from, to, amountIn.toString()),
-    enabled: Boolean(client && router && factory && from && to && amountIn > 0n),
-    staleTime: 10_000,
-    refetchInterval: 15_000,
-    queryFn: async (): Promise<bigint> => {
-      const amounts = await client!.readContract({
-        address: router!,
-        abi: tigrisRouterAbi,
-        functionName: 'getAmountsOut',
-        args: [amountIn, [{ from: from!, to: to!, stable: false, factory: factory! }]],
-      });
-      return amounts[amounts.length - 1];
-    },
-  });
 }
 
 export function useProtocol() {
@@ -91,6 +67,38 @@ export function useOracle() {
     queryFn: () => readOracle(client!, HUB.deployment!),
     refetchInterval: 12_000,
   });
+}
+
+/** One line for a failed read: the revert or RPC message, with the HTTP status when an endpoint refused. */
+export function readError(err: unknown): string {
+  const http = err instanceof BaseError ? (err.walk((e) => e instanceof HttpRequestError) as HttpRequestError | null) : null;
+  const message = explainError(err).replace(/\.$/, '');
+  return http?.status ? `${message} (HTTP ${http.status} from ${new URL(http.url).host})` : message;
+}
+
+/**
+ * Whether the hub contracts can be read. Everything else waits on this read, so pages show `error` (with a
+ * retry) instead of loading forever when the RPC is down or the deployment does not match the SDK.
+ */
+export function useHubStatus() {
+  const protocol = useProtocol();
+  const oracle = useOracle();
+  const queryClient = useQueryClient();
+  const failed = protocol.error ?? oracle.error;
+  const retry = useCallback(() => {
+    void queryClient.refetchQueries({ queryKey: QK.protocol });
+    void queryClient.refetchQueries({ queryKey: QK.oracle });
+  }, [queryClient]);
+  return {
+    /** Why the hub cannot be read right now, if it cannot. */
+    error: failed ? readError(failed) : null,
+    /** The first read is still running. */
+    loading: Boolean(HUB.deployment) && protocol.data === undefined && !protocol.error,
+    /** Values on screen come from an earlier read: the latest refresh failed. */
+    stale: Boolean(failed && protocol.data),
+    retrying: protocol.isFetching || oracle.isFetching,
+    retry,
+  };
 }
 
 /** Keys the agent relay can refresh: Supra legs everywhere; on the devnet the mocked Pyth legs too. */
@@ -155,14 +163,18 @@ export function usePosition() {
 /**
  * Position valued with the prices VaultManager would accept now, so limits and MAX amounts match the
  * contract (the on-chain snapshot uses last stored prices, which may be stale for pull feeds).
- * `unpriced` lists held assets without an acceptable price: they count as zero toward borrowing.
+ * `unpriced` lists held assets without an acceptable price: collateral counts as zero toward borrowing.
+ * `unpricedDebts` lists debts without one: every borrow, collateral withdrawal and loop reverts until the price is
+ * fresh (debt is priced strictly). Both are valued at the last stored price for value and health, as the risk
+ * snapshot does, so a lapsed feed shows neither "no debt" nor a collapse of the collateral.
+ * `valued` is null until prices load; with debt, limits are unknown until then.
  */
 export function useValuedPosition() {
   const protocol = useProtocol();
   const prices = usePrices();
   const position = usePosition();
   const usable = prices.data?.usable;
-  const valued = protocol.data && position.data && usable ? valuePosition(protocol.data, position.data, usable) : null;
+  const valued = protocol.data && position.data && usable ? valuePosition(protocol.data, position.data, usable, { fallbackPrices: prices.data?.prices }) : null;
   const unpriced = protocol.data && position.data && usable ? positionSymbols(protocol.data, position.data).filter((s) => usable[s] === undefined) : [];
   return {
     valued,
@@ -170,15 +182,26 @@ export function useValuedPosition() {
     protocol: protocol.data,
     prices: usable,
     unpriced,
+    unpricedDebts: valued?.unpricedDebts ?? [],
+    /** No debt in any market, read from the position itself: collateral may then leave without any price. */
+    debtFree: position.data ? position.data.debts.every((d) => d.amount === 0n) : false,
     relayError: prices.data?.relayError ?? null,
     isLoading: position.isLoading || protocol.isLoading,
   };
 }
 
+/** One spoke's wallet: native ETH, token balances, and the gas price (to keep ETH back for fees when wrapping). */
+export type SpokeBalances = { native: bigint; WETH: bigint; USDC: bigint; gasPrice: bigint };
+
+/**
+ * Wallet balances. A read that fails is unknown, never zero: a hub failure fails the whole query (react-query
+ * keeps the last good values and retries), and a spoke whose RPC fails is left out of `spokes` with its reason in
+ * `spokeErrors`, so one rate-limited spoke does not hide the others.
+ */
 export type WalletBalances = {
   hub: { native: bigint; tokens: Record<string, bigint> };
-  /** Per spoke: native ETH, token balances, and the gas price (to keep ETH back for fees when wrapping). */
-  spokes: Record<string, { native: bigint; WETH: bigint; USDC: bigint; gasPrice: bigint }>;
+  spokes: Record<string, SpokeBalances>;
+  spokeErrors: Record<string, string>;
 };
 
 export function useWalletBalances() {
@@ -191,10 +214,10 @@ export function useWalletBalances() {
     enabled: Boolean(address && hubClient && protocol.data),
     refetchInterval: 15_000,
     queryFn: async (): Promise<WalletBalances> => {
-      const bal = (client: PublicClient, token: Address) =>
-        client.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [address!] }).catch(() => 0n);
+      const bal = (client: PublicClient, token: Address) => client.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [address!] });
       const tokens: Record<string, bigint> = {};
-      await Promise.all([
+      const [native] = await Promise.all([
+        hubClient!.getBalance({ address: address! }),
         ...protocol.data!.markets.flatMap((m) => [
           bal(hubClient!, m.asset).then((v) => (tokens[m.symbol] = v)),
           bal(hubClient!, m.pool).then((v) => (tokens[m.receiptSymbol] = v)),
@@ -202,47 +225,88 @@ export function useWalletBalances() {
         // Plain hub collateral (BTC) is held as the token itself.
         ...protocol.data!.collaterals.filter((c) => !c.isRemote && !c.isShare).map((c) => bal(hubClient!, c.token).then((v) => (tokens[c.symbol] = v))),
       ]);
-      const native = await hubClient!.getBalance({ address: address! }).catch(() => 0n);
       const spokes: WalletBalances['spokes'] = {};
+      const spokeErrors: WalletBalances['spokeErrors'] = {};
       await Promise.all(
         SPOKES.map(async (s, i) => {
           const c = spokeClients[i];
           if (!c || !s.deployment) return;
-          const [n, weth, usdc, gasPrice] = await Promise.all([
-            c.getBalance({ address: address! }).catch(() => 0n),
-            bal(c, s.deployment.tokens.WETH),
-            bal(c, s.deployment.tokens.USDC),
-            c.getGasPrice().catch(() => 0n),
-          ]);
-          spokes[s.name] = { native: n, WETH: weth, USDC: usdc, gasPrice };
+          try {
+            const [n, weth, usdc, gasPrice] = await Promise.all([
+              c.getBalance({ address: address! }),
+              bal(c, s.deployment.tokens.WETH),
+              bal(c, s.deployment.tokens.USDC),
+              c.getGasPrice(),
+            ]);
+            spokes[s.name] = { native: n, WETH: weth, USDC: usdc, gasPrice };
+          } catch (err) {
+            spokeErrors[s.name] = readError(err);
+          }
         }),
       );
-      return { hub: { native, tokens }, spokes };
+      return { hub: { native, tokens }, spokes, spokeErrors };
     },
   });
 }
 
-/** Lifetime looping volume (gross position opened) from LeverageManager events. */
+/** One-transaction positions opened so far, with their gross size (what was put to work, not the equity). */
+export type LoopStats = {
+  /** LeverageManager loops and their gross MUSD (principal × leverage), 18 decimals. */
+  musdLoops: number;
+  musdVolume: bigint;
+  /** SwapLeverageManager BTC positions and their gross BTC (principal + bought), 18 decimals. */
+  btcPositions: number;
+  btcVolume: bigint;
+};
+
+const sum = (values: bigint[]) => values.reduce((a, b) => a + b, 0n);
+
+/** Lifetime leverage volume from LeverageManager `Looped` and SwapLeverageManager `Opened` events. */
 export function useLoopStats() {
   const client = useHubClient();
   return useQuery({
     queryKey: QK.loopStats,
     enabled: Boolean(client && HUB.deployment),
     refetchInterval: 30_000,
-    queryFn: async () => {
+    queryFn: async (): Promise<LoopStats> => {
+      const dep = HUB.deployment!;
       const latest = await client!.getBlockNumber();
-      const logs = await scanIncremental(
-        'loops',
-        BigInt(HUB.deployment!.startBlock),
-        latest,
-        (range) => client!.getContractEvents({ address: HUB.deployment!.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Looped', ...range }),
-        HUB.maxLogRange,
-      );
-      const volume = logs.reduce((s, l) => s + (l.args.principal! * l.args.leverage!) / 10n ** 18n, 0n);
-      return { loops: logs.length, volume };
+      const start = BigInt(dep.startBlock);
+      const slm = dep.contracts.swapLeverageManager;
+      const [loops, opens] = await Promise.all([
+        scanIncremental(
+          `${ENV_NAME}:loops:${dep.contracts.leverageManager}`,
+          start,
+          latest,
+          async (range) =>
+            (await client!.getContractEvents({ address: dep.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Looped', ...range })).map(
+              (l) => (l.args.principal! * l.args.leverage!) / 10n ** 18n,
+            ),
+          HUB.maxLogRange,
+          { persist: true },
+        ),
+        slm
+          ? scanIncremental(
+              `${ENV_NAME}:opens:${slm}`,
+              start,
+              latest,
+              async (range) =>
+                (await client!.getContractEvents({ address: slm, abi: swapLeverageManagerAbi, eventName: 'Opened', ...range })).map(
+                  (l) => l.args.principal! + l.args.bought!,
+                ),
+              HUB.maxLogRange,
+              { persist: true },
+            )
+          : Promise.resolve([] as bigint[]),
+      ]);
+      return { musdLoops: loops.length, musdVolume: sum(loops), btcPositions: opens.length, btcVolume: sum(opens) };
     },
   });
 }
+
+/** Gross USD opened through both leverage products, at display prices (MUSD defaults to $1). */
+export const loopVolumeUsd = (stats: LoopStats, prices: UsdPrices | undefined): number =>
+  (Number(stats.musdVolume) / 1e18) * (prices?.MUSD ?? 1) + (Number(stats.btcVolume) / 1e18) * (prices?.BTC ?? 0);
 
 /** Optional data from the Mezodot agent; resolves to null when the agent is unreachable. */
 export function useAgent<T>(path: string, refetchInterval = 30_000) {
@@ -261,14 +325,27 @@ export function useAgent<T>(path: string, refetchInterval = 30_000) {
   });
 }
 
-/** Total value locked in USD: hub pools + collateral posted on spokes. */
+/**
+ * Total value locked in USD, net of borrows: idle pool cash, BTC posted on the hub and collateral locked on
+ * spokes (see protocolTotals, which also reports supplied and borrowed).
+ */
 export function computeTvl(protocol: ProtocolState, prices: UsdPrices): number {
-  let tvl = 0;
-  for (const m of protocol.markets) tvl += (Number(m.totalAssets) / 10 ** m.decimals) * (prices[m.symbol as PriceSymbol] ?? 0);
-  for (const c of protocol.collaterals) {
-    if (!c.isRemote) continue;
-    const symbol = symbolForPriceKey(c.priceKey);
-    tvl += (Number(c.total) / 10 ** c.decimals) * (symbol ? (prices[symbol] ?? 0) : 0);
-  }
-  return tvl;
+  return protocolTotals(protocol, prices).tvl;
+}
+
+/**
+ * Output of selling `amountIn` of `tokenIn` on the Tigris MUSD/BTC pool SwapLeverageManager trades with
+ * (contracts.tigrisPool): pair.getAmountOut, the very quote open and close execute at. Undefined until loaded, for a
+ * zero amount, and on deployments without the pool.
+ */
+export function useTigrisPoolQuote(tokenIn: Address | undefined, amountIn: bigint) {
+  const client = useHubClient();
+  const pool = HUB.deployment?.contracts.tigrisPool;
+  return useQuery({
+    queryKey: ['tigrisPoolQuote', pool, tokenIn, amountIn.toString()] as const,
+    enabled: Boolean(client && pool && tokenIn && amountIn > 0n),
+    staleTime: 10_000,
+    refetchInterval: 15_000,
+    queryFn: () => client!.readContract({ address: pool!, abi: tigrisPoolAbi, functionName: 'getAmountOut', args: [amountIn, tokenIn!] }),
+  });
 }

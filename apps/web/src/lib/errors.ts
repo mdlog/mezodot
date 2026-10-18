@@ -5,6 +5,7 @@ import {
   oracleRouterAbi,
   pTokenAbi,
   spokeGatewayAbi,
+  swapLeverageManagerAbi,
   symbolForPriceKey,
   vaultManagerAbi,
   wormholeAdapterAbi,
@@ -16,7 +17,11 @@ const FRIENDLY: Record<string, string> = {
   InsufficientCash: 'Not enough liquidity in the pool',
   PositionHealthy: 'Position is healthy — nothing to liquidate',
   SlippageExceeded: 'Price moved; try again',
-  NotOperator: 'Approve LeverageManager as operator first',
+  // LeverageManager and SwapLeverageManager act for the account as its VaultManager operator.
+  NotOperator: 'Authorise the leverage contract as your VaultManager operator first',
+  WouldLeaveBadDebt: 'This would leave debt with no collateral behind it: repay that debt first',
+  Expired: 'The swap deadline passed before the transaction landed; try again',
+  ERC4626ExceededMaxDeposit: "The pool's supply cap is reached",
   CapExceeded: 'Collateral cap reached',
   BorrowCapExceeded: 'Market borrow cap reached',
   NothingToRepay: 'No debt to repay',
@@ -30,7 +35,7 @@ const FRIENDLY: Record<string, string> = {
 };
 
 /** Errors of every Mezodot contract: reverts bubble up from callees (OracleRouter inside VaultManager). */
-const ERRORS = [vaultManagerAbi, oracleRouterAbi, pTokenAbi, leverageManagerAbi, keeperGatewayAbi, wormholeAdapterAbi, spokeGatewayAbi]
+const ERRORS = [vaultManagerAbi, oracleRouterAbi, pTokenAbi, leverageManagerAbi, swapLeverageManagerAbi, keeperGatewayAbi, wormholeAdapterAbi, spokeGatewayAbi]
   .flat()
   .filter((x) => x.type === 'error') as Abi;
 

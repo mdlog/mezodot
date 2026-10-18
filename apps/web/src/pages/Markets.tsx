@@ -1,13 +1,41 @@
 import { ArrowRight, Coins, LockKeyhole, Plus, TrendingUp } from 'lucide-react';
 import { useAccount } from 'wagmi';
-import { perSecondToAnnual, pTokenUnits, symbolForPriceKey } from '@mezodot/sdk';
+import { BPS, FLASH_FEE_BPS, perSecondToApy, pTokenUnits, symbolForPriceKey, type ProtocolState } from '@mezodot/sdk';
 import { TokenLogo } from '../components/Logos';
+import { HubPending } from '../components/StatusBanners';
 import { AddressLink, NotDeployed, PageTitle, SummaryStrip } from '../components/ui';
 import { HUB, HUB_DEPLOYED } from '../chain/env';
+import { postBlocked, supplyBlocked, useHubFlags } from '../data/guards';
 import { usePrices, useProtocol, useValuedPosition, useWalletBalances } from '../data/hooks';
 import { toInput } from '../lib/amount';
 import { compactUsd, fmt, fmtApy, money, pct, units } from '../lib/format';
 import { useUi } from '../state/UiContext';
+
+/** A fraction as a percentage with only the decimals it needs: 0.06 → "6%", 0.0925 → "9.25%". */
+const percent = (ratio: number): string => `${(ratio * 100).toLocaleString('en-US', { maximumFractionDigits: 2 })}%`;
+
+/**
+ * How rates and protocol revenue work, from the live parameters: each pool's InterestRateModel (MarketState.rateModel)
+ * and reserve factor (owner-set, up to 30%), the flash-loan fee and the treasury's share of liquidation bonuses.
+ */
+export function ratesExplainer(protocol: Pick<ProtocolState, 'markets' | 'liquidationFeeBps'>): string {
+  // InterestRateModel: borrow APR = base + slope1 at the kink (simple annual rates; the cards above show APYs).
+  const curves = protocol.markets.flatMap((m) =>
+    m.rateModel ? [`${m.symbol} ${percent(m.rateModel.base + m.rateModel.slope1)} at ${percent(m.rateModel.kink)} utilization`] : [],
+  );
+  const factors = protocol.markets.map((m) => ({ symbol: m.symbol, value: percent(Number(m.reserveFactor) / 1e18) }));
+  const reserveFactor =
+    factors.length === 0
+      ? 'reserve factor'
+      : factors.every((f) => f.value === factors[0].value)
+        ? `${factors[0].value} reserve factor`
+        : `reserve factor: ${factors.map((f) => `${f.symbol} ${f.value}`).join(', ')}`;
+  return [
+    `Kinked curve per pool, steep above the kink${curves.length > 0 ? ` (borrow APR at the kink: ${curves.join(', ')})` : ''}.`,
+    `Supply rate = borrow rate × utilization × (1 − ${reserveFactor}).`,
+    `Flash-loan fees (${percent(FLASH_FEE_BPS / BPS)}) go to reserves, and ${percent(protocol.liquidationFeeBps / BPS)} of each liquidation bonus to the treasury.`,
+  ].join(' ');
+}
 
 export function Markets() {
   const { openModal, go } = useUi();
@@ -15,8 +43,12 @@ export function Markets() {
   const protocol = useProtocol().data;
   const prices = usePrices().data?.prices;
   const balances = useWalletBalances().data;
+  const flags = useHubFlags().data;
   const { position } = useValuedPosition();
+  // A balance not read yet (or not readable) is unknown: it must not disable the actions as if it were zero.
+  const none = (amount: bigint | undefined) => isConnected && amount === 0n;
   const musd = protocol?.markets.find((m) => m.symbol === 'MUSD');
+  const musdBlocked = musd ? supplyBlocked(musd, flags) : null;
   // PRD flow A supplies 10,000 MUSD; a wallet holding less is offered what it has instead of an amount it cannot send.
   const flowA = musd ? 10_000n * 10n ** BigInt(musd.decimals) : 0n;
   const walletMusd = musd ? (balances?.hub.tokens[musd.symbol] ?? 0n) : 0n;
@@ -30,7 +62,12 @@ export function Markets() {
         subtitle="Supply MUSD or MEZO and receive pMUSD / pMEZO — ERC-4626 shares whose exchange rate grows with borrower interest. Post them as collateral and they keep earning."
         right={
           musd && (
-            <button className="button button--dark" onClick={() => openModal({ type: 'supply', marketId: musd.id })}>
+            <button
+              className="button button--dark"
+              onClick={() => openModal({ type: 'supply', marketId: musd.id })}
+              disabled={musdBlocked !== null}
+              title={musdBlocked ?? undefined}
+            >
               <Plus size={15} /> Supply MUSD
             </button>
           )
@@ -46,6 +83,7 @@ export function Markets() {
         icon={LockKeyhole}
       />
       {!HUB_DEPLOYED && <NotDeployed />}
+      {HUB_DEPLOYED && !protocol && <HubPending what="markets" />}
 
       {musd && (
         <div className="vault-banner">
@@ -64,7 +102,7 @@ export function Markets() {
             <span>pMUSD / MUSD</span>
             <strong>{fmt(units(musd.exchangeRate, musd.decimals), 6)}</strong>
             <small>
-              <TrendingUp size={12} /> {fmtApy(perSecondToAnnual(musd.supplyRatePerSecond))} supply APY
+              <TrendingUp size={12} /> {fmtApy(perSecondToApy(musd.supplyRatePerSecond))} supply APY
             </small>
           </div>
         </div>
@@ -74,9 +112,11 @@ export function Markets() {
         {(protocol?.markets ?? []).map((m) => {
           const util = m.totalAssets > 0n ? Number(m.totalBorrows) / Number(m.totalAssets) : 0;
           const price = prices?.[m.symbol as 'MUSD' | 'MEZO'] ?? 0;
-          const shares = balances?.hub.tokens[m.receiptSymbol] ?? 0n;
+          const shares = balances?.hub.tokens[m.receiptSymbol];
           const collateral = protocol!.collaterals.find((c) => c.token.toLowerCase() === m.pool.toLowerCase());
-          const posted = collateral ? (position?.collateral.find((c) => c.id === collateral.id)?.balance ?? 0n) : 0n;
+          const posted = collateral ? position?.collateral.find((c) => c.id === collateral.id)?.balance : 0n;
+          const supplyReason = supplyBlocked(m, flags);
+          const postReason = collateral ? postBlocked(collateral) : null;
           return (
             <article className="market-detail-card" key={m.id}>
               <div className="market-detail-top">
@@ -93,11 +133,11 @@ export function Markets() {
               <div className="market-yield-row">
                 <div>
                   <span>SUPPLY APY</span>
-                  <strong className="apy-value">{fmtApy(perSecondToAnnual(m.supplyRatePerSecond))}</strong>
+                  <strong className="apy-value">{fmtApy(perSecondToApy(m.supplyRatePerSecond))}</strong>
                 </div>
                 <div>
                   <span>BORROW APY</span>
-                  <strong>{fmtApy(perSecondToAnnual(m.borrowRatePerSecond))}</strong>
+                  <strong>{fmtApy(perSecondToApy(m.borrowRatePerSecond))}</strong>
                 </div>
                 <div>
                   <span>UTILIZATION</span>
@@ -126,25 +166,26 @@ export function Markets() {
               <div className="user-deposit">
                 <span>In wallet</span>
                 <strong>
-                  {fmt(pTokenUnits(m, shares), 4)}{' '}
+                  {shares === undefined ? '—' : fmt(pTokenUnits(m, shares), 4)}{' '}
                   <small>
                     {m.symbol} as {m.receiptSymbol}
                   </small>
                 </strong>
                 <span>Posted as collateral</span>
                 <strong>
-                  {fmt(pTokenUnits(m, posted), 4)} <small>{m.symbol}</small>
+                  {posted === undefined ? '—' : fmt(pTokenUnits(m, posted), 4)} <small>{m.symbol}</small>
                 </strong>
               </div>
               <div className="market-actions">
-                <button className="button button--dark" onClick={() => openModal({ type: 'supply', marketId: m.id })}>
+                <button
+                  className="button button--dark"
+                  onClick={() => openModal({ type: 'supply', marketId: m.id })}
+                  disabled={supplyReason !== null}
+                  title={supplyReason ?? undefined}
+                >
                   Supply
                 </button>
-                <button
-                  className="button button--light"
-                  onClick={() => openModal({ type: 'withdraw', marketId: m.id })}
-                  disabled={isConnected && shares === 0n}
-                >
+                <button className="button button--light" onClick={() => openModal({ type: 'withdraw', marketId: m.id })} disabled={none(shares)}>
                   Withdraw
                 </button>
               </div>
@@ -153,19 +194,17 @@ export function Markets() {
                   <button
                     className="button button--outline"
                     onClick={() => openModal({ type: 'post', collateralId: collateral.id })}
-                    disabled={isConnected && shares === 0n}
+                    disabled={none(shares) || postReason !== null}
+                    title={postReason ?? undefined}
                   >
                     Use as collateral · LTV {collateral.ltvBps / 100}%
                   </button>
-                  <button
-                    className="button button--light"
-                    onClick={() => openModal({ type: 'unpost', collateralId: collateral.id })}
-                    disabled={isConnected && posted === 0n}
-                  >
+                  <button className="button button--light" onClick={() => openModal({ type: 'unpost', collateralId: collateral.id })} disabled={none(posted)}>
                     Remove
                   </button>
                 </div>
               )}
+              {(supplyReason || postReason) && <p className="action-blocked">{supplyReason ?? postReason}</p>}
             </article>
           );
         })}
@@ -175,8 +214,9 @@ export function Markets() {
           .map((c) => {
             const symbol = symbolForPriceKey(c.priceKey);
             const price = symbol ? (prices?.[symbol] ?? 0) : 0;
-            const posted = position?.collateral.find((x) => x.id === c.id)?.balance ?? 0n;
-            const wallet = balances?.hub.tokens[c.symbol] ?? 0n;
+            const posted = position?.collateral.find((x) => x.id === c.id)?.balance;
+            const wallet = balances?.hub.tokens[c.symbol];
+            const postReason = postBlocked(c);
             return (
               <article className="market-detail-card" key={`collateral-${c.id}`}>
                 <div className="market-detail-top">
@@ -217,29 +257,27 @@ export function Markets() {
                 <div className="user-deposit">
                   <span>In wallet</span>
                   <strong>
-                    {fmt(units(wallet, c.decimals), 6)} <small>{c.symbol}</small>
+                    {wallet === undefined ? '—' : fmt(units(wallet, c.decimals), 6)} <small>{c.symbol}</small>
                   </strong>
                   <span>Posted as collateral</span>
                   <strong>
-                    {fmt(units(posted, c.decimals), 6)} <small>{c.symbol}</small>
+                    {posted === undefined ? '—' : fmt(units(posted, c.decimals), 6)} <small>{c.symbol}</small>
                   </strong>
                 </div>
                 <div className="market-actions">
                   <button
                     className="button button--dark"
                     onClick={() => openModal({ type: 'post', collateralId: c.id })}
-                    disabled={isConnected && wallet === 0n}
+                    disabled={none(wallet) || postReason !== null}
+                    title={postReason ?? undefined}
                   >
                     Post {c.symbol}
                   </button>
-                  <button
-                    className="button button--light"
-                    onClick={() => openModal({ type: 'unpost', collateralId: c.id })}
-                    disabled={isConnected && posted === 0n}
-                  >
+                  <button className="button button--light" onClick={() => openModal({ type: 'unpost', collateralId: c.id })} disabled={none(posted)}>
                     Remove
                   </button>
                 </div>
+                {postReason && <p className="action-blocked">{postReason}</p>}
                 <div className="market-actions">
                   <button className="button button--outline" onClick={() => go('loop')}>
                     Open a leveraged {c.symbol} position <ArrowRight size={13} />
@@ -255,10 +293,7 @@ export function Markets() {
           <div className="panel explainer-panel">
             <span className="overline">HOW RATES WORK</span>
             <h3>Suppliers earn what borrowers pay.</h3>
-            <p>
-              Kinked curve per pool (MUSD: 6% at 80% utilization, steep above). Supply APY = borrow APY × utilization × (1 − 10% reserve factor). Flash-loan
-              fees (0.09%) go to reserves.
-            </p>
+            <p>{ratesExplainer(protocol!)}</p>
             <button className="text-link" onClick={() => go('architecture')}>
               Protocol architecture <ArrowRight size={13} />
             </button>
@@ -278,6 +313,8 @@ export function Markets() {
             <button
               className="button button--outline"
               onClick={() => openModal({ type: 'supply', marketId: musd.id, preset: toInput(flowASupply, musd.decimals) })}
+              disabled={musdBlocked !== null}
+              title={musdBlocked ?? undefined}
             >
               Supply {fmt(units(flowASupply, musd.decimals), 2)} MUSD <ArrowRight size={13} />
             </button>

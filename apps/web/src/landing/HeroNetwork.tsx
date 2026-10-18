@@ -3,7 +3,7 @@ import { prefersReducedMotion } from './motion';
 
 /*
  * The hero animation is the protocol's own message flow: a deposit on a spoke chain becomes a Wormhole
- * message (VAA), waits at the guardians until 13 of 19 have signed, then lands on the Mezo Hub, which
+ * message (VAA), waits at the guardians until a quorum has signed, then lands on the Mezo Hub, which
  * credits the collateral. Each spoke sends one every lap, half a lap apart.
  */
 
@@ -15,6 +15,7 @@ const SPOKES = [
 ] as const;
 const HUB = { x: 420, y: 220, r: 56 };
 const SPOKE_R = 34;
+// Ring visual only: the guardian set and its quorum are Wormhole's, not something this page reads.
 const GUARDIANS = 19;
 const QUORUM = 13;
 // Share of the lap: travel to the guardians, wait while they sign, travel on to the hub.
@@ -38,7 +39,7 @@ export function HeroNetwork() {
       className="hero-net"
       viewBox="0 0 520 440"
       role="img"
-      aria-label="Deposits on Base and Ethereum travel as Wormhole messages, signed by 13 of 19 guardians, to the Mezo Hub"
+      aria-label="Deposits on Base and Ethereum travel as Wormhole messages, signed by a quorum of guardians, to the Mezo Hub"
     >
       <defs>
         <radialGradient id="hub-glow">
@@ -53,7 +54,7 @@ export function HeroNetwork() {
         return (
           <g key={s.network}>
             <path className="net-track" d={d} />
-            {/* Guardian ring halfway: 19 signers, 13 of them light up while the message waits. */}
+            {/* Guardian ring halfway: signers light up while the message waits for the quorum. */}
             <g transform={`translate(${mid[0]} ${mid[1]})`}>
               <circle className="net-ring" r={21} />
               {Array.from({ length: GUARDIANS }, (_, i) => {
@@ -83,7 +84,7 @@ export function HeroNetwork() {
                 );
               })}
               <text className="net-quorum" y={36} textAnchor="middle" opacity={motion ? 0 : 1}>
-                {QUORUM}/{GUARDIANS} signed
+                quorum signed
                 {motion && (
                   <animate
                     attributeName="opacity"

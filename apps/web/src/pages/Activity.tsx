@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
 import { Activity as ActivityIcon, ArrowDownToLine, Clock3, Filter } from 'lucide-react';
 import { useAccount } from 'wagmi';
+import { HubPending } from '../components/StatusBanners';
 import { ConnectGate, EventIcon, PageTitle, PanelTitle, SummaryStrip, TxLink } from '../components/ui';
-import { HUB, SPOKES } from '../chain/env';
+import { HUB, networkByName } from '../chain/env';
 import { useActivity, type ActivityItem, type ActivityKind } from '../data/activity';
+import { readError, useHubStatus } from '../data/hooks';
 import { fmt, timeAgo, units } from '../lib/format';
 import { useUi } from '../state/UiContext';
 
@@ -21,12 +23,15 @@ const KINDS: ('All activity' | ActivityKind)[] = [
   'Unwind',
   'Liquidation',
 ];
-const networkOf = (item: ActivityItem) => (item.network === HUB.name ? HUB : SPOKES.find((s) => s.name === item.network)!);
+const networkOf = (item: ActivityItem) => networkByName(item.network) ?? HUB;
 
 export function Activity() {
   const { isConnected } = useAccount();
   const { showToast } = useUi();
   const query = useActivity();
+  const hub = useHubStatus();
+  // History waits on the hub read: while that fails there is nothing to scan, which is not "no events".
+  const waitingOnHub = !query.data && (hub.error !== null || hub.loading);
   const data = useMemo(() => query.data?.items ?? [], [query.data]);
   const spokeErrors = query.data?.spokeErrors ?? [];
   const { isLoading } = query;
@@ -122,16 +127,17 @@ export function Activity() {
               </tbody>
             </table>
           </div>
+          {waitingOnHub && <HubPending what="your history" />}
           {query.isError && (
             <div className="inline-error" role="alert">
-              Could not read your history from {HUB.label}: {query.error instanceof Error ? query.error.message.split('\n')[0] : 'RPC error'}.{' '}
+              Could not read your history from {HUB.label}: {readError(query.error)}.{' '}
               <button className="text-link" onClick={() => void query.refetch()}>
                 Retry
               </button>
             </div>
           )}
           {spokeErrors.length > 0 && <p className="muted-note">Spoke history unavailable: {spokeErrors.join('; ')}. Hub records above are complete.</p>}
-          {!isLoading && !query.isError && filtered.length === 0 && (
+          {!isLoading && !waitingOnHub && !query.isError && filtered.length === 0 && (
             <div className="empty-state">
               <ActivityIcon size={23} />
               <b>No events{filter === 'All activity' ? ' yet' : ' in this filter'}</b>

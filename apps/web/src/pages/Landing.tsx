@@ -14,12 +14,12 @@ import {
   Waves,
   type LucideIcon,
 } from 'lucide-react';
-import { perSecondToAnnual } from '@mezodot/sdk';
+import { BPS, FLASH_FEE_BPS, perSecondToApy } from '@mezodot/sdk';
 import { ChainLogo, TokenLogo } from '../components/Logos';
 import { LoopDiagram, prdLoopPlan } from '../components/LoopDiagram';
 import { Brand } from '../components/ui';
 import { HUB, SPOKES } from '../chain/env';
-import { computeTvl, useAgent, useLoopStats, usePrices, useProtocol } from '../data/hooks';
+import { computeTvl, loopVolumeUsd, useAgent, useHubStatus, useLoopStats, usePrices, useProtocol } from '../data/hooks';
 import type { View } from '../hooks/useHashRoute';
 import { AgentConsole } from '../landing/AgentConsole';
 import { HeroNetwork } from '../landing/HeroNetwork';
@@ -34,6 +34,16 @@ const SECTIONS = [
   ['how', 'How it works'],
   ['security', 'Security'],
 ] as const;
+
+/** Spoke chains with a SpokeGateway deployed in this environment. */
+const DEPLOYED_SPOKES = SPOKES.filter((s) => s.deployment).length;
+
+/** True while the figures come from hub reads that just succeeded: only then may the page say "live". */
+function useHubLive(): boolean {
+  const protocol = useProtocol().data;
+  const { error } = useHubStatus();
+  return protocol !== undefined && error === null;
+}
 
 /** Scrolls to a section without touching the hash, which the router owns. */
 const jumpTo = (id: string) => (e: MouseEvent) => {
@@ -112,13 +122,15 @@ function LandingNav({ onLaunch }: { onLaunch: () => void }) {
 }
 
 function Hero({ onLaunch }: { onLaunch: () => void }) {
+  const live = useHubLive();
   return (
     <section className="lp-hero">
       <div className="lp-hero-backdrop" aria-hidden="true" />
       <div className="lp-container lp-hero-grid">
         <div className="lp-hero-copy">
           <span className="lp-pill">
-            <i /> Live on {HUB.label} · {SPOKES.length} spoke chains
+            {live && <i />}
+            {live ? `Live on ${HUB.label}` : HUB.label} · {DEPLOYED_SPOKES} spoke chain{DEPLOYED_SPOKES === 1 ? '' : 's'}
           </span>
           <h1>
             Capital, <em>in motion.</em>
@@ -164,30 +176,37 @@ type Stats = { crossChainBorrowRatio: number | null; borrowers: number };
 
 function LiveStats() {
   const protocol = useProtocol().data;
+  const live = useHubLive();
   const prices = usePrices().data;
   const loops = useLoopStats().data;
   const stats = useAgent<Stats>('/stats').data;
   const [ref, seen] = useInView<HTMLDivElement>(0.3);
   const tvl = useCountUp(protocol && prices ? computeTvl(protocol, prices.prices) : null, seen);
-  const volume = useCountUp(loops ? units(loops.volume, 18) : null, seen);
+  const volume = useCountUp(loops ? loopVolumeUsd(loops, prices?.prices) : null, seen);
   const ratio = useCountUp(stats?.crossChainBorrowRatio ?? null, seen);
-  const chains = useCountUp(1 + SPOKES.length, seen, 900);
+  const chains = useCountUp(1 + DEPLOYED_SPOKES, seen, 900);
   const items = [
     { label: 'Total value locked', value: tvl === null ? '—' : compactUsd(tvl), foot: 'Hub pools and spoke collateral' },
-    { label: 'Looping volume', value: volume === null ? '—' : compactUsd(volume), foot: `${loops?.loops ?? 0} one-transaction loops` },
+    {
+      label: 'Leverage volume',
+      value: volume === null ? '—' : compactUsd(volume),
+      foot: `${(loops?.musdLoops ?? 0) + (loops?.btcPositions ?? 0)} one-transaction positions`,
+    },
     { label: 'Debt backed cross-chain', value: ratio === null ? '—' : pct(ratio), foot: 'Borrowed against Base and Ethereum collateral' },
     {
       label: 'Chains, one market',
       value: chains === null ? '—' : fmt(Math.round(chains)),
-      foot: [HUB, ...SPOKES].map((n) => n.label.split(' ')[0]).join(' · '),
+      foot: [HUB, ...SPOKES.filter((n) => n.deployment)].map((n) => n.label.split(' ')[0]).join(' · '),
     },
   ];
   return (
     <section className="lp-stats" aria-label="Live protocol figures">
       <div ref={ref} className="lp-container">
         <div className="lp-stats-head">
+          {/* "Live" only while the hub answers: before the first read, or once reads fail, it just names the network. */}
           <span className="lp-live">
-            <i /> LIVE ON {HUB.label.toUpperCase()}
+            {live && <i />}
+            {live ? `LIVE ON ${HUB.label.toUpperCase()}` : HUB.label.toUpperCase()}
           </span>
           {protocol && <span>block {fmt(Number(protocol.blockNumber))}</span>}
         </div>
@@ -241,7 +260,7 @@ function RouteStrip() {
         <small>lock on a spoke</small>
       </div>
       <div className="route-wire">
-        <span className="route-label">VAA · 13/19 guardians</span>
+        <span className="route-label">VAA · guardian quorum</span>
         <i />
         <i />
         <i />
@@ -286,7 +305,7 @@ function Product() {
             />
             <YieldSpark
               rate={musd ? fmt(units(musd.exchangeRate, musd.decimals), 6) : '1.000000'}
-              apy={musd ? fmtApy(perSecondToAnnual(musd.supplyRatePerSecond)) : '—'}
+              apy={musd ? fmtApy(perSecondToApy(musd.supplyRatePerSecond)) : '—'}
             />
           </Reveal>
           <Reveal className="lp-feature" delay={90}>
@@ -294,7 +313,7 @@ function Product() {
               icon={RefreshCw}
               kicker="ONE-TRANSACTION LEVERAGE"
               title="Long BTC up to 3×, or loop MUSD, in one signature"
-              body="A flash loan from the MUSD pool buys BTC on Mezo's Tigris DEX (or adds pMUSD supply), the position is posted, and the borrow repays the loan, all in one call priced with the pool's own fee and collateral terms."
+              body={`A flash swap on Mezo's Tigris DEX hands over the BTC first; it is posted and the MUSD you borrow pays the pool, with no flash fee. The MUSD loop takes the pool's own flash loan (${pct(FLASH_FEE_BPS / BPS, 2)} to reserves) and unwinds by netting the debt against your pMUSD.`}
             />
             <div className="lp-feature-visual">
               <LoopDiagram plan={prdLoopPlan(protocol?.collaterals)} />
@@ -319,7 +338,7 @@ function Product() {
 
 const STEPS: { icon: LucideIcon; title: string; body: string }[] = [
   { icon: LockKeyhole, title: 'Lock', body: 'Deposit WETH or USDC into the SpokeGateway on Base or Ethereum.' },
-  { icon: Waves, title: 'Sign', body: 'Once the block is final, about 15 to 20 minutes, 13 of 19 Wormhole guardians sign it.' },
+  { icon: Waves, title: 'Sign', body: 'Once the block is final, about 15 to 20 minutes, a quorum of Wormhole guardians signs it.' },
   { icon: ShieldCheck, title: 'Credit', body: 'The hub verifies the message and VaultManager credits your collateral on Mezo.' },
   { icon: Coins, title: 'Borrow', body: 'Borrow MUSD or MEZO against one health factor across every chain.' },
   { icon: Undo2, title: 'Release', body: 'Repay, and a release message unlocks your collateral on its own chain.' },

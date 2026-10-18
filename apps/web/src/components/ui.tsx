@@ -182,13 +182,36 @@ export function AmountInput({
   );
 }
 
-/** Held assets without an acceptable price count as zero toward borrowing (VaultManager's rule). */
-export function PriceNotice({ unpriced, relayError }: { unpriced: string[]; relayError: string | null }) {
-  if (unpriced.length === 0) return null;
+/**
+ * Held assets without an acceptable price, by VaultManager's rules: collateral counts as $0 toward borrowing, while
+ * debt is priced strictly, so borrowing, removing collateral and loops revert until its price is fresh. Value and
+ * health use the last stored price meanwhile (useValuedPosition). Pass `unpricedDebts` to say which case applies;
+ * without it the notice states both.
+ */
+export function PriceNotice({ unpriced, relayError, unpricedDebts }: { unpriced: string[]; relayError: string | null; unpricedDebts?: string[] }) {
+  const debts = unpricedDebts ?? [];
+  if (unpriced.length === 0 && debts.length === 0) return null;
+  const relay = relayError ? ' — the price relay is unreachable' : '';
+  const collateralOnly = unpriced.filter((s) => !debts.includes(s));
   return (
     <p className="inline-error" role="status">
-      No usable {unpriced.join(' / ')} price right now{relayError ? ' — the price relay is unreachable' : ''}. That collateral counts as $0 toward your borrow
-      limit until a fresh price is available.
+      {debts.length > 0 ? (
+        <>
+          No usable {debts.join(' / ')} price right now{relay}. Debt is priced strictly, so borrowing, removing collateral and loops revert until a fresh price
+          is posted; value and health are shown at the last stored price.
+          {collateralOnly.length > 0 && ` ${collateralOnly.join(' / ')} collateral also counts as $0 toward your borrow limit.`}
+        </>
+      ) : unpricedDebts ? (
+        <>
+          No usable {unpriced.join(' / ')} price right now{relay}. That collateral counts as $0 toward your borrow limit until a fresh price is available (its
+          value and health use the last stored price).
+        </>
+      ) : (
+        <>
+          No usable {unpriced.join(' / ')} price right now{relay}. Collateral priced in it counts as $0 toward your borrow limit, and debt in it blocks
+          borrowing and withdrawals until a fresh price is posted.
+        </>
+      )}
     </p>
   );
 }
@@ -220,10 +243,16 @@ export function NotDeployed() {
   return (
     <div className="panel empty-state empty-state--panel">
       <ShieldAlert size={23} />
-      <b>Contracts are not deployed on {HUB.label} yet</b>
+      <b>Mezodot is not live on {HUB.label} yet</b>
       <span>
-        Run the deployment in <code>docs/DEPLOY.md</code>, or start the local devnet (<code>scripts/devnet/start.sh</code>) and open the app with{' '}
-        <code>VITE_MEZODOT_ENV=devnet</code>.
+        Markets, borrowing and loops open here once the contracts are deployed.
+        {import.meta.env.DEV && (
+          <>
+            {' '}
+            Local development: run the deployment in <code>docs/DEPLOY.md</code>, or start the devnet (<code>scripts/devnet/start.sh</code>) and open the app
+            with <code>VITE_MEZODOT_ENV=devnet</code>.
+          </>
+        )}
       </span>
     </div>
   );

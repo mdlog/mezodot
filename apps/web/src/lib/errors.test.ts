@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BaseError, ContractFunctionRevertedError, UserRejectedRequestError, encodeErrorResult } from 'viem';
-import { PRICE_KEYS, oracleRouterAbi, vaultManagerAbi } from '@mezodot/sdk';
+import { PRICE_KEYS, oracleRouterAbi, swapLeverageManagerAbi, vaultManagerAbi } from '@mezodot/sdk';
 import { explainError } from './errors';
 
 /** A revert raised by OracleRouter inside a VaultManager call, as viem reports it to the app. */
@@ -24,6 +24,24 @@ describe('explainError', () => {
       data: encodeErrorResult({ abi: vaultManagerAbi, errorName: 'InsufficientCollateral' }),
     });
     expect(explainError(own)).toBe('This would exceed your borrow limit');
+  });
+
+  it('explains leverage reverts: missing operator, netting into bad debt, an expired swap', () => {
+    const vm = (errorName: 'NotOperator' | 'WouldLeaveBadDebt') =>
+      new ContractFunctionRevertedError({
+        abi: vaultManagerAbi,
+        functionName: 'repayWithCollateral',
+        data: encodeErrorResult({ abi: vaultManagerAbi, errorName }),
+      });
+    expect(explainError(vm('NotOperator'))).toBe('Authorise the leverage contract as your VaultManager operator first');
+    expect(explainError(vm('WouldLeaveBadDebt'))).toBe('This would leave debt with no collateral behind it: repay that debt first');
+    // Raised by SwapLeverageManager while the app called it through a wallet: decoded from the raw revert data.
+    const expired = new ContractFunctionRevertedError({
+      abi: vaultManagerAbi,
+      functionName: 'borrow',
+      data: encodeErrorResult({ abi: swapLeverageManagerAbi, errorName: 'Expired' }),
+    });
+    expect(explainError(expired)).toBe('The swap deadline passed before the transaction landed; try again');
   });
 
   it('keeps wallet rejections and plain errors readable', () => {

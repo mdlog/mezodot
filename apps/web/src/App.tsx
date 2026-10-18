@@ -3,7 +3,6 @@ import {
   Activity as ActivityIcon,
   ArrowDownLeft,
   BarChart3,
-  Check,
   ChevronRight,
   CircleHelp,
   ExternalLink,
@@ -13,15 +12,18 @@ import {
   Radio,
   RefreshCw,
   Route,
-  TriangleAlert,
   X,
   type LucideIcon,
 } from 'lucide-react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { ActionModal } from './components/ActionModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { Modal } from './components/Modal';
 import { ChainLogo } from './components/Logos';
+import { BalancesBanner, ConfigErrorScreen, HubStatusBanner, RelayBanner } from './components/StatusBanners';
+import { ToastView, TxProgress } from './components/TxFeedback';
 import { Brand } from './components/ui';
-import { ENV_NAME, HUB, HUB_DEPLOYED, SPOKES } from './chain/env';
+import { CONFIG_ERRORS, ENV_NAME, HUB, HUB_DEPLOYED, SPOKES } from './chain/env';
 import type { View } from './hooks/useHashRoute';
 import { Activity } from './pages/Activity';
 import { Agents } from './pages/Agents';
@@ -32,6 +34,7 @@ import { Dashboard } from './pages/Dashboard';
 import { Loop } from './pages/Loop';
 import { Landing } from './pages/Landing';
 import { Markets } from './pages/Markets';
+import { TxProvider } from './state/TxContext';
 import { UiProvider, useUi } from './state/UiContext';
 
 type NavItem = { key: View; label: string; icon: LucideIcon; group: 'PROTOCOL' | 'CAPITAL' | 'INTELLIGENCE' };
@@ -152,24 +155,16 @@ function Topbar({ onOpenMenu }: { onOpenMenu: () => void }) {
   );
 }
 
-function ToastView() {
-  const { toast, dismissToast } = useUi();
-  if (!toast) return null;
-  return (
-    <div className={`toast toast--${toast.tone}`} role={toast.tone === 'error' ? 'alert' : 'status'}>
-      <span>{toast.tone === 'error' ? <TriangleAlert size={14} /> : <Check size={14} />}</span>
-      {toast.message}
-      <button onClick={dismissToast} aria-label="Dismiss">
-        <X size={14} />
-      </button>
-    </div>
-  );
-}
-
 function Shell() {
-  const { view } = useUi();
+  const { view, go, modal, closeModal } = useUi();
   const [mobileMenu, setMobileMenu] = useState(false);
-  if (view === 'landing') return <Landing />;
+  if (view === 'landing') {
+    return (
+      <ErrorBoundary key="landing" onReset={() => go('dashboard')} resetLabel="Open the app">
+        <Landing />
+      </ErrorBoundary>
+    );
+  }
   const Page = PAGES[view];
 
   return (
@@ -180,7 +175,12 @@ function Shell() {
         <Topbar onOpenMenu={() => setMobileMenu(true)} />
         <div className="content-area">
           <div className="page-container">
-            <Page />
+            <HubStatusBanner />
+            <BalancesBanner />
+            <RelayBanner />
+            <ErrorBoundary key={view} onReset={() => go('dashboard')}>
+              <Page />
+            </ErrorBoundary>
             <footer className="page-footer">
               <Brand />
               <span>Productive capital, across chains. Built on Mezo.</span>
@@ -193,16 +193,36 @@ function Shell() {
           </div>
         </div>
       </main>
-      <ActionModal />
-      <ToastView />
+      <ErrorBoundary
+        key={modal ? JSON.stringify(modal) : 'no-modal'}
+        fallback={(error) => (
+          <Modal id="action-modal-error" overline="MEZODOT / MEZO HUB" title="Something went wrong" onClose={closeModal}>
+            <p className="inline-error" role="alert">
+              This dialog hit an unexpected error: {error.message.split('\n')[0]}
+            </p>
+          </Modal>
+        )}
+      >
+        <ActionModal />
+      </ErrorBoundary>
+      <div className="toast-stack">
+        <TxProgress />
+        <ToastView />
+      </div>
     </div>
   );
 }
 
 export default function App() {
+  if (CONFIG_ERRORS.length > 0) return <ConfigErrorScreen />;
+  // Views and the dialog have their own boundaries; this one keeps a crash in the shell itself from blanking the page.
   return (
-    <UiProvider>
-      <Shell />
-    </UiProvider>
+    <ErrorBoundary scope="Mezodot">
+      <UiProvider>
+        <TxProvider>
+          <Shell />
+        </TxProvider>
+      </UiProvider>
+    </ErrorBoundary>
   );
 }

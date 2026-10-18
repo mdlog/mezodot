@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BaseError, ContractFunctionRevertedError, UserRejectedRequestError, encodeErrorResult } from 'viem';
 import { vaultManagerAbi } from '@mezodot/sdk';
 import { explainError } from '../chain/tx';
-import { compactUsd, fmtApy, fmtHealth, fmtToken, money, shortAddress, timeAgo, units } from './format';
+import { compactUsd, fmtApy, fmtHealth, fmtToken, money, shortAddress, timeAgo, tokenAmount, units } from './format';
 
 describe('format', () => {
   it('formats token amounts from base units', () => {
@@ -38,6 +38,12 @@ describe('format', () => {
     // Whole dollars from $1,000 up, and an explicit precision always wins.
     expect(money(2_400.6)).toBe('$2,401');
     expect(money(0.004, 2)).toBe('$0.00');
+  });
+
+  it('formats token amounts with their symbol, signed', () => {
+    expect(tokenAmount(2_001.8, 'MUSD')).toBe('2,001.80 MUSD');
+    expect(tokenAmount(-1_000, 'MUSD', 0)).toBe('−1,000 MUSD');
+    expect(tokenAmount(0.0049, 'BTC', 6)).toBe('0.004900 BTC');
   });
 
   it('formats addresses and relative time', () => {

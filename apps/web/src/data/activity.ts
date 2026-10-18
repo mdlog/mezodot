@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useAccount } from 'wagmi';
-import type { Address, Hex, PublicClient } from 'viem';
+import type { Abi, Address, Hex, PublicClient } from 'viem';
 import {
   leverageManagerAbi,
   pTokenAbi,
@@ -8,11 +8,13 @@ import {
   swapLeverageManagerAbi,
   vaultManagerAbi,
   type BlockRange,
+  type CollateralState,
   type NetworkName,
   type ProtocolState,
 } from '@mezodot/sdk';
-import { HUB, SPOKES } from '../chain/env';
-import { QK, useHubClient, useProtocol, useSpokeClients } from './hooks';
+import { ENV_NAME, HUB, SPOKES, spokeByWormholeChain } from '../chain/env';
+import { fmt, units } from '../lib/format';
+import { QK, readError, useHubClient, useProtocol, useSpokeClients } from './hooks';
 import { scanIncremental, spokeHistoryStart } from './incremental';
 
 export type ActivityKind =
@@ -29,57 +31,81 @@ export type ActivityItem = {
   txHash: Hex;
   blockNumber: bigint;
   timestamp: number | null;
+  /** The Wormhole message the event sent (spoke locks, hub releases), so a lost flight can be rebuilt. */
+  message?: { direction: 'deposit' | 'release'; target: NetworkName; emitterChain: number; emitter: Address; sequence: string; label: string };
 };
 
 const timestamps = new Map<string, number>();
-async function withTimestamps(client: PublicClient, network: NetworkName, items: ActivityItem[]) {
-  const blocks = [...new Set(items.filter((i) => i.network === network).map((i) => i.blockNumber))];
+async function withTimestamps(client: PublicClient, network: NetworkName, items: ActivityItem[]): Promise<ActivityItem[]> {
+  const blocks = [...new Set(items.map((i) => i.blockNumber))];
   await Promise.all(
     blocks.map(async (b) => {
       const key = `${network}:${b}`;
       if (!timestamps.has(key)) timestamps.set(key, Number((await client.getBlock({ blockNumber: b })).timestamp) * 1000);
     }),
   );
-  for (const i of items) if (i.network === network) i.timestamp = timestamps.get(`${network}:${i.blockNumber}`) ?? null;
+  for (const i of items) i.timestamp = timestamps.get(`${network}:${i.blockNumber}`) ?? null;
+  return items;
 }
+
+/** Units of a posted collateral amount: pool shares for pTokens (pMUSD: 24 decimals), token units otherwise. */
+export function collateralUnits(protocol: ProtocolState, c: CollateralState): { symbol: string; decimals: number } {
+  const market = c.isShare ? protocol.markets.find((m) => m.pool.toLowerCase() === c.token.toLowerCase()) : undefined;
+  return market ? { symbol: market.receiptSymbol, decimals: market.shareDecimals } : { symbol: c.symbol, decimals: c.decimals };
+}
+
+/** VaultManager.repayWithCollateral exists from the v4 hub on; its event is read only when the ABI has it. */
+const HAS_REPAID_WITH_COLLATERAL = (vaultManagerAbi as Abi).some((x) => x.type === 'event' && x.name === 'RepaidWithCollateral');
 
 async function hubActivity(client: PublicClient, protocol: ProtocolState, account: Address, range: BlockRange): Promise<ActivityItem[]> {
   const dep = HUB.deployment!;
   const vm = dep.contracts.vaultManager;
   const items: ActivityItem[] = [];
-  const push = (i: Omit<ActivityItem, 'id' | 'network' | 'timestamp'> & { logIndex: number }) =>
-    items.push({ ...i, id: `${i.txHash}-${i.logIndex}`, network: HUB.name, timestamp: null });
+  const push = (i: Omit<ActivityItem, 'id' | 'network' | 'timestamp'> & { logIndex: number }) => {
+    const { logIndex, ...item } = i;
+    items.push({ ...item, id: `${i.txHash}-${logIndex}`, network: HUB.name, timestamp: null });
+  };
   const collat = (id: bigint) => protocol.collaterals[Number(id)];
   const market = (id: bigint) => protocol.markets[Number(id)];
 
   const slm = dep.contracts.swapLeverageManager;
-  const [poolDeposits, poolWithdraws, cIn, cOut, credited, releases, borrows, repays, loops, unwinds, liqs, opened, closed] = await Promise.all([
-    Promise.all(
-      protocol.markets.map((m) =>
-        client
-          .getContractEvents({ address: m.pool, abi: pTokenAbi, eventName: 'Deposit', args: { owner: account }, ...range })
-          .then((l) => l.map((x) => ({ x, m }))),
+  const [poolDeposits, poolWithdraws, cIn, cOut, credited, releases, borrows, repays, loops, unwinds, liqs, opened, closed, repaidWithShares] =
+    await Promise.all([
+      Promise.all(
+        protocol.markets.map((m) =>
+          client
+            .getContractEvents({ address: m.pool, abi: pTokenAbi, eventName: 'Deposit', args: { owner: account }, ...range })
+            .then((l) => l.map((x) => ({ x, m }))),
+        ),
       ),
-    ),
-    Promise.all(
-      protocol.markets.map((m) =>
-        client
-          .getContractEvents({ address: m.pool, abi: pTokenAbi, eventName: 'Withdraw', args: { owner: account }, ...range })
-          .then((l) => l.map((x) => ({ x, m }))),
+      Promise.all(
+        protocol.markets.map((m) =>
+          client
+            .getContractEvents({ address: m.pool, abi: pTokenAbi, eventName: 'Withdraw', args: { owner: account }, ...range })
+            .then((l) => l.map((x) => ({ x, m }))),
+        ),
       ),
-    ),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'CollateralDeposited', args: { account }, ...range }),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'CollateralWithdrawn', args: { account }, ...range }),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'RemoteCredited', args: { account }, ...range }),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'RemoteWithdrawRequested', args: { account }, ...range }),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Borrowed', args: { account }, ...range }),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Repaid', args: { account }, ...range }),
-    client.getContractEvents({ address: dep.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Looped', args: { account }, ...range }),
-    client.getContractEvents({ address: dep.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Unwound', args: { account }, ...range }),
-    client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Liquidated', args: { account }, ...range }),
-    slm ? client.getContractEvents({ address: slm, abi: swapLeverageManagerAbi, eventName: 'Opened', args: { account }, ...range }) : Promise.resolve([]),
-    slm ? client.getContractEvents({ address: slm, abi: swapLeverageManagerAbi, eventName: 'Closed', args: { account }, ...range }) : Promise.resolve([]),
-  ]);
+      client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'CollateralDeposited', args: { account }, ...range }),
+      client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'CollateralWithdrawn', args: { account }, ...range }),
+      client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'RemoteCredited', args: { account }, ...range }),
+      client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'RemoteWithdrawRequested', args: { account }, ...range }),
+      client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Borrowed', args: { account }, ...range }),
+      client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Repaid', args: { account }, ...range }),
+      client.getContractEvents({ address: dep.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Looped', args: { account }, ...range }),
+      client.getContractEvents({ address: dep.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Unwound', args: { account }, ...range }),
+      client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Liquidated', args: { account }, ...range }),
+      slm ? client.getContractEvents({ address: slm, abi: swapLeverageManagerAbi, eventName: 'Opened', args: { account }, ...range }) : Promise.resolve([]),
+      slm ? client.getContractEvents({ address: slm, abi: swapLeverageManagerAbi, eventName: 'Closed', args: { account }, ...range }) : Promise.resolve([]),
+      HAS_REPAID_WITH_COLLATERAL
+        ? (client.getContractEvents({
+            address: vm,
+            abi: vaultManagerAbi as Abi,
+            eventName: 'RepaidWithCollateral',
+            args: { account },
+            ...range,
+          }) as Promise<{ args: { marketId?: bigint; collateralId?: bigint; repaid?: bigint }; transactionHash: Hex; blockNumber: bigint; logIndex: number }[]>)
+        : Promise.resolve([]),
+    ]);
 
   for (const { x, m } of poolDeposits.flat())
     push({
@@ -103,50 +129,58 @@ async function hubActivity(client: PublicClient, protocol: ProtocolState, accoun
       blockNumber: x.blockNumber,
       logIndex: x.logIndex,
     });
-  for (const x of cIn)
-    push({
-      kind: 'Collateral in',
-      asset: collat(x.args.id!).symbol,
-      amount: x.args.amount!,
-      decimals: 24,
-      detail: 'Posted to VaultManager',
-      txHash: x.transactionHash,
-      blockNumber: x.blockNumber,
-      logIndex: x.logIndex,
-    });
-  for (const x of cOut)
-    push({
-      kind: 'Collateral out',
-      asset: collat(x.args.id!).symbol,
-      amount: x.args.amount!,
-      decimals: 24,
-      detail: 'Withdrawn from VaultManager',
-      txHash: x.transactionHash,
-      blockNumber: x.blockNumber,
-      logIndex: x.logIndex,
-    });
+  for (const [kind, logs, detail] of [
+    ['Collateral in', cIn, 'Posted to VaultManager'],
+    ['Collateral out', cOut, 'Withdrawn from VaultManager'],
+  ] as const)
+    for (const x of logs) {
+      const unit = collateralUnits(protocol, collat(x.args.id!));
+      push({
+        kind,
+        asset: unit.symbol,
+        amount: x.args.amount!,
+        decimals: unit.decimals,
+        detail,
+        txHash: x.transactionHash,
+        blockNumber: x.blockNumber,
+        logIndex: x.logIndex,
+      });
+    }
   for (const x of credited)
     push({
       kind: 'Cross-chain',
       asset: collat(x.args.id!).symbol,
       amount: x.args.amount!,
       decimals: collat(x.args.id!).decimals,
-      detail: `Spoke collateral credited (Wormhole chain ${collat(x.args.id!).chainId})`,
+      detail: `Spoke collateral credited (${spokeByWormholeChain(collat(x.args.id!).chainId)?.label ?? `Wormhole chain ${collat(x.args.id!).chainId}`})`,
       txHash: x.transactionHash,
       blockNumber: x.blockNumber,
       logIndex: x.logIndex,
     });
-  for (const x of releases)
+  for (const x of releases) {
+    const c = collat(x.args.id!);
+    const spoke = spokeByWormholeChain(c.chainId);
     push({
       kind: 'Release',
-      asset: collat(x.args.id!).symbol,
+      asset: c.symbol,
       amount: x.args.amount!,
-      decimals: collat(x.args.id!).decimals,
-      detail: `RELEASE #${x.args.sequence} sent to spoke`,
+      decimals: c.decimals,
+      detail: `RELEASE #${x.args.sequence} sent to ${spoke?.label ?? 'spoke'}`,
       txHash: x.transactionHash,
       blockNumber: x.blockNumber,
       logIndex: x.logIndex,
+      message: spoke
+        ? {
+            direction: 'release',
+            target: spoke.name,
+            emitterChain: HUB.wormholeChainId,
+            emitter: dep.contracts.wormholeAdapter,
+            sequence: x.args.sequence!.toString(),
+            label: `${fmt(units(x.args.amount!, c.decimals), 4)} ${c.symbol} back to ${spoke.label}`,
+          }
+        : undefined,
     });
+  }
   for (const x of borrows)
     push({
       kind: 'Borrow',
@@ -169,6 +203,22 @@ async function hubActivity(client: PublicClient, protocol: ProtocolState, accoun
       blockNumber: x.blockNumber,
       logIndex: x.logIndex,
     });
+  // An unwind repays with collateral too; its Unwound row already tells that story.
+  const unwindTxs = new Set(unwinds.map((x) => x.transactionHash));
+  for (const x of repaidWithShares) {
+    if (unwindTxs.has(x.transactionHash) || x.args.marketId === undefined || x.args.collateralId === undefined || x.args.repaid === undefined) continue;
+    const m = market(x.args.marketId);
+    push({
+      kind: 'Repay',
+      asset: m.symbol,
+      amount: x.args.repaid,
+      decimals: m.decimals,
+      detail: `Repaid with posted ${collat(x.args.collateralId).symbol}`,
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
+  }
   for (const x of loops)
     push({
       kind: 'Loop',
@@ -227,37 +277,41 @@ async function hubActivity(client: PublicClient, protocol: ProtocolState, accoun
       logIndex: x.logIndex,
     });
 
-  return items;
+  return withTimestamps(client, HUB.name, items);
 }
 
 async function spokeActivity(client: PublicClient, spoke: (typeof SPOKES)[number], account: Address, range: BlockRange): Promise<ActivityItem[]> {
   if (!spoke.deployment) return [];
-  const logs = await client.getContractEvents({
-    address: spoke.deployment.contracts.spokeGateway,
-    abi: spokeGatewayAbi,
-    eventName: 'Deposited',
-    args: { account },
-    ...range,
-  });
+  const gateway = spoke.deployment.contracts.spokeGateway;
+  const logs = await client.getContractEvents({ address: gateway, abi: spokeGatewayAbi, eventName: 'Deposited', args: { account }, ...range });
   const items: ActivityItem[] = logs.map((x) => {
     const symbol = x.args.token!.toLowerCase() === spoke.deployment!.tokens.WETH.toLowerCase() ? 'WETH' : 'USDC';
+    const decimals = symbol === 'WETH' ? 18 : 6;
     return {
       id: `${x.transactionHash}-${x.logIndex}`,
       kind: 'Cross-chain',
       network: spoke.name,
       asset: symbol,
       amount: x.args.amount!,
-      decimals: symbol === 'WETH' ? 18 : 6,
+      decimals,
       detail: `Locked on ${spoke.label} · DEPOSIT #${x.args.sequence}`,
       txHash: x.transactionHash,
       blockNumber: x.blockNumber,
       timestamp: null,
+      message: {
+        direction: 'deposit',
+        target: HUB.name,
+        emitterChain: spoke.wormholeChainId,
+        emitter: gateway,
+        sequence: x.args.sequence!.toString(),
+        label: `${fmt(units(x.args.amount!, decimals), 4)} ${symbol} from ${spoke.label}`,
+      },
     };
   });
-  return items;
+  return withTimestamps(client, spoke.name, items);
 }
 
-/** Spoke history is scanned for this many recent blocks (~2 days on Base); hub history is complete. */
+/** Spoke history is scanned for a recent window (see spokeHistoryStart); hub history is complete. */
 export type ActivityResult = { items: ActivityItem[]; spokeErrors: string[] };
 
 export function useActivity() {
@@ -270,16 +324,17 @@ export function useActivity() {
     enabled: Boolean(address && hub && protocol.data),
     refetchInterval: 20_000,
     queryFn: async (): Promise<ActivityResult> => {
+      const dep = HUB.deployment!;
       const hubLatest = await hub!.getBlockNumber();
-      // Chunked + incremental: public RPCs cap eth_getLogs ranges (Mezo: 10,000 blocks).
+      // Chunked, incremental and kept per browser: public RPCs cap eth_getLogs ranges (Mezo: 5,000 blocks).
       const hubItems = await scanIncremental(
-        `hub:${address}`,
-        BigInt(HUB.deployment!.startBlock),
+        `${ENV_NAME}:hub:${dep.contracts.vaultManager}:${address}`.toLowerCase(),
+        BigInt(dep.startBlock),
         hubLatest,
         (r) => hubActivity(hub!, protocol.data!, address!, r),
         HUB.maxLogRange,
+        { persist: true },
       );
-      await withTimestamps(hub!, HUB.name, hubItems);
       const spokeErrors: string[] = [];
       const spokeItems = (
         await Promise.all(
@@ -289,11 +344,16 @@ export function useActivity() {
             try {
               const latest = await client.getBlockNumber();
               const start = spokeHistoryStart(latest, BigInt(s.deployment.startBlock), s.maxLogRange);
-              const items = await scanIncremental(`spoke:${s.name}:${address}`, start, latest, (r) => spokeActivity(client, s, address!, r), s.maxLogRange);
-              await withTimestamps(client, s.name, items);
-              return items;
+              return await scanIncremental(
+                `${ENV_NAME}:spoke:${s.deployment.contracts.spokeGateway}:${address}`.toLowerCase(),
+                start,
+                latest,
+                (r) => spokeActivity(client, s, address!, r),
+                s.maxLogRange,
+                { persist: true },
+              );
             } catch (err) {
-              spokeErrors.push(`${s.label}: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+              spokeErrors.push(`${s.label}: ${readError(err)}`);
               return [];
             }
           }),

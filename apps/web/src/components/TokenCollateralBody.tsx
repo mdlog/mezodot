@@ -5,12 +5,14 @@ import { healthStatus, maxWithdrawableUnits, symbolForPriceKey } from '@mezodot/
 import { HUB } from '../chain/env';
 import { postCollateralSteps, withdrawCollateralSteps } from '../chain/actions';
 import { useTx } from '../chain/tx';
+import { postBlocked } from '../data/guards';
 import { useHubClient, useValuedPosition, useWalletBalances } from '../data/hooks';
-import { BTC_GAS_RESERVE, isGasToken, spendableBtc } from '../lib/btc';
+import { exactUnits, tightest, tokenPostBound, truncatedUnits } from '../data/limits';
 import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { fmt, fmtHealth, money, units } from '../lib/format';
 import { useUi } from '../state/UiContext';
 import { TokenLogo } from './Logos';
+import { HubPending, QueryError } from './StatusBanners';
 import { AmountInput, ConnectGate, PriceNotice } from './ui';
 
 /**
@@ -22,33 +24,40 @@ export function TokenCollateralBody({ type, collateralId, preset }: { type: 'pos
   const hub = useHubClient();
   const { closeModal } = useUi();
   const { run, busy } = useTx();
-  const { valued, protocol, prices, position, unpriced, relayError } = useValuedPosition();
-  const balances = useWalletBalances().data;
+  const { valued, protocol, prices, position, unpriced, unpricedDebts, debtFree, relayError } = useValuedPosition();
+  const balancesQuery = useWalletBalances();
+  const balances = balancesQuery.data;
   const [amount, setAmount] = useState(preset ?? '');
 
   const c = protocol?.collaterals[collateralId];
-  if (!protocol || !c) return <p className="muted-note">Loading on-chain data…</p>;
+  if (!protocol || !c) return <HubPending />;
+  // Posting is sized by the wallet: a failed balance read is unknown, never zero, so name it with a retry.
+  if (type === 'post' && balances === undefined && balancesQuery.error) {
+    return <QueryError error={balancesQuery.error} what="your wallet balances" onRetry={() => void balancesQuery.refetch()} />;
+  }
 
   const symbol = symbolForPriceKey(c.priceKey);
   const price = symbol ? (prices?.[symbol] ?? 0) : 0;
-  const gas = isGasToken(c.token);
   const held = balances?.hub.tokens[c.symbol] ?? 0n;
   const posted = position?.collateral.find((x) => x.id === c.id)?.balance ?? 0n;
-  const debtFree = !valued || valued.debtUsd <= 0;
-  // Until the wallet and position are read the max is unknown, not zero.
-  const known = balances !== undefined && position !== undefined;
+  // New collateral waits while it is switched off or its cap is full (VaultManager._depositLocal).
+  const reason = type === 'post' ? postBlocked(c) : null;
+  // Removing collateral that backs debt needs prices: unknown until they load, and impossible while a debt has no
+  // usable one (VaultManager prices debt strictly). With no debt (read from the position) all of it can go.
+  const risked = type === 'unpost' && !debtFree;
+  const blocked = reason !== null || (risked && unpricedDebts.length > 0);
+  // Until the wallet (to post) and the position are read the max is unknown, not zero.
+  const known = (type === 'unpost' || balances !== undefined) && position !== undefined && (!risked || valued !== null);
   const removable = debtFree ? posted : floorUnits(valued ? maxWithdrawableUnits(valued, c.id) : 0, c.decimals);
-  const max = type === 'post' ? (gas ? spendableBtc(held) : held) : removable < posted ? removable : posted;
-  const limit =
+  // Posting: the wallet (less the gas reserve for BTC) within the collateral cap. Removing: what the position allows.
+  const { max, limit } =
     type === 'post'
-      ? `your ${c.symbol} wallet balance${gas ? ` (keeping ${fmt(units(BTC_GAS_RESERVE, 18), 4)} BTC for gas)` : ''}`
-      : debtFree
-        ? `your posted ${c.symbol}`
-        : 'what can be removed while your position stays healthy';
+      ? tokenPostBound(c, held)
+      : tightest({ max: posted, limit: `your posted ${c.symbol}` }, { max: removable, limit: 'what can be removed while your position stays healthy' });
 
   const parsed = parseInput(amount, c.decimals);
   const value = parsed ?? 0n;
-  const invalid = parsed === null || !known || parsed > max;
+  const invalid = parsed === null || !known || blocked || parsed > max;
   const usd = units(value, c.decimals) * price;
   const hfAfter = (() => {
     if (!valued) return null;
@@ -78,11 +87,16 @@ export function TokenCollateralBody({ type, collateralId, preset }: { type: 'pos
           </p>
         </div>
       </div>
-      {type === 'unpost' && <PriceNotice unpriced={unpriced} relayError={relayError} />}
+      {risked && <PriceNotice unpriced={unpriced} relayError={relayError} unpricedDebts={unpricedDebts} />}
+      {reason && (
+        <p className="inline-error" role="status">
+          {reason}
+        </p>
+      )}
       <label className="field-label" htmlFor="token-collateral-amount">
         AMOUNT{' '}
         <span>
-          Max {known ? fmt(units(max, c.decimals), 6) : '…'} {c.symbol}
+          Max {known ? truncatedUnits(max, c.decimals, 6) : '…'} {c.symbol}
         </span>
       </label>
       <AmountInput
@@ -113,16 +127,16 @@ export function TokenCollateralBody({ type, collateralId, preset }: { type: 'pos
           <TokenLogo symbol={c.symbol} size={16} /> Posted<b>{fmt(units(posted, c.decimals), 6)}</b>
         </span>
       </div>
-      {known && parsed !== null && parsed > max && (
+      {known && !blocked && parsed !== null && parsed > max && (
         <p className="inline-error" role="alert">
-          Amount exceeds {limit}: at most {fmt(units(max, c.decimals), 6)} {c.symbol}. Use MAX to fill it in.
+          Amount exceeds {limit}: at most {exactUnits(max, c.decimals)} {c.symbol}. Use MAX to fill it in.
         </p>
       )}
       <div className="message-warning">
         <Shield size={14} /> Real transaction on {HUB.label}. Review it in your wallet before signing.
       </div>
       <ConnectGate connected={isConnected}>
-        <button type="submit" disabled={invalid || Boolean(busy)} className="button button--dark button--wide">
+        <button type="submit" disabled={invalid || Boolean(busy)} title={reason ?? undefined} className="button button--dark button--wide">
           {busy ?? (
             <>
               {type === 'post' ? 'Post' : 'Remove'} {c.symbol} <ArrowRight size={14} />

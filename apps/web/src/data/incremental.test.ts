@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { resetIncrementalCache, scanIncremental, spokeHistoryStart } from './incremental';
+import { afterEach, describe, expect, it } from 'vitest';
+import { SCAN_CONCURRENCY, resetIncrementalCache, scanIncremental, setScanStorage, spokeHistoryStart, type ScanStorage } from './incremental';
+
+const memoryStorage = (): ScanStorage & { data: Map<string, string> } => {
+  const data = new Map<string, string>();
+  return { data, getItem: (k) => data.get(k) ?? null, setItem: (k, v) => void data.set(k, v) };
+};
 
 describe('incremental chunked log scans (final review I5)', () => {
   it('scans history once in chunks under the RPC cap, then only new blocks', async () => {
@@ -51,5 +56,65 @@ describe('incremental chunked log scans (final review I5)', () => {
     expect(spokeHistoryStart(5_000_000n, 0n, 5_000n)).toBe(4_900_000n);
     expect(spokeHistoryStart(5_000_000n, 4_999_000n, 200n)).toBe(4_999_000n); // never before deployment
     expect(spokeHistoryStart(3_000n, 0n, 200n)).toBe(0n);
+  });
+});
+
+describe('scan progress across reloads and refetches (full-history-log-scans)', () => {
+  afterEach(() => setScanStorage(null));
+
+  it('continues from the stored block after a reload instead of the deployment block', async () => {
+    const storage = memoryStorage();
+    setScanStorage(storage);
+    resetIncrementalCache();
+    const scanned: bigint[] = [];
+    const fetchRange = async ({ fromBlock }: { fromBlock: bigint; toBlock: bigint }) => {
+      scanned.push(fromBlock);
+      return [{ block: fromBlock, amount: 10n ** 30n }];
+    };
+    await scanIncremental('persisted', 0n, 14_999n, fetchRange, 5_000n, { persist: true });
+    expect(scanned).toEqual([0n, 5_000n, 10_000n]);
+
+    resetIncrementalCache(); // a reload: memory is gone, browser storage is not
+    scanned.length = 0;
+    const items = await scanIncremental('persisted', 0n, 15_100n, fetchRange, 5_000n, { persist: true });
+    expect(scanned).toEqual([15_000n]);
+    expect(items).toHaveLength(4);
+    expect(items[0]).toEqual({ block: 0n, amount: 10n ** 30n }); // bigints survive the round trip
+  });
+
+  it('keeps progress in memory only unless asked to persist', async () => {
+    const storage = memoryStorage();
+    setScanStorage(storage);
+    resetIncrementalCache();
+    await scanIncremental('memory-only', 0n, 100n, async () => [1n]);
+    expect(storage.data.size).toBe(0);
+  });
+
+  it('never appends the same chunks twice when a refetch starts mid-scan', async () => {
+    resetIncrementalCache();
+    let calls = 0;
+    const fetchRange = async ({ fromBlock }: { fromBlock: bigint; toBlock: bigint }) => {
+      calls++;
+      await new Promise((r) => setTimeout(r, 1));
+      return [fromBlock];
+    };
+    const [a, b] = await Promise.all([scanIncremental('shared', 0n, 49_999n, fetchRange, 5_000n), scanIncremental('shared', 0n, 49_999n, fetchRange, 5_000n)]);
+    expect(calls).toBe(10);
+    expect(a).toHaveLength(10);
+    expect(b).toEqual(a);
+  });
+
+  it('requests a few chunks at a time', async () => {
+    resetIncrementalCache();
+    let inFlight = 0;
+    let peak = 0;
+    const fetchRange = async () => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise((r) => setTimeout(r, 1));
+      inFlight--;
+      return [];
+    };
+    await scanIncremental('parallel', 0n, 99_999n, fetchRange, 5_000n);
+    expect(peak).toBe(SCAN_CONCURRENCY);
   });
 });

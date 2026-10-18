@@ -12,6 +12,12 @@ export const money = (n: number, digits?: number): string => {
   return `${sign}$${fmt(abs, digits ?? (abs >= 1_000 ? 0 : 2))}`;
 };
 
+/**
+ * A token amount with its symbol, negatives with a minus sign: "1,234.56 MUSD", "−12.50 MUSD". MUSD amounts are shown
+ * in MUSD, not as dollars: its oracle price is not exactly $1.
+ */
+export const tokenAmount = (n: number, symbol: string, digits = 2): string => `${n < 0 ? '−' : ''}${fmt(Math.abs(n), digits)} ${symbol}`;
+
 /** Compact USD: $46.10M, $9.6K, $840.00, $0.15. */
 export const compactUsd = (n: number): string => (n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(2)}M` : n >= 1_000 ? `$${(n / 1_000).toFixed(1)}K` : money(n));
 

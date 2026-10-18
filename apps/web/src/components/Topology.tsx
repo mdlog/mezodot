@@ -1,10 +1,40 @@
 import { useEffect, useState } from 'react';
 import { Pause, Play } from 'lucide-react';
+import { BPS, FLASH_FEE_BPS } from '@mezodot/sdk';
 import { HUB, SPOKES } from '../chain/env';
 import { useAgent } from '../data/hooks';
 import { prefersReducedMotion } from '../landing/motion';
+import { pct } from '../lib/format';
 import { pointAlong, polylineLength, roundedPath, type Point } from '../lib/polyline';
 import { ChainLogo } from './Logos';
+
+/** One of the agent's health checks (services/agent/src/health.ts). */
+export type AgentCheck = { name: string; ok: boolean; severity: 'critical' | 'warning'; detail: string };
+
+/**
+ * GET /status: the agent's /health body, answered with HTTP 200 even while degraded (/health answers 503 then,
+ * which the browser cannot tell apart from an agent that is down).
+ */
+export type AgentStatus = { ok: boolean; status: 'ok' | 'degraded'; modules?: string[]; keeper?: string | null; checks?: AgentCheck[] };
+
+export type AgentState = {
+  /** `checking` until the first answer; `offline` when the agent does not answer at all. */
+  state: 'checking' | 'ok' | 'degraded' | 'offline';
+  /** Failing checks, critical ones first: those are what make the agent degraded. */
+  failing: AgentCheck[];
+};
+
+/** Reads a /status answer (undefined: not asked yet, null: unreachable) as ok, degraded or offline. */
+export function agentState(status: AgentStatus | null | undefined): AgentState {
+  if (status === undefined) return { state: 'checking', failing: [] };
+  if (status === null) return { state: 'offline', failing: [] };
+  const failing = (status.checks ?? []).filter((c) => !c.ok);
+  failing.sort((a, b) => Number(b.severity === 'critical') - Number(a.severity === 'critical'));
+  return { state: status.ok === false || status.status === 'degraded' ? 'degraded' : 'ok', failing };
+}
+
+const AGENT_WORD: Record<AgentState['state'], string> = { checking: 'checking', ok: 'online', degraded: 'degraded', offline: 'offline' };
+const FLASH_FEE = pct(FLASH_FEE_BPS / BPS, 2);
 
 /*
  * Capital topology of Mezodot as a system diagram: the off-chain agent, the spoke chains, Wormhole and the Mezo Hub
@@ -26,9 +56,9 @@ const BOXES: Partial<Record<NodeId, Box>> = {
   oracle: { x: 786, y: 170, w: 150, h: 64, title: 'OracleRouter', sub: 'Pyth · Supra', zone: 'hub' },
   adapter: { x: 426, y: 300, w: 150, h: 64, title: 'WormholeAdapter', sub: 'verifies VAAs', zone: 'hub' },
   pools: { x: 606, y: 300, w: 150, h: 64, title: 'MezodotPool', sub: 'pMUSD · pMEZO', zone: 'hub' },
-  // LeverageManager (MUSD loop) and SwapLeverageManager (BTC long), both on the MUSD pool's flash loan.
+  // LeverageManager (MUSD loop, on the MUSD pool's flash loan) and SwapLeverageManager (BTC long, on a Tigris flash swap).
   leverage: { x: 786, y: 300, w: 150, h: 64, title: 'Leverage', sub: 'MUSD loop · BTC long', zone: 'hub' },
-  // Mezo's own DEX, not a Mezodot contract: the BTC leverage swaps MUSD ↔ BTC on its volatile pool.
+  // Mezo's own DEX, not a Mezodot contract: the BTC leverage flash-swaps on its MUSD/BTC pool (pool.swap + hook).
   tigris: { x: 786, y: 384, w: 150, h: 48, title: 'Tigris DEX', sub: 'MUSD/BTC pool', zone: 'dex' },
   wallet: { x: 380, y: 486, w: 380, h: 52, title: 'Your wallet', sub: 'one address on Mezo, Base and Ethereum', zone: 'you' },
 };
@@ -214,6 +244,7 @@ const EDGES = {
       [756, 344],
     ],
   },
+  // A flash swap, not a router trade: the pool pays out first (BTC on an open, MUSD on a close) and is paid in the hook.
   leverageTigris: {
     from: 'leverage',
     to: 'tigris',
@@ -223,6 +254,7 @@ const EDGES = {
       [861, 364],
       [861, 384],
     ],
+    label: { lines: ['swap · hook'], at: [869, 378], anchor: 'start' },
   },
   walletHub: {
     from: 'wallet',
@@ -236,7 +268,7 @@ const EDGES = {
 type EdgeId = keyof typeof EDGES;
 
 type Step = { edge: EdgeId; text: string; fn: string };
-const JOURNEYS: { id: string; label: string; steps: Step[] }[] = [
+export const JOURNEYS: { id: string; label: string; steps: Step[] }[] = [
   { id: 'overview', label: 'Overview', steps: [] },
   {
     id: 'deposit',
@@ -244,7 +276,7 @@ const JOURNEYS: { id: string; label: string; steps: Step[] }[] = [
     steps: [
       { edge: 'walletSpoke', text: 'Lock WETH or USDC in the SpokeGateway on Base or Ethereum.', fn: 'SpokeGateway.deposit(token, amount)' },
       { edge: 'depositMsg', text: 'The gateway publishes a DEPOSIT message through Wormhole Core, finalized only.', fn: 'wormhole.publishMessage(payload)' },
-      { edge: 'depositVaa', text: 'Once the block is final (≈ 15–20 min), 13 of 19 guardians sign it into a VAA.', fn: 'signed VAA' },
+      { edge: 'depositVaa', text: 'Once the block is final (≈ 15–20 min), a quorum of Wormhole guardians signs it into a VAA.', fn: 'signed VAA' },
       { edge: 'relayHub', text: 'The agent, or anyone, relays the VAA to Mezo.', fn: 'KeeperGateway.relayMessage(vaa)' },
       {
         edge: 'keeperAdapter',
@@ -275,14 +307,15 @@ const JOURNEYS: { id: string; label: string; steps: Step[] }[] = [
       { edge: 'walletHub', text: 'One call with your principal and target leverage.', fn: 'LeverageManager.loop(...)' },
       {
         edge: 'leveragePools',
-        text: 'The pool flash-lends the extra MUSD (0.09% fee); equity plus loan is supplied as pMUSD.',
+        text: `The pool flash-lends the extra MUSD (${FLASH_FEE} fee, to reserves); equity plus loan is supplied as pMUSD.`,
         fn: 'MezodotPool.flashLoan(...)',
       },
       { edge: 'leverageVault', text: 'The pMUSD is posted for you and MUSD is borrowed against it.', fn: 'VaultManager.depositCollateralFor · borrowFor' },
-      { edge: 'vaultPools', text: 'That borrow repays the flash loan, all inside the same transaction.', fn: 'flash loan repaid' },
+      { edge: 'vaultPools', text: 'That borrow repays the flash loan and its fee, all inside the same transaction.', fn: 'flash loan repaid' },
     ],
   },
   {
+    // SwapLeverageManager: a flash swap on the Tigris pool; the MUSD pool only lends the debt itself.
     id: 'btc',
     label: 'BTC leverage',
     steps: [
@@ -291,14 +324,21 @@ const JOURNEYS: { id: string; label: string; steps: Step[] }[] = [
         text: 'Your BTC goes in with a target leverage and a minimum for the swap.',
         fn: 'SwapLeverageManager.open(principal, borrow, minBought, …)',
       },
-      { edge: 'leveragePools', text: 'The MUSD pool flash-lends the MUSD to buy with (0.09% fee).', fn: 'MezodotPool.flashLoan(...)' },
-      { edge: 'leverageTigris', text: 'The MUSD is swapped for BTC on Tigris, never below your minimum.', fn: 'Router.swapExactTokensForTokens(...)' },
+      {
+        edge: 'leverageTigris',
+        text: 'A flash swap on the Tigris MUSD/BTC pool: it sends the bought BTC first, never below your minimum, then calls the hook.',
+        fn: 'pool.swap(…) → SwapLeverageManager.hook(…)',
+      },
       {
         edge: 'leverageVault',
-        text: 'Your BTC plus the bought BTC is posted, and MUSD is borrowed against it.',
-        fn: 'VaultManager.depositCollateralFor · borrowFor',
+        text: 'In the hook your BTC plus the bought BTC is posted for you, and the MUSD is borrowed against it.',
+        fn: 'VaultManager.depositCollateralFor · borrowFor(…, pool, …)',
       },
-      { edge: 'vaultPools', text: 'That borrow repays the flash loan, all in the same transaction.', fn: 'flash loan repaid' },
+      {
+        edge: 'vaultPools',
+        text: 'The MUSD pool lends exactly that borrow straight to the Tigris pool as its payment: no flash loan or flash fee, so your debt is the borrow.',
+        fn: 'MezodotPool.borrow(account, amount, tigrisPool)',
+      },
     ],
   },
   {
@@ -358,7 +398,8 @@ function NodeBox({ id, dim }: { id: NodeId; dim: boolean }) {
 
 export function Topology() {
   const motion = !prefersReducedMotion();
-  const health = useAgent<{ ok: boolean }>('/health', 30_000).data;
+  // /status, not /health: /health answers 503 while degraded, which would read as offline here.
+  const agent = agentState(useAgent<AgentStatus>('/status', 30_000).data);
   const [journeyId, setJourneyId] = useState('overview');
   const [step, setStep] = useState(0);
   const [playing, setPlaying] = useState(motion);
@@ -411,7 +452,7 @@ export function Topology() {
           className={`topo-svg${active ? ' is-journey' : ''}`}
           viewBox="0 0 980 556"
           role="img"
-          aria-label="Mezodot topology: the agent off-chain; SpokeGateway on Base and Ethereum Sepolia; Wormhole guardians; and on the Mezo Hub KeeperGateway, VaultManager, OracleRouter, WormholeAdapter, MezodotPool and LeverageManager, used from one wallet."
+          aria-label="Mezodot topology: the agent off-chain; SpokeGateway on Base and Ethereum Sepolia; Wormhole guardians; and on the Mezo Hub KeeperGateway, VaultManager, OracleRouter, WormholeAdapter, MezodotPool, LeverageManager and SwapLeverageManager beside the Tigris MUSD/BTC pool, used from one wallet."
         >
           <defs>
             {KINDS.map(({ kind }) => (
@@ -488,11 +529,12 @@ export function Topology() {
                 </circle>
               );
             })}
+            {/* The guardian set and its quorum depend on the network (the devnet has a single guardian): no count in the text. */}
             <text className="topo-note" x={RING.x} y={386} textAnchor="middle">
-              19 guardians
+              guardian quorum
             </text>
             <text className="topo-note" x={RING.x} y={402} textAnchor="middle">
-              13 sign · finalized
+              signs when final
             </text>
           </g>
 
@@ -535,10 +577,21 @@ export function Topology() {
           {(['agent', 'supra', 'spoke', 'keeper', 'vault', 'oracle', 'adapter', 'pools', 'leverage', 'tigris', 'wallet'] as const).map((id) => (
             <NodeBox key={id} id={id} dim={dimNode(id)} />
           ))}
-          <g className="topo-status" aria-label={health?.ok ? 'agent online' : 'agent offline'}>
-            <circle cx={634} cy={58} r={4} className={health?.ok ? 'is-online' : ''} />
-            <text x={644} y={62}>
-              {health?.ok ? 'online' : 'offline'}
+          {/* Placed so the longest word, "degraded", still ends inside the agent box (its right edge is x = 700). */}
+          <g
+            className="topo-status"
+            aria-label={`agent ${AGENT_WORD[agent.state]}${agent.failing.length > 0 ? `: ${agent.failing.map((c) => c.name).join(', ')}` : ''}`}
+          >
+            {agent.failing.length > 0 && <title>{agent.failing.map((c) => `${c.name}: ${c.detail}`).join('\n')}</title>}
+            <circle
+              cx={624}
+              cy={58}
+              r={4}
+              className={agent.state === 'ok' ? 'is-online' : ''}
+              style={agent.state === 'degraded' ? { fill: 'var(--amber)' } : undefined}
+            />
+            <text x={634} y={62}>
+              {AGENT_WORD[agent.state]}
             </text>
           </g>
 

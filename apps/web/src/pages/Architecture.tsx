@@ -1,9 +1,14 @@
 import { useState } from 'react';
 import { Blocks, Code2, Network } from 'lucide-react';
+import { BPS, FLASH_FEE_BPS } from '@mezodot/sdk';
 import { Topology } from '../components/Topology';
 import { AddressLink, InfoBar, PageTitle, SummaryStrip } from '../components/ui';
 import { HUB, SPOKES } from '../chain/env';
+import { pct } from '../lib/format';
 import { useUi } from '../state/UiContext';
+
+/** MezodotPool.FLASH_FEE_BPS, a contract constant: only the MUSD loop pays it (BTC leverage uses a flash swap). */
+const FLASH_FEE = pct(FLASH_FEE_BPS / BPS, 2);
 
 type Row = { name: string; role: string; description: string; location: string; address?: string; network?: (typeof SPOKES)[number] | typeof HUB };
 
@@ -52,8 +57,8 @@ function contractRows(): Row[] {
     },
     {
       name: 'LeverageManager.sol',
-      role: 'Leverage',
-      description: 'One-transaction flash-loan loop and unwind.',
+      role: 'MUSD loop',
+      description: `One-transaction MUSD → pMUSD loop on the pool's flash loan (${FLASH_FEE} fee to reserves). Unwind nets the debt against the posted pMUSD (VaultManager.repayWithCollateral): no flash loan, no fee, at any utilization.`,
       location: 'Mezo Hub',
       address: c?.leverageManager,
       network: HUB,
@@ -61,15 +66,24 @@ function contractRows(): Row[] {
     {
       name: 'SwapLeverageManager.sol',
       role: 'BTC leverage',
-      description: 'One-transaction BTC long: flash-borrow MUSD, swap it on Tigris, post the BTC, borrow back; close reverses it.',
+      description:
+        'One-transaction BTC long on a Tigris flash swap: the pool sends the BTC first, it is posted, and the MUSD borrow pays the pool from the hook (no flash loan or fee; debt = the borrow). Close takes MUSD from the Tigris pool, repays the debt and pays the pool in BTC, so it needs no idle MUSD pool cash.',
       location: 'Mezo Hub',
       address: c?.swapLeverageManager,
       network: HUB,
     },
     {
-      name: 'Tigris Router (Mezo DEX)',
-      role: 'External · swaps',
-      description: "Mezo's DEX router; SwapLeverageManager and the keeper swap MUSD ↔ BTC on its volatile pool.",
+      name: 'Tigris MUSD/BTC pool',
+      role: 'External · flash swaps',
+      description: "Mezo's DEX pool SwapLeverageManager trades on (pool.swap + hook); its getAmountOut prices every open and close.",
+      location: 'Mezo Hub',
+      address: c?.tigrisPool,
+      network: HUB,
+    },
+    {
+      name: 'Tigris Router',
+      role: 'External · keeper sales',
+      description: 'The keeper sells seized BTC back into MUSD through it.',
       location: 'Mezo Hub',
       address: c?.tigrisRouter,
       network: HUB,
@@ -197,7 +211,7 @@ export function Architecture() {
       </div>
 
       <InfoBar title="Open source and tested." action="Agent risk view" onAction={() => go('agents')}>
-        Foundry unit, fuzz and invariant tests cover pools, liquidation, flash-loan accounting and cross-chain replay protection.
+        Foundry unit, fuzz and invariant tests cover pools, liquidation, flash-loan and flash-swap leverage, and cross-chain replay protection.
       </InfoBar>
     </>
   );

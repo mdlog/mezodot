@@ -103,15 +103,15 @@ export function LoopDiagram({ plan }: { plan: LoopPlan }) {
         HF {fmtHealth(plan.healthFactor)}
       </text>
 
-      {/* What goes in, and what the account holds once the transaction lands. */}
+      {/* What goes in, and what the account holds once the transaction lands (in MUSD: its price is not exactly $1). */}
       <text className="loop-amount" x={4} y={50}>
-        ${amount(plan.principal)}
+        {amount(plan.principal)} MUSD
       </text>
       <text className="loop-caption" x={4} y={62}>
         equity
       </text>
       <text className="loop-amount" x={246} y={50} textAnchor="end">
-        ${amount(plan.gross)}
+        {amount(plan.gross)} MUSD
       </text>
       <text className="loop-caption" x={246} y={62} textAnchor="end">
         position

@@ -4794,3 +4794,185 @@ a.nav-link {
 .topbar-right [data-rk] button {
   font-family: inherit;
 }
+/* ---- Robustness: status banners, transaction progress, toasts with steps ---- */
+.status-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 13px;
+  padding: 10px 13px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.status-banner > svg {
+  flex: none;
+  margin-top: 1px;
+}
+.status-banner span {
+  flex: 1;
+}
+.status-banner button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.status-banner--error {
+  background: #f8ebe7;
+  border: 1px solid #edd3cb;
+  color: #9c4a37;
+}
+.status-banner--warn {
+  background: var(--amber-light);
+  border: 1px solid #eedcc2;
+  color: #85592a;
+}
+.empty-state-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.config-error {
+  max-width: 640px;
+  margin: 10vh auto;
+  padding: 0 16px;
+  display: grid;
+  gap: 18px;
+}
+.config-error ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  text-align: left;
+  color: #6d6f7c;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.toast-stack {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: min(92vw, 410px);
+}
+.toast-stack .toast {
+  position: static;
+  align-items: flex-start;
+}
+.toast-body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding-top: 2px;
+}
+.toast-body p {
+  margin: 0;
+  line-height: 1.45;
+}
+.toast--pending > span {
+  background: #4f46c8;
+}
+.toast-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 3px;
+  font-size: 11.5px;
+  color: #c6c6d0;
+}
+.toast-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.toast-step > span {
+  flex: 1;
+  min-width: 0;
+}
+.toast-step--done > svg {
+  color: #9cc48f;
+}
+.toast-step--failed > svg {
+  color: #f0a08c;
+}
+.toast-step--current {
+  color: white;
+}
+.toast-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #c9c4ff;
+  font: 11px var(--mono);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.toast-link:hover {
+  text-decoration: underline;
+}
+.toast-hint {
+  color: #e2c58f;
+  font-size: 11.5px;
+}
+.toast-action {
+  border: 0;
+  background: transparent;
+  color: white;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+.clickable-row:focus-visible {
+  outline: 2px solid var(--indigo);
+  outline-offset: -2px;
+}
+.action-blocked {
+  margin: 8px 0 0;
+  color: #9c4a37;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+@media (max-width: 680px) {
+  .toast-stack {
+    right: 10px;
+    bottom: 10px;
+  }
+}
+.borrow-add-links {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+.repay-with-shares {
+  margin-top: 8px;
+}
+.claim-list {
+  display: grid;
+  margin-top: 8px;
+}
+.claim-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+.claim-row .button {
+  flex: none;
+}

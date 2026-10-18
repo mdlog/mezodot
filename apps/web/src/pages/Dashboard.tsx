@@ -1,15 +1,17 @@
 import { useState } from 'react';
 import { ArrowRight, ArrowUpRight, Clock3, GitBranch, Layers3, Radio, RefreshCw, Waves, Zap } from 'lucide-react';
 import { useAccount } from 'wagmi';
-import { healthStatus, perSecondToAnnual } from '@mezodot/sdk';
+import { BPS, FLASH_FEE_BPS, healthStatus, perSecondToApy } from '@mezodot/sdk';
 import { ChainLogo, ChainLogoStack, TokenLogo } from '../components/Logos';
 import { LoopDiagram, prdLoopPlan } from '../components/LoopDiagram';
-import { EventIcon, InfoBar, NotDeployed, PageTitle, Pagination, PanelTitle, StatCard, SummaryStrip, TxLink } from '../components/ui';
-import { HUB, HUB_DEPLOYED, SPOKES, spokeByWormholeChain } from '../chain/env';
+import { HubPending, QueryError } from '../components/StatusBanners';
+import { EventIcon, InfoBar, NotDeployed, PageTitle, Pagination, PanelTitle, PriceNotice, StatCard, SummaryStrip, TxLink } from '../components/ui';
+import { HUB, HUB_DEPLOYED, SPOKES, networkByName, spokeByWormholeChain } from '../chain/env';
 import { useActivity } from '../data/activity';
-import { computeTvl, useAgent, useLoopStats, usePrices, useProtocol, useValuedPosition } from '../data/hooks';
+import { loopVolumeUsd, useAgent, useHubStatus, useLoopStats, usePosition, usePrices, useProtocol, useValuedPosition } from '../data/hooks';
 import { compactUsd, fmt, fmtApy, fmtHealth, money, pct, timeAgo, units } from '../lib/format';
 import { paginate } from '../lib/paginate';
+import { protocolTotals } from '../lib/tvl';
 import { useUi } from '../state/UiContext';
 import { HealthBar } from './shared';
 
@@ -24,16 +26,21 @@ export function Dashboard() {
   const prices = usePrices().data;
   const loops = useLoopStats().data;
   const stats = useAgent<Stats>('/stats').data;
-  const { valued } = useValuedPosition();
+  const { valued, unpriced, unpricedDebts, relayError } = useValuedPosition();
+  const hub = useHubStatus();
+  const positionQuery = usePosition();
   const activityQuery = useActivity();
   const activity = activityQuery.data?.items ?? [];
   // The page belongs to the wallet it was picked for: another wallet starts on its newest events.
   const [activityPage, setActivityPage] = useState<{ owner?: string; page: number }>({ page: 0 });
   const shownActivity = paginate(activity, activityPage.owner === address ? activityPage.page : 0, ACTIVITY_PAGE_SIZE);
 
-  const tvl = protocol && prices ? computeTvl(protocol, prices.prices) : null;
+  // TVL net of borrows (idle pool cash, hub BTC, spoke collateral); supply and borrows are shown beside it.
+  const totals = protocol && prices ? protocolTotals(protocol, prices.prices) : null;
   const status = valued ? healthStatus(valued.healthFactor) : null;
   const demoLoop = prdLoopPlan(protocol?.collaterals);
+  // "Live" only while the hub reads succeed: not before the first one, nor once they fail (values then are older).
+  const live = protocol !== undefined && hub.error === null;
 
   return (
     <>
@@ -50,22 +57,38 @@ export function Dashboard() {
       <SummaryStrip
         snapshot={
           <>
-            <span className="live-dot" /> {HUB.label} <i>/</i> {protocol ? `Block ${fmt(Number(protocol.blockNumber))}` : 'connecting…'}
+            {live && <span className="live-dot" />} {HUB.label} <i>/</i>{' '}
+            {protocol ? `Block ${fmt(Number(protocol.blockNumber))}${hub.stale ? ' · stale' : ''}` : hub.error ? 'unreachable' : 'connecting…'}
           </>
         }
-        time={prices ? `Oracle prices ${prices.publishTime > 0 ? timeAgo(prices.publishTime * 1000) : 'unavailable'}` : 'Loading prices'}
+        time={
+          prices
+            ? `Oracle prices ${prices.publishTime > 0 ? timeAgo(prices.publishTime * 1000) : 'unavailable'}`
+            : hub.error
+              ? 'Oracle unreachable'
+              : 'Loading prices'
+        }
         icon={Clock3}
       />
 
       {!HUB_DEPLOYED && <NotDeployed />}
 
       <div className="stats-grid">
-        <StatCard label="Total value locked" value={tvl === null ? '—' : compactUsd(tvl)} icon={Layers3} foot="Hub pools + collateral on spokes" />
+        <StatCard
+          label="Total value locked"
+          value={totals ? compactUsd(totals.tvl) : '—'}
+          icon={Layers3}
+          foot={totals ? `Supplied ${compactUsd(totals.supplied)} · borrowed ${compactUsd(totals.borrowed)}` : 'Idle pool cash + BTC + spoke collateral'}
+        />
         <StatCard
           label="Looping volume"
-          value={loops ? compactUsd(units(loops.volume, 18)) : '—'}
+          value={loops ? compactUsd(loopVolumeUsd(loops, prices?.prices)) : '—'}
           icon={RefreshCw}
-          foot={loops ? `${loops.loops} loops via LeverageManager` : 'LeverageManager events'}
+          foot={
+            loops
+              ? `${loops.musdLoops} MUSD loop${loops.musdLoops === 1 ? '' : 's'} · ${loops.btcPositions} BTC position${loops.btcPositions === 1 ? '' : 's'}`
+              : 'LeverageManager + SwapLeverageManager events'
+          }
           accent
         />
         <StatCard label="Keeper agents" value={protocol ? String(protocol.keeperCount) : '—'} icon={Radio} foot="Unique addresses on KeeperGateway" />
@@ -95,7 +118,7 @@ export function Dashboard() {
             </span>
           ))}
           <span>
-            Flash fee <b>0.09%</b>
+            Flash-loan fee <b>{pct(FLASH_FEE_BPS / BPS, 2)}</b>
           </span>
           <span>
             Liquidation fee <b>{pct(protocol.liquidationFeeBps / 10_000, 0)} of the bonus</b>
@@ -184,7 +207,7 @@ export function Dashboard() {
         <section className="panel market-panel">
           <PanelTitle
             label="Markets"
-            meta="Live from MezodotPool"
+            meta={live ? 'Live from MezodotPool' : 'From MezodotPool'}
             action={
               <button className="text-link" onClick={() => go('markets')}>
                 All markets <ArrowRight size={13} />
@@ -207,7 +230,20 @@ export function Dashboard() {
                   const util = m.totalAssets > 0n ? Number(m.totalBorrows) / Number(m.totalAssets) : 0;
                   const price = prices?.prices[m.symbol as 'MUSD' | 'MEZO'] ?? 0;
                   return (
-                    <tr key={m.id} onClick={() => go('markets')} className="clickable-row">
+                    <tr
+                      key={m.id}
+                      onClick={() => go('markets')}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          go('markets');
+                        }
+                      }}
+                      tabIndex={0}
+                      role="link"
+                      aria-label={`${m.symbol} market details`}
+                      className="clickable-row"
+                    >
                       <td>
                         <div className="asset-cell">
                           <TokenLogo symbol={m.symbol} />
@@ -218,9 +254,9 @@ export function Dashboard() {
                         </div>
                       </td>
                       <td>
-                        <b className="apy-value">{fmtApy(perSecondToAnnual(m.supplyRatePerSecond))}</b>
+                        <b className="apy-value">{fmtApy(perSecondToApy(m.supplyRatePerSecond))}</b>
                       </td>
-                      <td>{fmtApy(perSecondToAnnual(m.borrowRatePerSecond))}</td>
+                      <td>{fmtApy(perSecondToApy(m.borrowRatePerSecond))}</td>
                       <td>
                         <div className="util-cell">
                           <span className="mini-progress">
@@ -239,7 +275,16 @@ export function Dashboard() {
         </section>
 
         <section className="panel position-panel">
-          <PanelTitle label="Your position" meta={isConnected ? 'Valued at prices the protocol accepts now' : 'Connect a wallet'} />
+          <PanelTitle
+            label="Your position"
+            meta={
+              !isConnected
+                ? 'Connect a wallet'
+                : unpricedDebts.length > 0
+                  ? 'Debt without a fresh price at its last stored price'
+                  : 'Valued at prices the protocol accepts now'
+            }
+          />
           {valued ? (
             <>
               <div className="position-value">
@@ -247,7 +292,8 @@ export function Dashboard() {
                   <span>NET COLLATERAL − DEBT</span>
                   <strong>{money(valued.collateralUsd - valued.debtUsd)}</strong>
                 </div>
-                <span className="value-chip">Borrow limit {money(valued.borrowLimitUsd)}</span>
+                {/* With a debt unpriced every borrow reverts (debt is priced strictly), so no limit is offered. */}
+                <span className="value-chip">{unpricedDebts.length > 0 ? 'Borrowing blocked' : `Borrow limit ${money(valued.borrowLimitUsd)}`}</span>
               </div>
               <div className="position-list">
                 {valued.collateral
@@ -271,12 +317,14 @@ export function Dashboard() {
                       <TokenLogo symbol={d.market.symbol} size={23} />
                       <span>
                         <b>{d.market.symbol} borrowed</b>
-                        <small>{fmtApy(perSecondToAnnual(d.market.borrowRatePerSecond))} borrow APY</small>
+                        <small>{fmtApy(perSecondToApy(d.market.borrowRatePerSecond))} borrow APY</small>
                       </span>
                       <strong className="debt-value">−{money(d.valueUsd)}</strong>
                     </div>
                   ))}
-                {valued.collateralUsd === 0 && valued.debtUsd === 0 && <p className="muted-note">No collateral or debt yet.</p>}
+                {valued.collateral.every((c) => c.balance === 0n) && valued.debts.every((d) => d.amount === 0n) && (
+                  <p className="muted-note">No collateral or debt yet.</p>
+                )}
               </div>
               <div className="health-row">
                 <div>
@@ -286,9 +334,10 @@ export function Dashboard() {
                 <HealthBar hf={valued.healthFactor} />
                 <span className={`health-status tone-${status!.tone}`}>{status!.label}</span>
               </div>
+              <PriceNotice unpriced={unpriced} relayError={relayError} unpricedDebts={unpricedDebts} />
             </>
           ) : (
-            <p className="muted-note">{isConnected ? 'Loading position…' : 'Connect a wallet to see your collateral, debt and health factor.'}</p>
+            <PositionPending connected={isConnected} error={positionQuery.error} onRetry={() => void positionQuery.refetch()} />
           )}
         </section>
       </div>
@@ -313,14 +362,12 @@ export function Dashboard() {
                 </b>
                 <small>{item.detail}</small>
               </span>
-              <TxLink network={item.network === HUB.name ? HUB : SPOKES.find((s) => s.name === item.network)!} hash={item.txHash} />
+              <TxLink network={networkByName(item.network) ?? HUB} hash={item.txHash} />
               <span className="activity-row-time">{item.timestamp ? timeAgo(item.timestamp) : ''}</span>
             </div>
           ))}
-          {activityQuery.isError && <p className="inline-error">Could not read your on-chain history. It will retry automatically.</p>}
-          {activity.length === 0 && !activityQuery.isError && (
-            <p className="muted-note">{isConnected ? 'No activity yet.' : 'Connect a wallet to see your activity.'}</p>
-          )}
+          {activityQuery.isError && <QueryError error={activityQuery.error} what="your on-chain history" onRetry={() => void activityQuery.refetch()} />}
+          {activity.length === 0 && !activityQuery.isError && <ActivityPending connected={isConnected} loaded={activityQuery.data !== undefined} />}
         </div>
         <Pagination page={shownActivity} label="Activity" onPage={(page) => setActivityPage({ owner: address, page })} />
       </section>
@@ -330,4 +377,18 @@ export function Dashboard() {
       </InfoBar>
     </>
   );
+}
+
+/** Why the activity list is empty: no wallet, no events, or history still waiting on (or failing) the hub read. */
+function ActivityPending({ connected, loaded }: { connected: boolean; loaded: boolean }) {
+  if (!connected) return <p className="muted-note">Connect a wallet to see your activity.</p>;
+  if (loaded) return <p className="muted-note">No activity yet.</p>;
+  return <HubPending what="your activity" />;
+}
+
+/** Why the position panel is empty: no wallet, the hub read failing, the position read failing, or still loading. */
+function PositionPending({ connected, error, onRetry }: { connected: boolean; error: unknown; onRetry: () => void }) {
+  if (!connected) return <p className="muted-note">Connect a wallet to see your collateral, debt and health factor.</p>;
+  if (error) return <QueryError error={error} what="your position" onRetry={onRetry} />;
+  return <HubPending what="your position" />;
 }

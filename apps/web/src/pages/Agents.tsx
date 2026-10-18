@@ -1,8 +1,10 @@
 import { Activity as ActivityIcon, BarChart3, Code2, Copy, Radio, Shield, TriangleAlert } from 'lucide-react';
+import { BPS } from '@mezodot/sdk';
+import { agentState, type AgentState, type AgentStatus } from '../components/Topology';
 import { AddressLink, InfoBar, NotDeployed, PageTitle, PanelTitle, SummaryStrip } from '../components/ui';
 import { AGENT_URL, HUB, HUB_DEPLOYED } from '../chain/env';
-import { useAgent, useProtocol } from '../data/hooks';
-import { fmtHealth, money, pct, timeAgo } from '../lib/format';
+import { useAgent, useHubStatus, useProtocol } from '../data/hooks';
+import { compactUsd, fmtHealth, money, pct, timeAgo } from '../lib/format';
 import { useUi } from '../state/UiContext';
 
 type AssetRisk = {
@@ -36,29 +38,95 @@ type RiskReport = {
   loopCarry: { leverage: number; netApy: number }[];
   notes: string[];
 };
-type Health = { ok: boolean; modules: string[]; keeper: string | null; liquidatorLastRun: number | null };
-type Evaluation = { account: string; healthFactor: number; debtUsd: number; plan: { profitUsd: number } | null };
+/** The keeper's verdict on a planned liquidation (LiquidationAssessment in services/agent/src/liquidator.ts). */
+type Assessment = {
+  action: 'liquidate' | 'skip';
+  /** Seized BTC: sold on Tigris right away, or held until a sale covers the repayment. */
+  sale: 'sell' | 'hold' | null;
+  /** Profit at the price the keeper can realise (the Tigris sale for BTC), net of gas and fees. */
+  netProfitUsd: number;
+  reason: string;
+};
+/** GET /liquidatable: borrowers below HF 1.2; `assessment` once the keeper has priced a liquidation of them. */
+export type Evaluation = { account: string; healthFactor: number; debtUsd: number; assessment?: Assessment | null };
+
+/** Signed USD: +$12.34, −$0.40, +$1.2K. */
+const signedUsd = (n: number): string => `${n > 0 ? '+' : n < 0 ? '−' : ''}${compactUsd(Math.abs(n))}`;
+
+/**
+ * A watchlist row: the profit the keeper can realise once it has assessed the liquidation (after gas, fees and
+ * the Tigris sale, not the oracle-valued bonus) and its decision, else whether the account is liquidatable or only
+ * close to it. The state column is a few characters wide: the profit goes in the note.
+ */
+export function watchRow(e: Evaluation): { state: string; note: string | null; reason: string | null } {
+  const a = e.assessment;
+  if (a) {
+    const held = a.action === 'liquidate' && a.sale === 'hold' ? ', seizure held' : '';
+    return { state: a.action === 'skip' ? 'SKIP' : 'LIQ', note: `net ${signedUsd(a.netProfitUsd)}${held}`, reason: a.reason };
+  }
+  if (e.healthFactor < 1) {
+    return {
+      state: '—',
+      note: 'not priced by the keeper',
+      reason: 'Liquidatable; the keeper has not priced a liquidation of it (read-only agent, no plan, or the assessment is pending or failed)',
+    };
+  }
+  return { state: 'WATCH', note: null, reason: null };
+}
+
+/** The keeper badge: what the agent's own checks say, not only whether it answers. */
+export function agentBadge(agent: AgentState, keeper: string | null | undefined): string {
+  if (agent.state === 'checking') return 'CHECKING AGENT…';
+  if (agent.state === 'offline') return 'AGENT OFFLINE';
+  if (agent.state === 'degraded') return 'AGENT DEGRADED';
+  return keeper ? 'AGENT KEEPER ACTIVE' : 'AGENT READ-ONLY';
+}
 
 const TOOLS = [
-  ['get_markets', 'Pools, APYs, exchange rates, collateral params'],
+  ['get_markets', 'Pools, APYs, exchange rates, reserves, collateral params'],
   ['get_position', 'Cross-chain position at the prices the protocol accepts now'],
   ['get_oracle_health', 'Per-feed sources, age and validity (Pyth push, Supra pull)'],
-  ['get_risk_report', 'Volatility, VaR, LTV advice, walk-forward + DSR'],
-  ['simulate_loop', 'Preview a 1-click loop'],
+  ['get_risk_report', 'Volatility, VaR, LTV advice, walk-forward + DSR, loop carry'],
+  ['get_revenue', "Reserves, flash fees and the treasury's liquidation fees"],
+  ['simulate_loop', 'Preview a 1-click MUSD loop; optional address: the account after it'],
+  ['simulate_btc_leverage', 'Preview a BTC long: Tigris flash swap, no flash fee'],
+  ['simulate_btc_close', 'Preview a BTC close: Tigris sale, no pool cash needed'],
   ['simulate_borrow', 'Health factor after a borrow'],
-  ['list_liquidatable', 'Accounts below HF 1 with liquidation plan'],
-  ['list_pending_messages', 'Wormhole messages awaiting delivery'],
-  ['trigger_liquidation', 'KeeperGateway.triggerLiquidation (dry-run default)'],
+  ['list_liquidatable', 'Accounts below HF 1: plan and realisable net profit'],
+  ['list_pending_messages', 'Wormhole messages awaiting delivery, flagged when stuck'],
+  ['trigger_liquidation', 'Liquidate through KeeperGateway (dry-run default)'],
   ['relay_message', 'Deliver a VAA (dry-run default)'],
 ] as const;
 
 export function Agents() {
   const { go, showToast } = useUi();
   const protocol = useProtocol().data;
-  const health = useAgent<Health>('/health', 15_000).data;
+  const hub = useHubStatus();
+  // /status, not /health: /health answers 503 while degraded, which a browser cannot tell from an agent that is down.
+  const status = useAgent<AgentStatus>('/status', 15_000).data;
+  const agent = agentState(status);
+  const answering = agent.state === 'ok' || agent.state === 'degraded';
   const report = useAgent<RiskReport>('/risk', 60_000).data;
   const watch = useAgent<Evaluation[]>('/liquidatable', 15_000).data ?? [];
   const mcpUrl = `${AGENT_URL}/mcp`;
+  // The critical checks are what make it degraded; name those first.
+  const critical = agent.failing.filter((c) => c.severity === 'critical');
+  const why = (critical.length > 0 ? critical : agent.failing).map((c) => c.name).join(', ');
+  const modules = (status?.modules ?? []).join(', ');
+  const agentLine =
+    agent.state === 'ok'
+      ? `Agent online${modules ? ` · ${modules}` : ''}`
+      : agent.state === 'degraded'
+        ? `Agent degraded${why ? ` · ${why}` : ''}`
+        : agent.state === 'offline'
+          ? 'Agent offline'
+          : 'Checking the agent…';
+  // The liquidator keeps the bonus less the protocol's share of it (ProtocolState.liquidationFeeBps, owner-set).
+  const bonusNote = !protocol
+    ? 'earning the liquidation bonus, less the protocol share'
+    : protocol.liquidationFeeBps > 0
+      ? `earning the liquidation bonus, of which ${pct(protocol.liquidationFeeBps / BPS, 0)} goes to the treasury`
+      : 'earning the whole liquidation bonus';
 
   const copy = () => {
     if (!navigator.clipboard) return showToast(mcpUrl);
@@ -86,7 +154,7 @@ export function Agents() {
             KEEPERGATEWAY <i>/</i> MCP · STREAMABLE HTTP + STDIO
           </>
         }
-        time={health ? `Agent online · ${health.modules.join(', ')}` : 'Agent offline'}
+        time={agentLine}
         icon={Radio}
       />
       {!HUB_DEPLOYED && <NotDeployed />}
@@ -97,14 +165,28 @@ export function Agents() {
         </div>
         <div>
           <span className="overline">KEEPER NETWORK</span>
-          <h2>{protocol ? `${protocol.keeperCount} keeper${protocol.keeperCount === 1n ? '' : 's'} on KeeperGateway` : 'Reading KeeperGateway…'}</h2>
+          <h2>
+            {protocol
+              ? `${protocol.keeperCount} keeper${protocol.keeperCount === 1n ? '' : 's'} on KeeperGateway`
+              : hub.error
+                ? 'KeeperGateway unreachable right now'
+                : 'Reading KeeperGateway…'}
+          </h2>
           <p>
-            Anyone can liquidate unhealthy positions (earning the liquidation bonus) or deliver Wormhole messages.{' '}
+            Anyone can liquidate unhealthy positions ({bonusNote}) or deliver Wormhole messages.{' '}
             {HUB.deployment && <AddressLink network={HUB} address={HUB.deployment.contracts.keeperGateway} />}
           </p>
+          {agent.failing.length > 0 && (
+            <p className={agent.state === 'degraded' ? 'tone-warn' : undefined}>
+              {agent.state === 'degraded' ? 'Failing checks' : 'Warnings'}: {agent.failing.map((c) => c.name).join(', ')}
+            </p>
+          )}
         </div>
-        <span className="monitor-pill">
-          <i /> {health ? (health.keeper ? 'AGENT KEEPER ACTIVE' : 'AGENT READ-ONLY') : 'AGENT OFFLINE'}
+        <span
+          className={`monitor-pill${agent.state === 'degraded' ? ' tone-warn' : ''}`}
+          title={agent.failing.length > 0 ? agent.failing.map((c) => `${c.name}: ${c.detail}`).join('\n') : undefined}
+        >
+          <i /> {agentBadge(agent, status?.keeper)}
         </span>
       </div>
 
@@ -161,19 +243,23 @@ export function Agents() {
               </p>
             </section>
             <section className="panel endpoint-panel">
-              <PanelTitle label="Liquidation watchlist" meta="HF < 1.2, fresh prices" />
+              <PanelTitle label="Liquidation watchlist" meta="HF < 1.2 · profit the keeper can realise, net of costs" />
               <div className="endpoint-list">
                 {watch.length === 0 && <p className="muted-note">No accounts near liquidation.</p>}
-                {watch.slice(0, 6).map((e) => (
-                  <div key={e.account}>
-                    <span className="method-dot" />
-                    <code>{e.account.slice(0, 10)}…</code>
-                    <small>
-                      HF {fmtHealth(e.healthFactor)} · debt {money(e.debtUsd)}
-                    </small>
-                    <span className="endpoint-state">{e.plan ? `+${money(e.plan.profitUsd, 2)}` : 'WATCH'}</span>
-                  </div>
-                ))}
+                {watch.slice(0, 6).map((e) => {
+                  const row = watchRow(e);
+                  return (
+                    <div key={e.account} title={row.reason ?? undefined}>
+                      <span className="method-dot" />
+                      <code>{e.account.slice(0, 10)}…</code>
+                      <small>
+                        HF {fmtHealth(e.healthFactor)} · debt {money(e.debtUsd)}
+                        {row.note && ` · ${row.note}`}
+                      </small>
+                      <span className="endpoint-state">{row.state}</span>
+                    </div>
+                  );
+                })}
               </div>
             </section>
           </div>
@@ -183,7 +269,18 @@ export function Agents() {
           <BarChart3 size={23} />
           <b>Risk report unavailable</b>
           <span>
-            Start the agent (<code>pnpm --filter @mezodot/agent start</code>) — it serves the report at <code>{AGENT_URL}/risk</code>.
+            {agent.state === 'checking'
+              ? 'Checking the Mezodot agent…'
+              : answering
+                ? 'The Mezodot agent is up, but its risk report is not ready yet; it appears here once the agent has built it.'
+                : 'The Mezodot agent is not answering right now; the report appears here as soon as it is back.'}{' '}
+            Keepers and liquidations on-chain do not depend on this page.
+            {import.meta.env.DEV && (
+              <>
+                {' '}
+                Local development: start it with <code>pnpm --filter @mezodot/agent start</code> (serves <code>{AGENT_URL}/risk</code>).
+              </>
+            )}
           </span>
         </div>
       )}
@@ -210,7 +307,7 @@ export function Agents() {
           ))}
         </div>
         <p className="endpoint-disclaimer">
-          Write tools dry-run unless the agent runs with MCP_ALLOW_WRITE=true. Local stdio: pnpm --filter @mezodot/agent mcp.
+          Write tools dry-run unless the agent runs with MCP_ALLOW_WRITE=true (over HTTP, with MCP_TOKEN too). Local stdio: pnpm --filter @mezodot/agent mcp.
         </p>
       </section>
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { floorUnits, parseInput, toInput } from './amount';
+import { ceilUnits, floorUnits, parseInput, roundedInput, toInput } from './amount';
 
 describe('exact amount inputs (final review I6)', () => {
   it('MAX round-trips exactly for random 18- and 6-decimal balances', () => {
@@ -26,5 +26,30 @@ describe('exact amount inputs (final review I6)', () => {
     expect(floorUnits(-1, 18)).toBe(0n);
     expect(floorUnits(Number.NaN, 6)).toBe(0n);
     expect(floorUnits(12.3456789, 6)).toBe(12_345_678n);
+  });
+});
+
+describe('sizing helpers', () => {
+  it('rounds a sale up so it never falls short', () => {
+    expect(ceilUnits(1.5108741, 18)).toBe(1_510_875n * 10n ** 12n);
+    expect(ceilUnits(0.0000001, 18)).toBe(10n ** 12n);
+    expect(ceilUnits(0, 18)).toBe(0n);
+    expect(ceilUnits(Number.NaN, 18)).toBe(0n);
+  });
+
+  it('suggests round default amounts at or below the limit', () => {
+    expect(roundedInput(54.67)).toBe('54');
+    expect(roundedInput(1_234)).toBe('1200');
+    expect(roundedInput(0.3)).toBe('0.3');
+    expect(roundedInput(5)).toBe('5');
+    expect(roundedInput(0.001012)).toBe('0.001');
+    expect(roundedInput(0.0999999)).toBe('0.099');
+    expect(roundedInput(0.00000123)).toBe('0.000001');
+    for (const bad of [0, -1, 1e-7, Infinity, Number.NaN]) expect(roundedInput(bad)).toBe('');
+    // Always parseable, never above the limit.
+    for (const max of [54.67, 0.001012, 2.5e-5, 7_777]) {
+      expect(parseInput(roundedInput(max), 18)).not.toBeNull();
+      expect(Number(roundedInput(max))).toBeLessThanOrEqual(max);
+    }
   });
 });

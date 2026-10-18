@@ -15,7 +15,7 @@ const IDLE: Line[] = [
   { module: 'keeper', text: 'scanning borrower health on every block' },
   { module: 'relayer', text: 'watching SpokeGateway deposits on Base and Ethereum' },
   { module: 'oracle', text: 'attaching Supra proofs before ETH/USDC borrows' },
-  { module: 'keeper', text: 'liquidates 50% below 1.00× and keeps the bonus' },
+  { module: 'keeper', text: 'liquidates 50% below 1.00× and earns the bonus less the protocol share' },
 ];
 
 const label = (n: NetworkName) => NETWORKS[n]?.label ?? n;
