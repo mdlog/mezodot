@@ -11,6 +11,7 @@ import { useTx } from '../chain/tx';
 import { useFlightStatus } from '../data/flights';
 import { useHubClient, usePrices, useValuedPosition, useWalletBalances } from '../data/hooks';
 import { floorUnits, parseInput, toInput } from '../lib/amount';
+import { spendableWeth, wrapNeeded } from '../lib/wrap';
 import { fmt, money, timeAgo, units } from '../lib/format';
 import { useUi, type Flight } from '../state/UiContext';
 
@@ -78,7 +79,11 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
       </section>
     );
   }
-  const balance = balances?.spokes[spoke.name]?.[asset] ?? 0n;
+  const spokeBalances = balances?.spokes[spoke.name];
+  const native = spokeBalances?.native ?? 0n;
+  // WETH deposits may also use native ETH (wrapped automatically); USDC must already be held.
+  const balance = asset === 'WETH' ? spendableWeth(spokeBalances?.WETH ?? 0n, native, spokeBalances?.gasPrice ?? 0n) : (spokeBalances?.USDC ?? 0n);
+  const toWrap = asset === 'WETH' && parseInput(amount, 18) !== null ? wrapNeeded(spokeBalances?.WETH ?? 0n, parseInput(amount, 18)!) : 0n;
   const parsed = parseInput(amount, DECIMALS[asset]);
   const invalid = parsed === null || parsed > balance;
   const usd = parsed ? units(parsed, DECIMALS[asset]) * (prices?.[PRICE_SYMBOL[asset]] ?? 0) : 0;
@@ -86,7 +91,10 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
   const deposit = async () => {
     if (!address || !client || !parsed) return;
     const token = spoke.deployment!.tokens[asset];
-    const result = await run(`Lock ${asset} on ${spoke.label}`, spokeDepositSteps(address, spoke, client, token, asset, parsed));
+    const result = await run(
+      `Lock ${asset} on ${spoke.label}`,
+      spokeDepositSteps(address, spoke, client, token, asset, parsed, { wrapNative: asset === 'WETH' }),
+    );
     if (!result.ok) return;
     const receipt = result.receipts[result.receipts.length - 1];
     const [event] = parseEventLogs({ abi: spokeGatewayAbi, logs: receipt.logs, eventName: 'Deposited' });
@@ -146,12 +154,16 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
         <label className="field-label" htmlFor="bridge-amount">
           03 / AMOUNT{' '}
           <span>
-            {spoke.label} balance · {fmt(units(balance, DECIMALS[asset]), 4)} {asset}
+            {spoke.label} balance ·{' '}
+            {asset === 'WETH'
+              ? `${fmt(units(spokeBalances?.WETH ?? 0n, 18), 4)} WETH + ${fmt(units(native, 18), 4)} ETH`
+              : `${fmt(units(balance, DECIMALS[asset]), 4)} ${asset}`}
           </span>
         </label>
         <AmountInput id="bridge-amount" value={amount} onChange={setAmount} unit={asset} onMax={() => setAmount(toInput(balance, DECIMALS[asset]))} />
         <div className="amount-estimate">
           Value <b>{money(usd, 2)}</b>
+          {toWrap > 0n && <> · wraps {fmt(units(toWrap, 18), 4)} ETH → WETH first</>}
         </div>
       </div>
       <ConnectGate connected={isConnected}>

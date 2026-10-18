@@ -150,7 +150,8 @@ export function useValuedPosition() {
 
 export type WalletBalances = {
   hub: { native: bigint; tokens: Record<string, bigint> };
-  spokes: Record<string, { native: bigint; WETH: bigint; USDC: bigint }>;
+  /** Per spoke: native ETH, token balances, and the gas price (to keep ETH back for fees when wrapping). */
+  spokes: Record<string, { native: bigint; WETH: bigint; USDC: bigint; gasPrice: bigint }>;
 };
 
 export function useWalletBalances() {
@@ -178,12 +179,13 @@ export function useWalletBalances() {
         SPOKES.map(async (s, i) => {
           const c = spokeClients[i];
           if (!c || !s.deployment) return;
-          const [n, weth, usdc] = await Promise.all([
+          const [n, weth, usdc, gasPrice] = await Promise.all([
             c.getBalance({ address: address! }).catch(() => 0n),
             bal(c, s.deployment.tokens.WETH),
             bal(c, s.deployment.tokens.USDC),
+            c.getGasPrice().catch(() => 0n),
           ]);
-          spokes[s.name] = { native: n, WETH: weth, USDC: usdc };
+          spokes[s.name] = { native: n, WETH: weth, USDC: usdc, gasPrice };
         }),
       );
       return { hub: { native, tokens }, spokes };

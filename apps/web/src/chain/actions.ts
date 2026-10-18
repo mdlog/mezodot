@@ -20,6 +20,7 @@ import {
   type ProtocolState,
 } from '@mezodot/sdk';
 import { AGENT_URL, HUB, type SpokeInfo } from './env';
+import { wethAbi, wrapNeeded } from '../lib/wrap';
 import type { TxStep } from './tx';
 
 /**
@@ -155,10 +156,36 @@ export const repaySteps = ({ account, hub }: Ctx, m: MarketState, amount: bigint
 
 // --- Cross-chain ------------------------------------------------------------------
 
-export const spokeDepositSteps = (account: Address, spoke: SpokeInfo, client: PublicClient, token: Address, symbol: string, amount: bigint): TxStep[] => {
+/**
+ * Lock `amount` of `token` on a spoke. With `wrapNative`, WETH missing from the wallet is first wrapped
+ * from native ETH (SpokeGateway only accepts ERC-20s); the shortfall is read just before signing.
+ */
+export const spokeDepositSteps = (
+  account: Address,
+  spoke: SpokeInfo,
+  client: PublicClient,
+  token: Address,
+  symbol: string,
+  amount: bigint,
+  opts: { wrapNative?: boolean } = {},
+): TxStep[] => {
   if (!spoke.deployment) throw new Error(`${spoke.label} gateway is not deployed`);
   const gateway = spoke.deployment.contracts.spokeGateway;
+  const wrap: TxStep[] = opts.wrapNative
+    ? [
+        {
+          label: `Wrap ETH → WETH on ${spoke.label}`,
+          chainId: spoke.chain.id,
+          request: async () => {
+            const held = await client.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [account] });
+            const value = wrapNeeded(held, amount);
+            return value === 0n ? null : { address: token, abi: wethAbi, functionName: 'deposit', value };
+          },
+        },
+      ]
+    : [];
   return [
+    ...wrap,
     approveStep(client, spoke.chain.id, token, account, gateway, amount, `Approve ${symbol} on ${spoke.label}`),
     {
       label: `Lock ${symbol} on ${spoke.label}`,
