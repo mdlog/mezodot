@@ -125,6 +125,7 @@ export function startHttp(s: Services, host = process.env.HTTP_HOST ?? '127.0.0.
             modules: [...s.ctx.config.modules],
             keeper: s.ctx.hub.wallet?.account.address ?? null,
             keeperInventory: s.liquidator.lastInventory,
+            pythPusher: s.pusher?.status() ?? null,
             liquidatorLastRun: s.liquidator.lastRun,
           });
         case '/risk': {

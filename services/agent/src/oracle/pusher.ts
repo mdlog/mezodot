@@ -7,6 +7,17 @@ import type { OracleRelay } from './relay';
 const PUSH_FEED_LEAD_SEC = 900;
 /** Legs with a max age up to this are pull-style (ETH: 120 s) and are kept fresh at half their max age. */
 const PULL_STYLE_MAX_AGE = 300;
+/** Pyth keys are entitled feed by feed (HTTP 403 "Not entitled"); such feeds are retried hourly. */
+const NOT_ENTITLED_RETRY_MS = 60 * 60_000;
+
+export type PusherStatus = {
+  enabled: boolean;
+  /** Feeds the configured key is not entitled to (skipped until their retry time). */
+  notEntitled: PriceSymbol[];
+  lastPush: { symbols: PriceSymbol[]; txHash: Hex; at: number } | null;
+};
+
+const errorLine = (err: unknown): string => (err instanceof Error ? err.message.split('\n')[0] : String(err));
 
 /** Symbols whose Pyth primary leg should be pushed now. */
 export function pythPushPlan(oracle: OracleState, nowSec: number): PriceSymbol[] {
@@ -25,6 +36,9 @@ export function pythPushPlan(oracle: OracleState, nowSec: number): PriceSymbol[]
  * only for the Hermes request; it is never logged or served (Pyth's terms forbid sharing it).
  */
 export class PythPusher {
+  private readonly notEntitled = new Map<PriceSymbol, number>();
+  private lastPush: PusherStatus['lastPush'] = null;
+
   constructor(
     private readonly ctx: Context,
     private readonly relay: OracleRelay,
@@ -32,17 +46,43 @@ export class PythPusher {
     private readonly now: () => number = Date.now,
   ) {}
 
+  status(): PusherStatus {
+    const enabled = Boolean(this.ctx.config.pythApiKey && this.ctx.hub.wallet && this.ctx.config.env !== 'devnet');
+    return { enabled, notEntitled: PRICE_SYMBOLS.filter((s) => this.notEntitled.has(s)), lastPush: this.lastPush };
+  }
+
   async tick(): Promise<{ pushed: PriceSymbol[]; txHash: Hex | null }> {
     const { pythApiKey, hermesUrl } = this.ctx.config;
     const { client, wallet, deployment } = this.ctx.hub;
     // The devnet's MockPyth only accepts its own encoding, not real Hermes payloads.
     if (!pythApiKey || !wallet || this.ctx.config.env === 'devnet') return { pushed: [], txHash: null };
     const oracle = await this.relay.oracle();
-    const plan = pythPushPlan(oracle, Math.floor(this.now() / 1000));
+    const now = this.now();
+    const plan = pythPushPlan(oracle, Math.floor(now / 1000)).filter((s) => (this.notEntitled.get(s) ?? 0) <= now);
     if (plan.length === 0) return { pushed: [], txHash: null };
-    const ids = plan.map((s) => oracle[s].feed!.primary.id);
-    const { updates } = await fetchPriceUpdate(hermesUrl, ids, this.fetchImpl, { accessToken: pythApiKey });
-    const tagged = updates.map((u) => tagUpdate(SOURCE_TAG.PYTH, u));
+    // One Hermes request per feed: a feed the key does not cover (403) must not block the others.
+    const results = await Promise.allSettled(
+      plan.map((s) => fetchPriceUpdate(hermesUrl, [oracle[s].feed!.primary.id], this.fetchImpl, { accessToken: pythApiKey })),
+    );
+    const pushed: PriceSymbol[] = [];
+    const tagged: Hex[] = [];
+    results.forEach((r, i) => {
+      const s = plan[i];
+      if (r.status === 'fulfilled') {
+        pushed.push(s);
+        tagged.push(...r.value.updates.map((u) => tagUpdate(SOURCE_TAG.PYTH, u)));
+        this.notEntitled.delete(s);
+        return;
+      }
+      const error = errorLine(r.reason);
+      if (/\b403\b/.test(error)) {
+        if (!this.notEntitled.has(s)) this.ctx.log('oracle', `Pyth key is not entitled to ${s}; retrying hourly`, { error });
+        this.notEntitled.set(s, now + NOT_ENTITLED_RETRY_MS);
+      } else {
+        this.ctx.log('oracle', `Hermes request for ${s} failed`, { error });
+      }
+    });
+    if (tagged.length === 0) return { pushed: [], txHash: null };
     const router = deployment.contracts.oracleRouter;
     const fee = await client.readContract({ address: router, abi: oracleRouterAbi, functionName: 'updateFee', args: [tagged] });
     const { request } = await client.simulateContract({
@@ -54,8 +94,10 @@ export class PythPusher {
       value: fee,
     });
     const txHash = await wallet.writeContract(request);
-    await client.waitForTransactionReceipt({ hash: txHash });
-    this.ctx.log('oracle', 'pushed Pyth prices', { symbols: plan, txHash });
-    return { pushed: plan, txHash };
+    const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+    if (receipt.status !== 'success') throw new Error(`Pyth push ${txHash} reverted`);
+    this.lastPush = { symbols: pushed, txHash, at: now };
+    this.ctx.log('oracle', 'pushed Pyth prices', { symbols: pushed, txHash });
+    return { pushed, txHash };
   }
 }

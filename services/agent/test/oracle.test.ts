@@ -219,3 +219,70 @@ describe('Pyth pusher environment', () => {
     expect(fetched).toBe(0);
   });
 });
+
+describe('Pyth pusher entitlements (a real key: ETH/USDC entitled, MUSD/MEZO 403)', () => {
+  const status = (symbol: PriceSymbol, maxAge: number, s: Partial<OracleStatus>): OracleStatus => ({
+    symbol,
+    feed: { primary: { source: 1, maxAge, id: PYTH_ID[symbol] }, secondary: null, maxConfBps: 500, maxDivergenceBps: 0 },
+    ok: true,
+    price: 10n ** 18n,
+    validUntil: 0,
+    lastPrice: 10n ** 18n,
+    publishTime: 0,
+    legs: [],
+    ...s,
+  });
+
+  it('pushes the feeds the key covers even when another feed is not entitled, and skips that one for an hour', async () => {
+    const { PythPusher } = await import('../src/oracle/pusher');
+    let now = 1_792_300_000_000;
+    const nowSec = () => Math.floor(now / 1000);
+    const oracle = (): OracleState => ({
+      MUSD: status('MUSD', 3_900, { validUntil: nowSec() + 3_000 }),
+      MEZO: status('MEZO', 3_900, { validUntil: nowSec() + 800 }), // Mezo's pusher is late: plan includes MEZO
+      ETH: status('ETH', 120, { ok: false }),
+      USDC: status('USDC', 3_900, { validUntil: nowSec() + 3_000 }),
+    });
+    const requested: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      const id = new URL(url).searchParams.get('ids[]')!;
+      requested.push(id);
+      if (id === PYTH_ID.MEZO) return new Response('Not entitled: feed 80beaaed…', { status: 403 });
+      return new Response(JSON.stringify({ binary: { encoding: 'hex', data: ['ab'] }, parsed: [] }));
+    }) as unknown as typeof fetch;
+    const sent: unknown[][] = [];
+    const ctx = {
+      config: { env: 'testnet', pythApiKey: 'test-key', hermesUrl: 'http://hermes.test' },
+      hub: {
+        client: {
+          readContract: async () => 0n,
+          simulateContract: async ({ args }: { args: unknown[] }) => ({ request: { args } }),
+          waitForTransactionReceipt: async () => ({ status: 'success' }),
+        },
+        wallet: {
+          account: { address: '0x00000000000000000000000000000000000000ee' },
+          writeContract: async (req: { args: unknown[] }) => (sent.push(req.args), '0x' + 'cd'.repeat(32)),
+        },
+        deployment: { contracts: { oracleRouter: ROUTER } },
+      },
+      log: () => {},
+    };
+    const pusher = new PythPusher(ctx as never, { oracle: async () => oracle() } as never, fetchImpl, () => now);
+
+    const first = await pusher.tick();
+    expect(first.pushed).toEqual(['ETH']);
+    expect(sent).toEqual([[['0x01ab']]]); // one router tx with the tagged ETH update
+    expect(requested.sort()).toEqual([PYTH_ID.MEZO, PYTH_ID.ETH].sort());
+    expect(pusher.status().notEntitled).toEqual(['MEZO']);
+
+    requested.length = 0;
+    now += 60_000;
+    await pusher.tick();
+    expect(requested).toEqual([PYTH_ID.ETH]); // MEZO is not asked again within the hour
+
+    requested.length = 0;
+    now += 61 * 60_000;
+    await pusher.tick();
+    expect(requested.sort()).toEqual([PYTH_ID.MEZO, PYTH_ID.ETH].sort()); // retried: the plan may have changed
+  });
+});
