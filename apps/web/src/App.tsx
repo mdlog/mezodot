@@ -30,6 +30,7 @@ import { Borrow } from './pages/Borrow';
 import { Crosschain } from './pages/Crosschain';
 import { Dashboard } from './pages/Dashboard';
 import { Loop } from './pages/Loop';
+import { Landing } from './pages/Landing';
 import { Markets } from './pages/Markets';
 import { UiProvider, useUi } from './state/UiContext';
 
@@ -47,7 +48,8 @@ const NAV_ITEMS: NavItem[] = [
 ];
 const NAV_GROUPS = ['PROTOCOL', 'CAPITAL', 'INTELLIGENCE'] as const;
 
-const PAGES: Record<View, () => JSX.Element> = {
+/** App views; the landing page renders on its own, outside the app shell. */
+const PAGES: Record<Exclude<View, 'landing'>, () => JSX.Element> = {
   dashboard: Dashboard,
   markets: Markets,
   crosschain: Crosschain,
@@ -63,7 +65,17 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
     <aside className={`sidebar ${open ? 'sidebar--open' : ''}`}>
       <div className="sidebar-brand">
-        <Brand />
+        <a
+          href="#/"
+          className="brand-home"
+          aria-label="Mezodot home"
+          onClick={(e) => {
+            e.preventDefault();
+            go('landing');
+          }}
+        >
+          <Brand />
+        </a>
         <button className="mobile-close icon-button" onClick={onClose} aria-label="Close navigation">
           <X size={17} />
         </button>
@@ -75,7 +87,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
             {NAV_ITEMS.filter((item) => item.group === group).map(({ key, label, icon: Icon }) => (
               <a
                 key={key}
-                href={key === 'dashboard' ? '#/' : `#/${key}`}
+                href={`#/${key}`}
                 className={`nav-link ${view === key ? 'nav-link--active' : ''}`}
                 aria-current={view === key ? 'page' : undefined}
                 onClick={(e) => {
@@ -157,6 +169,7 @@ function ToastView() {
 function Shell() {
   const { view } = useUi();
   const [mobileMenu, setMobileMenu] = useState(false);
+  if (view === 'landing') return <Landing />;
   const Page = PAGES[view];
 
   return (

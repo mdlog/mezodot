@@ -57,7 +57,7 @@ cd services/agent && MEZODOT_ENV=devnet \
   pnpm start
 
 # terminal 3 — web app on the devnet
-VITE_MEZODOT_ENV=devnet pnpm dev               # http://localhost:3000
+VITE_MEZODOT_ENV=devnet pnpm dev               # http://localhost:3000 (landing page; the app is at #/dashboard)
 ```
 
 Import an anvil account (e.g. #2 `0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a`) into MetaMask with networks `http://127.0.0.1:8545` (chain 31337) and `http://127.0.0.1:8546` (chain 31338). The keys above are Foundry's public test keys — never use them elsewhere.

@@ -1,5 +1,14 @@
-import type { LoopPlan } from '@mezodot/sdk';
+import { planLoop, type CollateralState, type LoopPlan } from '@mezodot/sdk';
 import { fmt, fmtHealth } from '../lib/format';
+
+/** PRD flow C, the loop the overview and landing page illustrate: 1,000 MUSD looped to 3×. */
+export const PRD_LOOP = { principal: 1_000, leverage: 3 };
+
+/** PRD flow C priced with the live pMUSD collateral terms, as the loop desk would quote it. */
+export function prdLoopPlan(collaterals: CollateralState[] | undefined): LoopPlan {
+  const pMusd = collaterals?.find((c) => c.symbol === 'pMUSD');
+  return planLoop(PRD_LOOP.principal, PRD_LOOP.leverage, { ltvBps: pMusd?.ltvBps ?? 8_000, ltBps: pMusd?.ltBps ?? 8_500, supplyApy: 0, borrowApy: 0 });
+}
 
 /*
  * The atomic flash-loan loop as a route: one lap of the ring is the single LeverageManager transaction.
