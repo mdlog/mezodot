@@ -117,6 +117,8 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 repaid,
         uint256 seized
     );
+    /// Debt left after the account's last collateral was seized, removed from the market (see MezodotPool.writeOff).
+    event BadDebtWrittenOff(address indexed account, uint256 indexed marketId, uint256 amount);
 
     error InvalidParams();
     error InvalidCollateral();
@@ -363,6 +365,8 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
             IERC20(c.token).safeTransfer(localReceiver, seized);
         }
         emit Liquidated(account, msg.sender, marketId, collateralId, repaid, seized);
+        // Nothing left to seize: whatever is still owed can never be repaid by liquidation.
+        if (!_hasCollateral(account)) _writeOffDebt(account);
         _refund(spent + fee);
     }
 
@@ -487,6 +491,20 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         if (debtValue == 0) return;
         (,, uint256 limit) = _collateralTotals(account, PriceMode.Conservative);
         if (debtValue > limit) revert InsufficientCollateral();
+    }
+
+    function _hasCollateral(address account) internal view returns (bool) {
+        for (uint256 id = 0; id < _collaterals.length; id++) {
+            if (collateralBalance[account][id] != 0) return true;
+        }
+        return false;
+    }
+
+    function _writeOffDebt(address account) internal {
+        for (uint256 i = 0; i < _markets.length; i++) {
+            uint256 amount = _markets[i].pool.writeOff(account);
+            if (amount > 0) emit BadDebtWrittenOff(account, i, amount);
+        }
     }
 
     function _requireRecipient(bytes32 recipient) internal pure {

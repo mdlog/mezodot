@@ -941,6 +941,31 @@ export const vaultManagerAbi = [
   },
   {
     type: 'event',
+    name: 'BadDebtWrittenOff',
+    inputs: [
+      {
+        name: 'account',
+        type: 'address',
+        indexed: true,
+        internalType: 'address',
+      },
+      {
+        name: 'marketId',
+        type: 'uint256',
+        indexed: true,
+        internalType: 'uint256',
+      },
+      {
+        name: 'amount',
+        type: 'uint256',
+        indexed: false,
+        internalType: 'uint256',
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: 'event',
     name: 'Borrowed',
     inputs: [
       {

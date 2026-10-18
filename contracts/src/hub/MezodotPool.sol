@@ -51,6 +51,7 @@ abstract contract MezodotPool is Ownable2Step, Pausable, ReentrancyGuard, IERC31
     event FlashLoan(address indexed receiver, uint256 amount, uint256 fee);
     event CapsSet(uint256 supplyCap, uint256 borrowCap);
     event ReservesWithdrawn(address indexed to, uint256 amount);
+    event BadDebtWrittenOff(address indexed account, uint256 amount, uint256 fromReserves);
     event VaultManagerSet(address vaultManager);
 
     error NotVaultManager();
@@ -213,6 +214,22 @@ abstract contract MezodotPool is Ownable2Step, Pausable, ReentrancyGuard, IERC31
         // Per-account round-up can make the sum of debts exceed totalBorrows by dust.
         totalBorrows = totalBorrows > applied ? totalBorrows - applied : 0;
         emit RepayBorrow(account, applied, remaining);
+    }
+
+    /// @notice Writes off `account`'s remaining debt once it has no collateral left (VaultManager, after the
+    ///         final liquidation). Reserves absorb the loss first; the rest lowers the share price, so suppliers
+    ///         share it pro rata instead of phantom borrows accruing interest nobody pays and inflating rates.
+    /// @return amount Debt written off.
+    function writeOff(address account) external onlyVaultManager nonReentrant returns (uint256 amount) {
+        accrueInterest();
+        amount = borrowBalanceStored(account);
+        if (amount == 0) return 0;
+        _borrows[account] = BorrowSnapshot(0, borrowIndex);
+        // Per-account round-up can exceed totalBorrows by dust (see notifyRepay).
+        totalBorrows = totalBorrows > amount ? totalBorrows - amount : 0;
+        uint256 fromReserves = Math.min(amount, totalReserves);
+        totalReserves -= fromReserves;
+        emit BadDebtWrittenOff(account, amount, fromReserves);
     }
 
     // --- ERC-3156 flash loans --------------------------------------------------

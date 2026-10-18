@@ -1043,6 +1043,25 @@ export const pTokenAbi = [
     stateMutability: 'nonpayable',
   },
   {
+    type: 'function',
+    name: 'writeOff',
+    inputs: [
+      {
+        name: 'account',
+        type: 'address',
+        internalType: 'address',
+      },
+    ],
+    outputs: [
+      {
+        name: 'amount',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+    stateMutability: 'nonpayable',
+  },
+  {
     type: 'event',
     name: 'Approval',
     inputs: [
@@ -1060,6 +1079,31 @@ export const pTokenAbi = [
       },
       {
         name: 'value',
+        type: 'uint256',
+        indexed: false,
+        internalType: 'uint256',
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: 'event',
+    name: 'BadDebtWrittenOff',
+    inputs: [
+      {
+        name: 'account',
+        type: 'address',
+        indexed: true,
+        internalType: 'address',
+      },
+      {
+        name: 'amount',
+        type: 'uint256',
+        indexed: false,
+        internalType: 'uint256',
+      },
+      {
+        name: 'fromReserves',
         type: 'uint256',
         indexed: false,
         internalType: 'uint256',

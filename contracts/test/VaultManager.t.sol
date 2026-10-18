@@ -220,6 +220,54 @@ contract VaultManagerTest is HubFixture {
         assertLt(10_000e18 - musd.balanceOf(liquidator), 1_950e18);
     }
 
+    /// Audit pool#0: once the last collateral is seized, the debt left over is written off instead of staying in
+    /// totalBorrows forever (accruing interest nobody pays and inflating utilisation, so every honest borrower's
+    /// rate). Reserves absorb the loss first; the rest lowers the pMUSD exchange rate for all suppliers.
+    function test_liquidationWritesOffDebtLeftWithoutCollateral() public {
+        _underwaterMezoBorrower();
+        mezoPrice = 100_000; // collapse: collateral worth ~$1,000 against $3,900 debt
+        pushPrices();
+        pMUSD.accrueInterest();
+        uint256 owed = pMUSD.borrowBalanceStored(alice);
+        uint256 reservesBefore = pMUSD.totalReserves();
+        uint256 rateBefore = pMUSD.exchangeRate();
+        musd.mint(liquidator, 10_000e18);
+        vm.startPrank(liquidator);
+        musd.approve(address(vaultManager), type(uint256).max);
+        vm.expectEmit(true, true, false, false, address(vaultManager));
+        emit VaultManager.BadDebtWrittenOff(alice, musdMarket, 0);
+        vaultManager.liquidate(alice, musdMarket, 1_950e18, pMezoCollateral, 0, liquidator, 0, noUpdates());
+        vm.stopPrank();
+        uint256 repaid = 10_000e18 - musd.balanceOf(liquidator);
+        uint256 badDebt = owed - repaid;
+
+        assertEq(pMUSD.borrowBalanceStored(alice), 0);
+        assertEq(pMUSD.totalBorrows(), 0); // alice was the only borrower
+        assertEq(pMUSD.totalReserves(), reservesBefore > badDebt ? reservesBefore - badDebt : 0);
+        // Suppliers share what reserves could not cover, pro rata through the exchange rate.
+        uint256 supply = pMUSD.totalSupply();
+        uint256 lost = badDebt - (reservesBefore > badDebt ? badDebt : reservesBefore);
+        assertApproxEqRel(rateBefore - pMUSD.exchangeRate(), lost * 10 ** pMUSD.decimals() / supply, 1e12);
+        // Nothing keeps accruing for a debt nobody will repay.
+        skip(365 days);
+        pMUSD.accrueInterest();
+        assertEq(pMUSD.totalBorrows(), 0);
+    }
+
+    function test_noWriteOffWhileOtherCollateralRemains() public {
+        _underwaterMezoBorrower();
+        vaultManager.creditRemote(alice, wethBase, 0.01e18); // $32 of WETH still backs the debt
+        mezoPrice = 100_000;
+        pushPrices();
+        musd.mint(liquidator, 10_000e18);
+        vm.startPrank(liquidator);
+        musd.approve(address(vaultManager), type(uint256).max);
+        vaultManager.liquidate(alice, musdMarket, 1_950e18, pMezoCollateral, 0, liquidator, 0, noUpdates());
+        vm.stopPrank();
+        assertEq(vaultManager.collateralBalance(alice, pMezoCollateral), 0);
+        assertGt(pMUSD.borrowBalanceStored(alice), 2_900e18); // still owed: a later liquidation can take the WETH
+    }
+
     // --- Admin & pause ---------------------------------------------------------------
 
     function test_pauseBlocksBorrowNotRepayOrWithdraw() public {
