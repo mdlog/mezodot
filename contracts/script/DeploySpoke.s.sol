@@ -21,11 +21,14 @@ contract DeploySpoke is Script {
         require(expected == wormholeChainId, "WORMHOLE_CHAIN_ID does not match Wormhole Core chainId()");
 
         vm.startBroadcast();
+        // The broadcaster, whatever the signer type: with --account/--keystore and no --sender,
+        // msg.sender here is forge's default sender, which would own the gateway.
+        (, address owner,) = vm.readCallers();
         gateway = new SpokeGateway(
             IWormhole(vm.envAddress("WORMHOLE")),
             uint16(vm.envOr("HUB_CHAIN_ID", uint256(50))),
             uint8(vm.envOr("CONSISTENCY_LEVEL", uint256(1))),
-            msg.sender
+            owner
         );
         gateway.setToken(weth, true, vm.envOr("WETH_CAP", type(uint256).max));
         gateway.setToken(usdc, true, vm.envOr("USDC_CAP", type(uint256).max));

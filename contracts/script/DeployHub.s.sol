@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import {IWormhole} from "../src/interfaces/IWormhole.sol";
 import {InterestRateModel} from "../src/hub/InterestRateModel.sol";
@@ -27,6 +28,8 @@ contract DeployHub is Script {
     uint8 internal constant PYTH_TAG = 1;
     uint8 internal constant SUPRA_TAG = 2;
     uint256 internal constant UNSET = type(uint256).max;
+    /// Mezo precompiles live at 0x7b7c…; MEZO itself is 0x7b7c000000000000000000000000000000000001.
+    uint160 internal constant MEZO_PRECOMPILE_PREFIX = uint160(0x7b7C000000000000000000000000000000000000) >> 32;
 
     struct Deployed {
         address oracle;
@@ -44,8 +47,11 @@ contract DeployHub is Script {
         address mezo = vm.envAddress("MEZO");
         uint256 startBlock = block.number;
 
+        _mockPrecompileToken(mezo);
         vm.startBroadcast();
-        address owner = msg.sender;
+        // The broadcaster, whatever the signer type: with --account/--keystore and no --sender,
+        // msg.sender here is forge's default sender, which would own every contract.
+        (, address owner,) = vm.readCallers();
 
         OracleRouter oracle = _deployOracle(owner);
 
@@ -90,6 +96,20 @@ contract DeployHub is Script {
             address(pMEZO)
         );
         _write(network, d, musd, mezo, startBlock);
+    }
+
+    /// @dev MEZO on Mezo is a precompile: forge's local EVM only sees a stub that cannot execute it, so the
+    ///      local run mocks the ERC-20 calls this script makes (decimals in PToken/addMarket, the seed's
+    ///      approve/transferFrom/balanceOf). Broadcast with --skip-simulation (docs/DEPLOY.md): transactions
+    ///      then execute on the node against the real precompile. MEZO has 18 decimals (cast call decimals()).
+    function _mockPrecompileToken(address token) internal {
+        if (uint160(token) >> 32 != MEZO_PRECOMPILE_PREFIX) return;
+        uint8 decimals = uint8(vm.envOr("MEZO_DECIMALS", uint256(18)));
+        vm.mockCall(token, abi.encodeWithSelector(IERC20Metadata.decimals.selector), abi.encode(decimals));
+        vm.mockCall(token, abi.encodeWithSelector(IERC20.approve.selector), abi.encode(true));
+        vm.mockCall(token, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
+        vm.mockCall(token, abi.encodeWithSelector(IERC20.balanceOf.selector), abi.encode(uint256(0)));
+        console2.log("MEZO is a Mezo precompile: simulation mocks its ERC-20 calls; broadcast with --skip-simulation");
     }
 
     function _deployOracle(address owner) internal returns (OracleRouter oracle) {
