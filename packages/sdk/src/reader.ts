@@ -32,6 +32,11 @@ export type MarketState = {
   /** Share of borrower interest kept as reserves (WAD), owner-set up to 30%. */
   reserveFactor: bigint;
   /**
+   * When the pool last accrued interest (unix seconds): `totalBorrows` excludes what has accrued since, so caps
+   * checked after accrual on-chain need that much room. Optional so hand-built states may leave it out.
+   */
+  accrualTimestamp?: bigint;
+  /**
    * The pool's InterestRateModel as fractions per year, to price projected states (see marketPoolState).
    * Always read by readProtocol; optional so hand-built states may leave it out.
    */
@@ -135,7 +140,8 @@ export async function readProtocol(client: PublicClient, hub: HubDeployment): Pr
           | 'supplyRatePerSecond'
           | 'supplyCap'
           | 'borrowCap'
-          | 'reserveFactor',
+          | 'reserveFactor'
+          | 'accrualTimestamp',
       >(
         functionName: F,
       ) => client.readContract({ address: pool, abi: pTokenAbi, functionName }) as Promise<bigint>;
@@ -154,6 +160,7 @@ export async function readProtocol(client: PublicClient, hub: HubDeployment): Pr
         supplyCap,
         borrowCap,
         reserveFactor,
+        accrualTimestamp,
         rateModel,
       ] = await Promise.all([
         client.readContract({ address: pool, abi: pTokenAbi, functionName: 'asset' }),
@@ -170,6 +177,7 @@ export async function readProtocol(client: PublicClient, hub: HubDeployment): Pr
         read('supplyCap'),
         read('borrowCap'),
         read('reserveFactor'),
+        read('accrualTimestamp'),
         readRateModel(client, pool),
       ]);
       const symbol = await client.readContract({ address: asset, abi: erc20Abi, functionName: 'symbol' });
@@ -193,6 +201,7 @@ export async function readProtocol(client: PublicClient, hub: HubDeployment): Pr
         supplyCap,
         borrowCap,
         reserveFactor,
+        accrualTimestamp,
         rateModel,
       };
     }),
