@@ -47,7 +47,9 @@ const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH 
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const errors = [];
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
-page.on('console', (m) => m.type() === 'error' && errors.push(`console: ${m.text().slice(0, 200)}`));
+// "Failed to load resource" console lines carry no URL; failed responses are recorded with theirs below.
+page.on('console', (m) => m.type() === 'error' && !m.text().startsWith('Failed to load resource') && errors.push(`console: ${m.text().slice(0, 200)}`));
+page.on('response', (r) => r.status() >= 400 && errors.push(`http ${r.status()}: ${r.request().method()} ${r.url().slice(0, 160)}`));
 await page.addInitScript(walletScript);
 
 const step = (name) => console.log(`\n› ${name}`);
@@ -117,6 +119,13 @@ await toast();
 console.log('  health:', await page.locator('.health-number strong').innerText());
 await shot('borrow');
 
+// Loop count before flow C, so the dashboard check below waits for this run's loop specifically.
+const loopsKpi = async () => Number(((await page.getByText(/\d+ loops? via LeverageManager/).innerText()).match(/(\d+) loop/) ?? [])[1] ?? NaN);
+await page.goto(`${BASE}#/`);
+await page.getByText(/\d+ loops? via LeverageManager/).waitFor({ timeout: 45_000 });
+await page.waitForTimeout(2000);
+const loopsBefore = await loopsKpi();
+
 step('flow C: loop 1,000 MUSD at 3x');
 await page.goto(`${BASE}#/loop`);
 await page.getByRole('button', { name: /Open 3× loop/ }).click();
@@ -127,11 +136,12 @@ await shot('loop');
 
 step('dashboard + activity + agents');
 await page.goto(`${BASE}#/`);
-await page.waitForTimeout(4000);
+// Event-derived KPIs refresh on their own interval: wait until the loop above shows up.
+await page.getByText(new RegExp(`${loopsBefore + 1} loops? via LeverageManager`)).waitFor({ timeout: 60_000 });
 console.log('  KPIs:', (await page.locator('.stats-grid').innerText()).replace(/\s+/g, ' ').slice(0, 260));
 await shot('dashboard');
 await page.goto(`${BASE}#/activity`);
-await page.locator('.ledger-table tbody tr').first().waitFor({ timeout: 30_000 });
+await page.locator('.event-cell b', { hasText: 'Loop' }).first().waitFor({ timeout: 45_000 });
 console.log('  activity rows:', await page.locator('.ledger-table tbody tr').count());
 console.log('  kinds:', (await page.locator('.event-cell b').allInnerTexts()).join(', '));
 await shot('activity');
@@ -139,6 +149,6 @@ await page.goto(`${BASE}#/agents`);
 await page.waitForTimeout(3000);
 await shot('agents');
 
-const relevant = errors.filter((e) => !/walletconnect|WalletConnect|relay\.walletconnect|Reown|pulse\.walletconnect|lit/i.test(e));
+const relevant = errors.filter((e) => !/walletconnect|WalletConnect|relay\.walletconnect|Reown|pulse\.walletconnect|web3modal|lit/i.test(e));
 console.log('\nERRORS:', relevant.length ? relevant : 'none', `(ignored ${errors.length - relevant.length} WalletConnect noise)`);
 await browser.close();

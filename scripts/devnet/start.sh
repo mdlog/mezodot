@@ -22,12 +22,17 @@ export USDC_FEED=0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c
 # Same oracle layout as testnet: ETH and USDC get a Supra secondary leg (MockSupraPull, served by the agent).
 export ETH_SUPRA_PAIR=19
 export USDC_SUPRA_PAIR=89
+export MUSD_MAX_CONF_BPS=500
+export MEZO_MAX_CONF_BPS=500
 
 mkdir -p "$STATE"
 "$ROOT/scripts/devnet/stop.sh" >/dev/null 2>&1 || true
 
-anvil --port 8545 --chain-id 31337 --silent > "$STATE/hub.log" 2>&1 & echo $! > "$STATE/hub.pid"
-anvil --port 8546 --chain-id 31338 --silent > "$STATE/spoke.log" 2>&1 & echo $! > "$STATE/spoke.pid"
+# Blocks every 2 s like Mezo (plus instant mining for transactions), so block.timestamp tracks the wall clock:
+# pull-oracle proofs are stamped "now" and Supra rejects timestamps more than 15 s ahead of the block.
+ANVIL_MINING=(--block-time 2 --mixed-mining)
+anvil --port 8545 --chain-id 31337 "${ANVIL_MINING[@]}" --silent > "$STATE/hub.log" 2>&1 & echo $! > "$STATE/hub.pid"
+anvil --port 8546 --chain-id 31338 "${ANVIL_MINING[@]}" --silent > "$STATE/spoke.log" 2>&1 & echo $! > "$STATE/spoke.pid"
 for rpc in "$HUB_RPC" "$SPOKE_RPC"; do
   for _ in $(seq 1 50); do cast chain-id --rpc-url "$rpc" >/dev/null 2>&1 && break; sleep 0.2; done
 done
