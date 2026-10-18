@@ -715,114 +715,75 @@ button:disabled {
 }
 .loop-visual {
   position: relative;
-  min-height: 180px;
   align-self: center;
   justify-self: center;
-  width: 205px;
-  height: 185px;
+  width: 100%;
+  max-width: 236px;
 }
-.loop-ring {
-  position: absolute;
-  left: 50%;
-  top: 48%;
-  transform: translate(-50%, -50%);
-  border: 1px solid #827dc4;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
+/* LoopDiagram: the flash-loan route; a packet laps it, resting on each step as it runs. */
+.loop-diagram {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
 }
-.loop-ring--outer {
-  width: 158px;
-  height: 158px;
-  border-style: dashed;
-  animation: slow-spin 42s linear infinite;
+.loop-track {
+  fill: none;
+  stroke: #a19cd8;
+  stroke-width: 1.5;
 }
-.loop-ring--inner {
-  position: relative;
-  width: 104px;
-  height: 104px;
-  border-style: solid;
-  border-color: #aaa6d7;
-  animation: slow-spin 24s linear infinite reverse;
+.loop-arrow {
+  fill: none;
+  stroke: #6c64c9;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
-.loop-ring--inner:before,
-.loop-ring--inner:after {
-  content: '';
-  position: absolute;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #5a50cd;
+.loop-glow {
+  fill: #4338ca;
+  fill-opacity: 0.16;
 }
-.loop-ring--inner:before {
-  top: 13px;
-  left: 12px;
+.loop-step {
+  fill: #f7f5ef;
+  stroke: #827dc4;
+  stroke-width: 1.5;
 }
-.loop-ring--inner:after {
-  right: 8px;
-  bottom: 21px;
-  background: #c3824e;
+.loop-step-number {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--indigo);
 }
-.loop-core {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 66px;
-  height: 66px;
-  border-radius: 50%;
-  background: #f7f5ef;
-  color: var(--indigo);
-  box-shadow: 0 5px 16px #413b9122;
-  animation: slow-spin 24s linear infinite;
+.loop-packet {
+  fill: var(--indigo);
+  stroke: #f7f5ef;
+  stroke-width: 1.5;
 }
-.loop-core span {
-  font-size: 21px;
+.loop-exposure {
+  font-size: 24px;
   font-weight: 600;
   letter-spacing: -1px;
+  fill: var(--indigo);
 }
-.loop-core small {
-  font: 11px var(--mono);
-  letter-spacing: 0.7px;
-  color: #9693b2;
+.loop-amount {
+  font-family: var(--mono);
+  font-size: 10px;
+  fill: #3f4157;
 }
-.loop-node {
-  position: absolute;
-  font: 12.5px var(--mono);
-  color: #484a60;
-  text-align: center;
+.loop-caption {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.4px;
+  fill: #8784a8;
 }
-.loop-node small {
-  display: block;
-  font:
-    11.5px 'IBM Plex Sans',
-    sans-serif;
-  color: #8c8b9a;
-  margin-top: 2px;
-}
-.loop-node--a {
-  left: 5px;
-  top: 55px;
-}
-.loop-node--b {
-  right: -3px;
-  bottom: 35px;
-}
-.loop-orbit-label {
-  position: absolute;
-  right: 5px;
-  top: 19px;
-  font: 11px/1.4 var(--mono);
-  letter-spacing: 0.7px;
-  color: #9894c3;
-}
-.loop-visual-mark {
-  position: absolute;
-  left: 2px;
-  bottom: 9px;
-  font: 11px var(--mono);
+.loop-caption--route {
   letter-spacing: 1px;
-  color: #9895b6;
+  fill: #9894c3;
+}
+.loop-health {
+  font-family: var(--mono);
+  font-size: 9px;
+  fill: #6c64c9;
 }
 .feature-card-foot {
   grid-column: 1/-1;
@@ -1380,6 +1341,55 @@ tbody tr:last-child td {
   text-align: right;
   font-size: 11.5px;
   color: #9b9ca3;
+}
+/* Pagination (components/ui.tsx). */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 1px 7px;
+  border-top: 1px solid #efeee9;
+}
+.pagination-range {
+  font: 11.5px var(--mono);
+  color: #9b9ca3;
+}
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.page-button {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid #e3e1da;
+  border-radius: 5px;
+  background: var(--white);
+  color: var(--ink-soft);
+  font: 11.5px var(--mono);
+  cursor: pointer;
+}
+.page-button:hover:not(:disabled) {
+  border-color: var(--indigo-mid);
+  color: var(--indigo);
+}
+.page-button.is-current {
+  background: var(--indigo);
+  border-color: var(--indigo);
+  color: #fff;
+}
+.page-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.page-gap {
+  padding: 0 2px;
+  font: 11.5px var(--mono);
+  color: #a1a1a8;
 }
 .activity-row > svg:last-child {
   color: #b5b5bc;
@@ -3692,11 +3702,6 @@ tbody tr:last-child td {
   cursor: pointer;
   margin-left: 4px;
 }
-@keyframes slow-spin {
-  to {
-    transform: translate(-50%, -50%) rotate(360deg);
-  }
-}
 @keyframes fade-in {
   from {
     opacity: 0;
@@ -3774,9 +3779,6 @@ tbody tr:last-child td {
   .feature-copy h2 {
     font-size: 20px;
   }
-  .loop-visual {
-    transform: scale(0.9);
-  }
   .stat-value-row strong {
     font-size: 21px;
   }
@@ -3830,17 +3832,11 @@ tbody tr:last-child td {
   }
   .feature-card--loop {
     grid-template-columns: 1fr;
+    grid-template-rows: auto auto 35px;
   }
   .loop-visual {
-    position: absolute;
-    right: 3px;
-    top: 44px;
-    opacity: 0.56;
-    transform: scale(0.79);
-    transform-origin: top right;
-  }
-  .feature-copy {
-    max-width: 65%;
+    max-width: 260px;
+    margin: 6px auto 12px;
   }
   .feature-card-foot {
     position: relative;
@@ -3951,10 +3947,7 @@ tbody tr:last-child td {
   }
   .feature-card--loop {
     grid-template-columns: 1fr;
-    grid-template-rows: 1fr 32px;
-  }
-  .feature-copy {
-    max-width: 68%;
+    grid-template-rows: auto auto 32px;
   }
   .feature-copy h2,
   .feature-card--bridge h2 {
@@ -3965,12 +3958,6 @@ tbody tr:last-child td {
   .feature-card--bridge p {
     font-size: 12px;
     max-width: 235px;
-  }
-  .loop-visual {
-    right: 0;
-    top: 53px;
-    transform: scale(0.68);
-    opacity: 0.53;
   }
   .feature-card--bridge {
     min-height: 234px;
@@ -4440,13 +4427,6 @@ tbody tr:last-child td {
   .feature-card--loop {
     min-height: 217px;
   }
-  .feature-copy {
-    max-width: 70%;
-  }
-  .loop-visual {
-    right: -8px;
-    transform: scale(0.6);
-  }
   .stats-grid {
     gap: 6px;
   }
@@ -4493,6 +4473,10 @@ tbody tr:last-child td {
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .loop-packet,
+  .loop-glow {
+    display: none;
+  }
   *,
   *::before,
   *::after {

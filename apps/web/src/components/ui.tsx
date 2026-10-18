@@ -4,6 +4,8 @@ import {
   ArrowDownToLine,
   ArrowRight,
   ArrowUpRight,
+  ChevronLeft,
+  ChevronRight,
   ExternalLink,
   GitBranch,
   LockKeyhole,
@@ -19,6 +21,7 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 import type { NetworkInfo } from '@mezodot/sdk';
 import { ENV_NAME, HUB, explorerAddress, explorerTx } from '../chain/env';
 import type { ActivityKind } from '../data/activity';
+import { pageList, type Page } from '../lib/paginate';
 
 export function Brand() {
   return (
@@ -269,4 +272,41 @@ export function EventIcon({ kind }: { kind: ActivityKind }) {
 
 export function Spinner() {
   return <RefreshCw size={13} className="spin" aria-hidden="true" />;
+}
+
+/** "6–10 of 23" with previous / next and page buttons; hidden when everything fits on one page. */
+export function Pagination({ page, label, onPage }: { page: Page<unknown>; label: string; onPage: (page: number) => void }) {
+  if (page.pageCount <= 1) return null;
+  return (
+    <nav className="pagination" aria-label={`${label} pages`}>
+      <span className="pagination-range">
+        {page.from}–{page.to} of {page.total}
+      </span>
+      <div className="pagination-controls">
+        <button className="page-button" onClick={() => onPage(page.page - 1)} disabled={page.page === 0} aria-label="Previous page">
+          <ChevronLeft size={14} />
+        </button>
+        {pageList(page.page, page.pageCount).map((p, i) =>
+          p === null ? (
+            <span key={`gap-${i}`} className="page-gap" aria-hidden="true">
+              …
+            </span>
+          ) : (
+            <button
+              key={p}
+              className={`page-button${p === page.page ? ' is-current' : ''}`}
+              onClick={() => onPage(p)}
+              aria-current={p === page.page ? 'page' : undefined}
+              aria-label={`Page ${p + 1}`}
+            >
+              {p + 1}
+            </button>
+          ),
+        )}
+        <button className="page-button" onClick={() => onPage(page.page + 1)} disabled={page.page === page.pageCount - 1} aria-label="Next page">
+          <ChevronRight size={14} />
+        </button>
+      </div>
+    </nav>
+  );
 }

@@ -1,20 +1,27 @@
+import { useState } from 'react';
 import { ArrowRight, ArrowUpRight, Clock3, GitBranch, Layers3, Radio, RefreshCw, Waves, Zap } from 'lucide-react';
 import { useAccount } from 'wagmi';
-import { healthStatus, perSecondToAnnual } from '@mezodot/sdk';
+import { healthStatus, perSecondToAnnual, planLoop } from '@mezodot/sdk';
 import { ChainLogo, ChainLogoStack, TokenLogo } from '../components/Logos';
-import { EventIcon, InfoBar, NotDeployed, PageTitle, PanelTitle, StatCard, SummaryStrip, TxLink } from '../components/ui';
+import { LoopDiagram } from '../components/LoopDiagram';
+import { EventIcon, InfoBar, NotDeployed, PageTitle, Pagination, PanelTitle, StatCard, SummaryStrip, TxLink } from '../components/ui';
 import { HUB, HUB_DEPLOYED, SPOKES, spokeByWormholeChain } from '../chain/env';
 import { useActivity } from '../data/activity';
 import { computeTvl, useAgent, useLoopStats, usePrices, useProtocol, useValuedPosition } from '../data/hooks';
 import { compactUsd, fmt, fmtApy, fmtHealth, money, pct, timeAgo, units } from '../lib/format';
+import { paginate } from '../lib/paginate';
 import { useUi } from '../state/UiContext';
 import { HealthBar } from './shared';
 
 type Stats = { crossChainBorrowRatio: number | null; borrowers: number };
 
+const ACTIVITY_PAGE_SIZE = 5;
+/** PRD flow C, drawn in the leverage card: 1,000 MUSD looped to 3×. */
+const DEMO_LOOP = { principal: 1_000, leverage: 3 };
+
 export function Dashboard() {
   const { go } = useUi();
-  const { isConnected } = useAccount();
+  const { address, isConnected } = useAccount();
   const protocol = useProtocol().data;
   const prices = usePrices().data;
   const loops = useLoopStats().data;
@@ -22,9 +29,20 @@ export function Dashboard() {
   const { valued } = useValuedPosition();
   const activityQuery = useActivity();
   const activity = activityQuery.data?.items ?? [];
+  // The page belongs to the wallet it was picked for: another wallet starts on its newest events.
+  const [activityPage, setActivityPage] = useState<{ owner?: string; page: number }>({ page: 0 });
+  const shownActivity = paginate(activity, activityPage.owner === address ? activityPage.page : 0, ACTIVITY_PAGE_SIZE);
 
   const tvl = protocol && prices ? computeTvl(protocol, prices.prices) : null;
   const status = valued ? healthStatus(valued.healthFactor) : null;
+  // Priced with the live pMUSD collateral terms (fee and health as the loop desk would quote them).
+  const pMusd = protocol?.collaterals.find((c) => c.symbol === 'pMUSD');
+  const demoLoop = planLoop(DEMO_LOOP.principal, DEMO_LOOP.leverage, {
+    ltvBps: pMusd?.ltvBps ?? 8_000,
+    ltBps: pMusd?.ltBps ?? 8_500,
+    supplyApy: 0,
+    borrowApy: 0,
+  });
 
   return (
     <>
@@ -84,26 +102,8 @@ export function Dashboard() {
               Configure a loop <ArrowRight size={14} />
             </button>
           </div>
-          <div className="loop-visual" aria-label="1,000 MUSD at 3 times exposure">
-            <div className="loop-ring loop-ring--outer">
-              <div className="loop-ring loop-ring--inner">
-                <div className="loop-core">
-                  <span>3×</span>
-                  <small>EXPOSURE</small>
-                </div>
-              </div>
-            </div>
-            <div className="loop-node loop-node--a">
-              $1,000<small>equity</small>
-            </div>
-            <div className="loop-node loop-node--b">
-              $3,000<small>position</small>
-            </div>
-            <div className="loop-orbit-label">
-              FLASH
-              <br />
-              ROUTE
-            </div>
+          <div className="loop-visual">
+            <LoopDiagram plan={demoLoop} />
           </div>
           <div className="feature-card-foot">
             <span>
@@ -287,7 +287,7 @@ export function Dashboard() {
           }
         />
         <div className="activity-rows">
-          {activity.slice(0, 3).map((item) => (
+          {shownActivity.rows.map((item) => (
             <div className="activity-row" key={item.id}>
               <EventIcon kind={item.kind} />
               <span className="activity-row-main">
@@ -305,6 +305,7 @@ export function Dashboard() {
             <p className="muted-note">{isConnected ? 'No activity yet.' : 'Connect a wallet to see your activity.'}</p>
           )}
         </div>
+        <Pagination page={shownActivity} label="Activity" onPage={(page) => setActivityPage({ owner: address, page })} />
       </section>
 
       <InfoBar title="Unaudited testnet protocol." action="How it works" onAction={() => go('architecture')}>
