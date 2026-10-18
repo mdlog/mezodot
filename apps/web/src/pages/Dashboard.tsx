@@ -106,10 +106,8 @@ export function Dashboard() {
           <span>
             Reserves{' '}
             <b>
-              {money(
-                protocol.markets.reduce((sum, m) => sum + units(m.totalReserves, m.decimals) * (prices?.prices[m.symbol as 'MUSD' | 'MEZO'] ?? 0), 0),
-                2,
-              )}
+              {/* Adaptive: early reserves are cents or less, and "$0.00" would read as no revenue at all. */}
+              {money(protocol.markets.reduce((sum, m) => sum + units(m.totalReserves, m.decimals) * (prices?.prices[m.symbol as 'MUSD' | 'MEZO'] ?? 0), 0))}
             </b>
           </span>
           {protocol.markets.map((m) => (
