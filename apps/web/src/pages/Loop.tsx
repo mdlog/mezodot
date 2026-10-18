@@ -244,6 +244,7 @@ export function Loop() {
               <button className="button button--light button--wide" onClick={unwind} disabled={Boolean(busy)}>
                 <Undo2 size={14} /> {busy ?? 'Unwind: repay all MUSD debt, withdraw all pMUSD'}
               </button>
+              <p className="muted-note">Equity comes back in MUSD; whatever the pool cannot pay out right now comes back as pMUSD, still earning.</p>
             </section>
           )}
         </div>
