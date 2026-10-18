@@ -200,7 +200,15 @@ describe('price selection', () => {
 
 describe('prices after attaching pull updates (keepers)', () => {
   const E18 = 10n ** 18n;
-  const leg = (source: number, usable: boolean, price = 0n): LegState => ({ source, maxAge: 120, id: '0x01', price, conf: 0n, publishTime: 0, usable });
+  const leg = (source: number, usable: boolean, price = 0n, publishTime = 0): LegState => ({
+    source,
+    maxAge: 120,
+    id: '0x01',
+    price,
+    conf: 0n,
+    publishTime,
+    usable,
+  });
   const st = (symbol: PriceSymbol, legs: LegState[], price: bigint): OracleStatus => ({
     symbol,
     feed: { primary: legs[0], secondary: legs[1] ?? null, maxConfBps: 200, maxDivergenceBps: 150 },
@@ -217,20 +225,25 @@ describe('prices after attaching pull updates (keepers)', () => {
     MEZO: st('MEZO', [leg(1, false)], 0n),
     // Pyth ETH never pushed: the Supra secondary (stored at $3,200) is what the router selects
     ETH: st('ETH', [leg(1, false), leg(2, true, 3_200n * E18)], 3_200n * E18),
-    // Pyth USDC fresh (Mezo's push): it stays selected whatever Supra says
-    USDC: st('USDC', [leg(1, true, E18), leg(2, false)], E18),
-    // Pyth BTC fresh (Mezo's push) with a Supra secondary, like USDC
-    BTC: st('BTC', [leg(1, true, 80_000n * E18), leg(2, false)], 80_000n * E18),
+    // Pyth USDC usable (Mezo's push), published at t = 1,000
+    USDC: st('USDC', [leg(1, true, E18, 1_000), leg(2, false)], E18),
+    // Pyth BTC usable (Mezo's push) with a Supra secondary, like USDC
+    BTC: st('BTC', [leg(1, true, 80_000n * E18, 1_000), leg(2, false)], 80_000n * E18),
   };
 
-  it('a fresh price counts only where the router would select the refreshed leg', () => {
+  it('a fresh price counts where the router would select the refreshed leg: the freshest usable one', () => {
     const fresh = {
       MUSD: { price: 0.99, publishTime: 1, source: 'pyth' as const },
       ETH: { price: 2_800, publishTime: 1, source: 'supra' as const },
-      USDC: { price: 0.97, publishTime: 1, source: 'supra' as const },
+      // Older than the stored Pyth push: Pyth stays selected.
+      USDC: { price: 0.97, publishTime: 900, source: 'supra' as const },
+      // A seconds-old Supra proof beats an older Pyth push (it no longer overrides fresh pull data).
+      BTC: { price: 79_500, publishTime: 1_030, source: 'supra' as const },
     };
-    expect(pricesAfterUpdate(oracle, fresh)).toEqual({ MUSD: 0.99, ETH: 2_800, USDC: 1, BTC: 80_000 });
+    expect(pricesAfterUpdate(oracle, fresh)).toEqual({ MUSD: 0.99, ETH: 2_800, USDC: 1, BTC: 79_500 });
     expect(pricesAfterUpdate(oracle, {})).toEqual({ MUSD: 1, ETH: 3_200, USDC: 1, BTC: 80_000 });
+    // Same publish time: the primary wins the tie.
+    expect(pricesAfterUpdate(oracle, { USDC: { price: 0.97, publishTime: 1_000, source: 'supra' } }).USDC).toBe(1);
   });
 });
 

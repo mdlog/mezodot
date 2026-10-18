@@ -1,6 +1,7 @@
 import { erc20Abi, keccak256, toHex, type Address, type Hex, type PublicClient } from 'viem';
-import { pTokenAbi, vaultManagerAbi, keeperGatewayAbi } from './abis';
+import { interestRateModelAbi, pTokenAbi, vaultManagerAbi, keeperGatewayAbi } from './abis';
 import type { HubDeployment } from './deployments';
+import type { RateModel } from './math';
 
 export const PRICE_SYMBOLS = ['MUSD', 'MEZO', 'ETH', 'USDC', 'BTC'] as const;
 export type PriceSymbol = (typeof PRICE_SYMBOLS)[number];
@@ -30,6 +31,11 @@ export type MarketState = {
   borrowCap: bigint;
   /** Share of borrower interest kept as reserves (WAD), owner-set up to 30%. */
   reserveFactor: bigint;
+  /**
+   * The pool's InterestRateModel as fractions per year, to price projected states (see marketPoolState).
+   * Always read by readProtocol; optional so hand-built states may leave it out.
+   */
+  rateModel?: RateModel;
 };
 
 export type CollateralState = {
@@ -75,6 +81,32 @@ export type PositionState = {
 };
 
 const REMOTE_SYMBOL: Partial<Record<PriceSymbol, string>> = { ETH: 'WETH', USDC: 'USDC' };
+
+const wadToNumber = (v: bigint): number => Number(v) / 1e18;
+
+const rateModels = new WeakMap<PublicClient, Map<string, Promise<RateModel>>>();
+
+/**
+ * A pool's InterestRateModel parameters as fractions per year. The pool's model and its parameters are both
+ * immutable, so they are read once per client and pool.
+ */
+export function readRateModel(client: PublicClient, pool: Address): Promise<RateModel> {
+  const byPool = rateModels.get(client) ?? new Map<string, Promise<RateModel>>();
+  rateModels.set(client, byPool);
+  const key = pool.toLowerCase();
+  const cached = byPool.get(key);
+  if (cached) return cached;
+  const model = (async (): Promise<RateModel> => {
+    const irm = await client.readContract({ address: pool, abi: pTokenAbi, functionName: 'interestRateModel' });
+    const read = (functionName: 'baseRatePerYear' | 'slope1PerYear' | 'kink' | 'slope2PerYear') =>
+      client.readContract({ address: irm, abi: interestRateModelAbi, functionName });
+    const [base, slope1, kink, slope2] = await Promise.all([read('baseRatePerYear'), read('slope1PerYear'), read('kink'), read('slope2PerYear')]);
+    return { base: wadToNumber(base), slope1: wadToNumber(slope1), kink: wadToNumber(kink), slope2: wadToNumber(slope2) };
+  })();
+  byPool.set(key, model);
+  model.catch(() => byPool.delete(key)); // a failed read is retried next time
+  return model;
+}
 
 export async function readProtocol(client: PublicClient, hub: HubDeployment): Promise<ProtocolState> {
   const vm = hub.contracts.vaultManager;
@@ -122,6 +154,7 @@ export async function readProtocol(client: PublicClient, hub: HubDeployment): Pr
         supplyCap,
         borrowCap,
         reserveFactor,
+        rateModel,
       ] = await Promise.all([
         client.readContract({ address: pool, abi: pTokenAbi, functionName: 'asset' }),
         client.readContract({ address: pool, abi: pTokenAbi, functionName: 'decimals' }),
@@ -137,6 +170,7 @@ export async function readProtocol(client: PublicClient, hub: HubDeployment): Pr
         read('supplyCap'),
         read('borrowCap'),
         read('reserveFactor'),
+        readRateModel(client, pool),
       ]);
       const symbol = await client.readContract({ address: asset, abi: erc20Abi, functionName: 'symbol' });
       return {
@@ -159,6 +193,7 @@ export async function readProtocol(client: PublicClient, hub: HubDeployment): Pr
         supplyCap,
         borrowCap,
         reserveFactor,
+        rateModel,
       };
     }),
   );

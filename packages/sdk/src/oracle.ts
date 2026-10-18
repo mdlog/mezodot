@@ -148,18 +148,21 @@ export function usablePrices(oracle: OracleState, fresh: Partial<Record<PriceSym
 
 /**
  * Prices a transaction sees after attaching `fresh` pull updates (what a keeper should value with).
- * A refreshed leg changes the price only where the router would select it: it is the primary, or the
- * primary is not usable. Elsewhere the stored strict price stands (e.g. USDC while Mezo's Pyth push
- * is fresh). Divergence between legs is left to the transaction simulation.
+ * The router serves the freshest usable leg (the primary on a tie), so a refreshed leg sets the price
+ * unless the other leg is usable and holds newer data; then the stored strict price stands.
+ * Divergence between legs is left to the transaction simulation.
  */
 export function pricesAfterUpdate(oracle: OracleState, fresh: Partial<Record<PriceSymbol, FreshPrice>>): UsdPrices {
   const out = usablePrices(oracle);
   for (const s of PRICE_SYMBOLS) {
     const f = fresh[s];
-    const primary = oracle[s]?.legs[0];
-    if (!f || !primary) continue;
-    const tag = f.source === 'supra' ? SOURCE_TAG.SUPRA : SOURCE_TAG.PYTH;
-    if (primary.source === tag || !primary.usable) out[s] = f.price;
+    const legs = oracle[s]?.legs ?? [];
+    const tag = f?.source === 'supra' ? SOURCE_TAG.SUPRA : SOURCE_TAG.PYTH;
+    const refreshed = legs.findIndex((l) => l.source === tag);
+    if (!f || refreshed < 0) continue;
+    const other = legs[1 - refreshed];
+    const otherWins = other?.usable && (other.publishTime > f.publishTime || (other.publishTime === f.publishTime && refreshed === 1));
+    if (!otherWins) out[s] = f.price;
   }
   return out;
 }

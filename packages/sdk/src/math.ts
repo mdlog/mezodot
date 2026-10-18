@@ -1,7 +1,7 @@
 /**
  * Off-chain mirror of the contract formulas, for previews in the UI, agent and MCP tools.
- * Values use plain numbers (USD / token units), not wei. Test vectors in test/math.test.ts
- * match the Solidity tests so previews and on-chain results agree.
+ * Values use plain numbers (USD / token units), not wei. Test vectors in test/*.test.ts
+ * match the Solidity tests so previews and on-chain results agree. Leverage previews: leverage.ts.
  */
 
 export const BPS = 10_000;
@@ -13,12 +13,13 @@ export const CLOSE_FACTOR_BPS = 5_000;
 
 export type RateModel = { base: number; slope1: number; kink: number; slope2: number };
 
-/** Spec parameters (InterestRateModel constructor args as fractions). */
+/** Spec parameters (InterestRateModel constructor args as fractions). Live pools: MarketState.rateModel. */
 export const RATE_MODELS = {
   MUSD: { base: 0, slope1: 0.06, kink: 0.8, slope2: 0.8 },
   MEZO: { base: 0.02, slope1: 0.08, kink: 0.7, slope2: 1.0 },
 } as const satisfies Record<string, RateModel>;
 
+/** Deployment default; the live, owner-set value (up to 30%) is MarketState.reserveFactor. */
 export const RESERVE_FACTOR = 0.1;
 
 export const utilization = (cash: number, borrows: number, reserves = 0): number => {
@@ -34,8 +35,54 @@ export const borrowRate = (m: RateModel, util: number): number =>
 /** Supply rate = borrow rate × utilization × (1 − reserve factor). */
 export const supplyRate = (m: RateModel, util: number, reserveFactor = RESERVE_FACTOR): number => borrowRate(m, util) * util * (1 - reserveFactor);
 
-/** Converts an on-chain per-second WAD rate to an annual fraction. */
+/** Converts an on-chain per-second WAD rate to a simple annual rate (APR: rate × seconds, not compounded). */
 export const perSecondToAnnual = (ratePerSecondWad: bigint): number => (Number(ratePerSecondWad) / 1e18) * SECONDS_PER_YEAR;
+
+/**
+ * Compounds a simple annual rate. Interest is added to debt and supply at every accrual (any pool interaction),
+ * so over a year it compounds almost continuously: APY = e^APR − 1.
+ */
+export const aprToApy = (apr: number): number => Math.expm1(apr);
+
+/** On-chain per-second WAD rate as an APY: what a position earns or pays over a year at that rate. */
+export const perSecondToApy = (ratePerSecondWad: bigint): number => aprToApy(perSecondToAnnual(ratePerSecondWad));
+
+// --- Pool state -----------------------------------------------------------------------------
+
+/**
+ * A lending pool in token units with its InterestRateModel and reserve factor: enough to price it at any
+ * projected state (see `marketPoolState` for a live market). Caps default to none.
+ */
+export type PoolState = {
+  cash: number;
+  borrows: number;
+  reserves: number;
+  /** Share of borrower interest kept as reserves (0.1 = 10%). */
+  reserveFactor: number;
+  model: RateModel;
+  supplyCap?: number;
+  borrowCap?: number;
+};
+
+export type PoolRates = { utilization: number; borrowApy: number; supplyApy: number };
+
+/** The pool's rates at `pool`, as its InterestRateModel computes them (borrowRatePerYear, supplyRatePerSecond), compounded to APYs. */
+export function poolRates(pool: PoolState): PoolRates {
+  const u = utilization(pool.cash, pool.borrows, pool.reserves);
+  return { utilization: u, borrowApy: aprToApy(borrowRate(pool.model, u)), supplyApy: aprToApy(supplyRate(pool.model, u, pool.reserveFactor)) };
+}
+
+/** Supplied value, cash + borrows − reserves (MezodotPool.totalAssets). */
+export const poolSupplied = (pool: Pick<PoolState, 'cash' | 'borrows' | 'reserves'>): number => Math.max(0, pool.cash + pool.borrows - pool.reserves);
+
+/**
+ * What the pool can still lend before its utilization passes `target` (e.g. its model's kink, past which rates
+ * jump), within its idle cash and borrow cap. Lending moves cash into borrows, so supply stays the same.
+ */
+export const borrowRoomAt = (pool: PoolState, target: number): number =>
+  Math.max(0, Math.min(pool.cash, (pool.borrowCap ?? Infinity) - pool.borrows, target * poolSupplied(pool) - pool.borrows));
+
+// --- Positions ------------------------------------------------------------------------------
 
 export type CollateralPosition = { valueUsd: number; ltvBps: number; ltBps: number };
 
@@ -50,6 +97,19 @@ export type PositionSummary = {
   ltv: number;
 };
 
+/** What VaultManager's checks read (USD): collateral, its LTV-weighted borrow limit, its LT-weighted value, and debt. */
+export type AccountTotals = Pick<PositionSummary, 'collateralUsd' | 'borrowLimitUsd' | 'adjustedCollateralUsd' | 'debtUsd'>;
+
+const summary = ({ collateralUsd, borrowLimitUsd, adjustedCollateralUsd, debtUsd }: AccountTotals): PositionSummary => ({
+  collateralUsd,
+  borrowLimitUsd,
+  adjustedCollateralUsd,
+  debtUsd,
+  healthFactor: debtUsd > 0 ? adjustedCollateralUsd / debtUsd : Infinity,
+  availableUsd: Math.max(0, borrowLimitUsd - debtUsd),
+  ltv: collateralUsd > 0 ? debtUsd / collateralUsd : 0,
+});
+
 /** VaultManager._position: HF = Σ value × LT / Σ debt; limit = Σ value × LTV. */
 export function summarizePosition(collaterals: CollateralPosition[], debtUsd: number): PositionSummary {
   let collateralUsd = 0;
@@ -60,15 +120,17 @@ export function summarizePosition(collaterals: CollateralPosition[], debtUsd: nu
     borrowLimitUsd += (c.valueUsd * c.ltvBps) / BPS;
     adjustedCollateralUsd += (c.valueUsd * c.ltBps) / BPS;
   }
-  return {
-    collateralUsd,
-    borrowLimitUsd,
-    adjustedCollateralUsd,
-    debtUsd,
-    healthFactor: debtUsd > 0 ? adjustedCollateralUsd / debtUsd : Infinity,
-    availableUsd: Math.max(0, borrowLimitUsd - debtUsd),
-    ltv: collateralUsd > 0 ? debtUsd / collateralUsd : 0,
-  };
+  return summary({ collateralUsd, borrowLimitUsd, adjustedCollateralUsd, debtUsd });
+}
+
+/** `account` after `add.collateralUsd` of new collateral (at its LTV and LT) and `add.debtUsd` of new debt. */
+export function extendPosition(account: AccountTotals, add: { collateralUsd: number; ltvBps: number; ltBps: number; debtUsd: number }): PositionSummary {
+  return summary({
+    collateralUsd: account.collateralUsd + add.collateralUsd,
+    borrowLimitUsd: account.borrowLimitUsd + (add.collateralUsd * add.ltvBps) / BPS,
+    adjustedCollateralUsd: account.adjustedCollateralUsd + (add.collateralUsd * add.ltBps) / BPS,
+    debtUsd: account.debtUsd + add.debtUsd,
+  });
 }
 
 export type HealthTone = 'ok' | 'warn' | 'danger';
@@ -81,44 +143,7 @@ export const healthStatus = (hf: number): { label: 'Healthy' | 'Monitor' | 'At r
 
 export const flashFee = (amount: number): number => (amount * FLASH_FEE_BPS) / BPS;
 
-export type LoopPlan = {
-  principal: number;
-  leverage: number;
-  flashAmount: number;
-  fee: number;
-  /** Gross supplied position (principal + flash amount). */
-  gross: number;
-  /** Debt opened by the loop (flash amount + fee). */
-  debt: number;
-  ltv: number;
-  healthFactor: number;
-  /** Max leverage allowed by the collateral LTV: 1 / (1 − LTV). */
-  maxLeverage: number;
-  /** Net APY on equity (fraction), using total supply yield and borrow rate. */
-  netApy: number;
-  /** Fractional fall in collateral value that would make the loop liquidatable. */
-  liquidationBuffer: number;
-  error: string | null;
-};
-
-/** Mirrors LeverageManager.loop: flash = principal × (L − 1); debt = flash + 9 bps fee. */
-export function planLoop(principal: number, leverage: number, p: { ltvBps: number; ltBps: number; supplyApy: number; borrowApy: number }): LoopPlan {
-  const flashAmount = principal * (leverage - 1);
-  const fee = flashFee(flashAmount);
-  const gross = principal + flashAmount;
-  const debt = flashAmount + fee;
-  const ltv = gross > 0 ? debt / gross : 0;
-  const healthFactor = debt > 0 ? (gross * p.ltBps) / BPS / debt : Infinity;
-  const maxLeverage = 1 / (1 - p.ltvBps / BPS);
-  const netApy = principal > 0 ? (gross * p.supplyApy - debt * p.borrowApy) / principal : 0;
-  const liquidationBuffer = Number.isFinite(healthFactor) ? Math.max(0, 1 - 1 / healthFactor) : 1;
-
-  let error: string | null = null;
-  if (!Number.isFinite(principal) || principal <= 0) error = 'Enter a valid amount';
-  else if (leverage <= 1) error = 'Leverage must be above 1×';
-  else if (ltv > p.ltvBps / BPS) error = `${leverage}× exceeds the ${(p.ltvBps / 100).toFixed(0)}% max LTV (max ≈ ${maxLeverage.toFixed(2)}×)`;
-  return { principal, leverage, flashAmount, fee, gross, debt, ltv, healthFactor, maxLeverage, netApy, liquidationBuffer, error };
-}
+// --- Liquidations -----------------------------------------------------------------------------
 
 /** Collateral units seized for repaying `repay` (debt units) — VaultManager._seizeAmount. */
 export function seizeAmount(repay: number, debtPrice: number, collateralPrice: number, bonusBps: number): number {
@@ -129,98 +154,6 @@ export function seizeAmount(repay: number, debtPrice: number, collateralPrice: n
 export function liquidatorShare(seizedUnits: number, bonusBps: number, liquidationFeeBps: number): { toLiquidator: number; toProtocol: number } {
   const toProtocol = (((seizedUnits * bonusBps) / (BPS + bonusBps)) * liquidationFeeBps) / BPS;
   return { toLiquidator: seizedUnits - toProtocol, toProtocol };
-}
-
-export type BtcLeveragePlan = {
-  principal: number;
-  leverage: number;
-  /** MUSD flash-borrowed and swapped into BTC. */
-  borrowMusd: number;
-  /** BTC the swap is expected to return (router quote, else the oracle price). */
-  boughtBtc: number;
-  /** Least BTC the transaction accepts from the swap. */
-  minBoughtBtc: number;
-  postedBtc: number;
-  /** MUSD debt opened: the flash amount plus the 0.09% fee. */
-  debtMusd: number;
-  ltv: number;
-  healthFactor: number;
-  /** BTC/USD price at which the health factor reaches 1. */
-  liquidationPrice: number;
-  /** 1 / (1 − LTV), before fees. */
-  maxLeverage: number;
-  /** Shortfall of the router quote against the oracle price (0.05 = 5% fewer BTC). */
-  priceImpact: number;
-  error: string | null;
-};
-
-/**
- * SwapLeverageManager.open preview: `principal` BTC taken to `leverage`× by flash-borrowing MUSD and buying BTC.
- * The LTV check uses the worst swap the transaction accepts (quote minus `slippageBps`), so a plan that passes
- * here does not revert on the borrow limit.
- */
-export function planBtcLeverage(p: {
-  principal: number;
-  leverage: number;
-  btcPrice: number;
-  musdPrice: number;
-  ltvBps: number;
-  ltBps: number;
-  quotedBtc?: number;
-  slippageBps?: number;
-}): BtcLeveragePlan {
-  const borrowMusd = p.musdPrice > 0 ? (p.principal * p.btcPrice * (p.leverage - 1)) / p.musdPrice : 0;
-  const oracleBtc = p.btcPrice > 0 ? (borrowMusd * p.musdPrice) / p.btcPrice : 0;
-  const boughtBtc = p.quotedBtc ?? oracleBtc;
-  const minBoughtBtc = (boughtBtc * (BPS - (p.slippageBps ?? 0))) / BPS;
-  const postedBtc = p.principal + boughtBtc;
-  const debtMusd = borrowMusd + flashFee(borrowMusd);
-  const debtUsd = debtMusd * p.musdPrice;
-  const collateralUsd = postedBtc * p.btcPrice;
-  const worstLtv = debtUsd / ((p.principal + minBoughtBtc) * p.btcPrice);
-  const maxLeverage = 1 / (1 - p.ltvBps / BPS);
-  let error: string | null = null;
-  if (!Number.isFinite(p.principal) || p.principal <= 0) error = 'Enter a valid amount';
-  else if (p.leverage <= 1) error = 'Leverage must be above 1×';
-  else if (worstLtv > p.ltvBps / BPS) error = `${p.leverage}× exceeds the ${p.ltvBps / 100}% max LTV (max ≈ ${maxLeverage.toFixed(2)}× before fees)`;
-  return {
-    principal: p.principal,
-    leverage: p.leverage,
-    borrowMusd,
-    boughtBtc,
-    minBoughtBtc,
-    postedBtc,
-    debtMusd,
-    ltv: collateralUsd > 0 ? debtUsd / collateralUsd : 0,
-    healthFactor: debtUsd > 0 ? (collateralUsd * p.ltBps) / BPS / debtUsd : Infinity,
-    liquidationPrice: postedBtc > 0 ? debtUsd / ((postedBtc * p.ltBps) / BPS) : 0,
-    maxLeverage,
-    priceImpact: oracleBtc > 0 ? 1 - boughtBtc / oracleBtc : 0,
-    error,
-  };
-}
-
-/** Extra BTC sold on close beyond the quote, covering interest accrued before inclusion. */
-const CLOSE_BUFFER_BPS = 10;
-
-/**
- * SwapLeverageManager.close preview for a full close: how much BTC to sell so the proceeds repay the debt and
- * the flash fee on it. `quotedMusdForAll` is the router quote for selling all `collateralBtc`; its average
- * price is a conservative estimate for selling part of it.
- */
-export function planBtcClose(p: { collateralBtc: number; debtMusd: number; quotedMusdForAll: number; slippageBps?: number }): {
-  sellBtc: number;
-  minProceeds: number;
-  collateralBack: number;
-  musdBack: number;
-  error: string | null;
-} {
-  const owed = p.debtMusd + flashFee(p.debtMusd);
-  const avgPrice = p.collateralBtc > 0 ? p.quotedMusdForAll / p.collateralBtc : 0;
-  const margin = 1 + ((p.slippageBps ?? 0) + CLOSE_BUFFER_BPS) / BPS;
-  const sellBtc = avgPrice > 0 ? Math.min(p.collateralBtc, (owed * margin) / avgPrice) : p.collateralBtc;
-  const error = p.quotedMusdForAll < owed ? 'There is not enough collateral value to repay the debt' : null;
-  return { sellBtc, minProceeds: owed, collateralBack: p.collateralBtc - sellBtc, musdBack: Math.max(0, sellBtc * avgPrice - owed), error };
 }
 
 /** Parses a user-entered amount; null for empty, non-numeric or non-positive input. */

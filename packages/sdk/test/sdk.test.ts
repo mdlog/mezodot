@@ -227,16 +227,15 @@ describe('maxWithdrawableUnits (final review I6)', () => {
     expect(maxWithdrawableUnits(pos(2_400, [{ id: 2, units: 1, price: 3_200, ltvBps: 7_500, ltBps: 8_000 }]), 2)).toBe(0);
   });
 
-  it('allows removing unpriced collateral entirely (it adds nothing to the limit)', async () => {
+  it('allows removing unpriced collateral entirely (it adds nothing to the limit) while the rest covers the debt', async () => {
     const { maxWithdrawableUnits } = await import('../src');
-    expect(
-      maxWithdrawableUnits(
-        pos(100, [
-          { id: 0, units: 10, price: 1, ltvBps: 8_000, ltBps: 8_500 },
-          { id: 1, units: 5, price: 0, ltvBps: 5_000, ltBps: 6_000 },
-        ]),
-        1,
-      ),
-    ).toBe(5);
+    const rows = [
+      { id: 0, units: 10, price: 1, ltvBps: 8_000, ltBps: 8_500 },
+      { id: 1, units: 5, price: 0, ltvBps: 5_000, ltBps: 6_000 },
+    ];
+    // $8 of limit covers $5 of debt.
+    expect(maxWithdrawableUnits(pos(5, rows), 1)).toBe(5);
+    // VaultManager checks what remains after any withdrawal: $8 of limit under $100 of debt reverts.
+    expect(maxWithdrawableUnits(pos(100, rows), 1)).toBe(0);
   });
 });
