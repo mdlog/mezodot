@@ -6,7 +6,7 @@ export type UsdPrices = Partial<Record<PriceSymbol, number>>;
 export type ValuedCollateral = {
   collateral: CollateralState;
   balance: bigint;
-  /** Underlying token units (pTokens converted through the exchange rate). */
+  /** Underlying token units (pTokens converted through the exchange rate; plain and remote tokens as held). */
   units: number;
   price: number;
   valueUsd: number;
@@ -29,7 +29,7 @@ export const pTokenUnits = (market: MarketState, shares: bigint): number =>
 
 /**
  * Values a position using the same rules as VaultManager: pToken collateral through the exchange rate,
- * remote collateral by token units. Pass `usablePrices(...)` so that collateral without an acceptable
+ * plain hub tokens (BTC) and remote collateral by token units. Pass `usablePrices(...)` so that collateral without an acceptable
  * price counts as zero, as VaultManager does for borrow and withdraw limits.
  */
 export function valuePosition(protocol: ProtocolState, position: PositionState, prices: UsdPrices): ValuedPosition {
@@ -38,7 +38,7 @@ export function valuePosition(protocol: ProtocolState, position: PositionState, 
     const symbol = symbolForPriceKey(c.priceKey);
     const price = symbol ? (prices[symbol] ?? 0) : 0;
     let units = 0;
-    if (c.isRemote) units = toNumber(balance, c.decimals);
+    if (!c.isShare) units = toNumber(balance, c.decimals);
     else {
       const market = protocol.markets.find((m) => m.pool.toLowerCase() === c.token.toLowerCase());
       if (market) units = pTokenUnits(market, balance);

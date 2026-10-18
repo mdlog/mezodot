@@ -26,9 +26,13 @@ export type HubDeployment = {
     pyth: Address;
     /** Supra DORA pull contract behind the router's Supra source (zero address when not configured). */
     supraPull: Address;
+    /** BTC leverage through the Tigris DEX, and the router/factory it swaps on (absent on older deployments). */
+    swapLeverageManager?: Address;
+    tigrisRouter?: Address;
+    tigrisFactory?: Address;
   };
-  tokens: { MUSD: Address; MEZO: Address };
-  priceFeeds: { MUSD: Hex; MEZO: Hex; ETH: Hex; USDC: Hex };
+  tokens: { MUSD: Address; MEZO: Address; BTC?: Address };
+  priceFeeds: { MUSD: Hex; MEZO: Hex; ETH: Hex; USDC: Hex; BTC?: Hex };
 };
 
 /** Written by contracts/script/DeploySpoke.s.sol. */

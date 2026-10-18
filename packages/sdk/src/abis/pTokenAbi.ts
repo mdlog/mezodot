@@ -51,6 +51,19 @@ export const pTokenAbi = [
   },
   {
     type: 'function',
+    name: 'MAX_RESERVE_FACTOR',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
     name: 'acceptOwnership',
     inputs: [],
     outputs: [],
@@ -807,6 +820,19 @@ export const pTokenAbi = [
   },
   {
     type: 'function',
+    name: 'setReserveFactor',
+    inputs: [
+      {
+        name: 'reserveFactor_',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
     name: 'setVaultManager',
     inputs: [
       {
@@ -1317,6 +1343,19 @@ export const pTokenAbi = [
       },
       {
         name: 'accountDebt',
+        type: 'uint256',
+        indexed: false,
+        internalType: 'uint256',
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: 'event',
+    name: 'ReserveFactorSet',
+    inputs: [
+      {
+        name: 'reserveFactor',
         type: 'uint256',
         indexed: false,
         internalType: 'uint256',

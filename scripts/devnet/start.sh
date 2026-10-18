@@ -19,9 +19,11 @@ export MUSD_FEED=0x0617a9b725011a126a2b9fd53563f4236501f32cf76d877644b943394606c
 export MEZO_FEED=0x80beaaedbdd228e77c5d62dfcd74b0305674b7e27a5cc6a46e71bd3a696826df
 export ETH_FEED=0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace
 export USDC_FEED=0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a
+export BTC_FEED=0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43
 # Same oracle layout as testnet: ETH and USDC get a Supra secondary leg (MockSupraPull, served by the agent).
 export ETH_SUPRA_PAIR=19
 export USDC_SUPRA_PAIR=89
+export BTC_SUPRA_PAIR=18
 export MUSD_MAX_CONF_BPS=500
 export MEZO_MAX_CONF_BPS=500
 

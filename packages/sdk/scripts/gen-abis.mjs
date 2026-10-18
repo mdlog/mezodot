@@ -16,6 +16,8 @@ const CONTRACTS = {
   WormholeAdapter: 'wormholeAdapterAbi',
   SpokeGateway: 'spokeGatewayAbi',
   LeverageManager: 'leverageManagerAbi',
+  SwapLeverageManager: 'swapLeverageManagerAbi',
+  ITigrisRouter: 'tigrisRouterAbi',
   KeeperGateway: 'keeperGatewayAbi',
   IWormhole: 'wormholeAbi',
   InterestRateModel: 'interestRateModelAbi',

@@ -4,6 +4,8 @@ export { oracleRouterAbi } from './oracleRouterAbi';
 export { wormholeAdapterAbi } from './wormholeAdapterAbi';
 export { spokeGatewayAbi } from './spokeGatewayAbi';
 export { leverageManagerAbi } from './leverageManagerAbi';
+export { swapLeverageManagerAbi } from './swapLeverageManagerAbi';
+export { tigrisRouterAbi } from './tigrisRouterAbi';
 export { keeperGatewayAbi } from './keeperGatewayAbi';
 export { wormholeAbi } from './wormholeAbi';
 export { interestRateModelAbi } from './interestRateModelAbi';

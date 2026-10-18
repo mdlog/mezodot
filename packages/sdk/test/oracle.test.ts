@@ -138,6 +138,7 @@ describe('price selection', () => {
     MEZO: status('MEZO', { ok: true, price: 3_000_000_000_000_000n, validUntil: 1_050, lastPrice: 3_000_000_000_000_000n, publishTime: 800 }),
     ETH: status('ETH', { lastPrice: 2_400_000_000_000_000_000_000n, publishTime: 100 }),
     USDC: status('USDC', {}),
+    BTC: status('BTC', {}),
   };
 
   it('stale = unavailable now or expiring within the margin', () => {
@@ -218,6 +219,8 @@ describe('prices after attaching pull updates (keepers)', () => {
     ETH: st('ETH', [leg(1, false), leg(2, true, 3_200n * E18)], 3_200n * E18),
     // Pyth USDC fresh (Mezo's push): it stays selected whatever Supra says
     USDC: st('USDC', [leg(1, true, E18), leg(2, false)], E18),
+    // Pyth BTC fresh (Mezo's push) with a Supra secondary, like USDC
+    BTC: st('BTC', [leg(1, true, 80_000n * E18), leg(2, false)], 80_000n * E18),
   };
 
   it('a fresh price counts only where the router would select the refreshed leg', () => {
@@ -226,8 +229,8 @@ describe('prices after attaching pull updates (keepers)', () => {
       ETH: { price: 2_800, publishTime: 1, source: 'supra' as const },
       USDC: { price: 0.97, publishTime: 1, source: 'supra' as const },
     };
-    expect(pricesAfterUpdate(oracle, fresh)).toEqual({ MUSD: 0.99, ETH: 2_800, USDC: 1 });
-    expect(pricesAfterUpdate(oracle, {})).toEqual({ MUSD: 1, ETH: 3_200, USDC: 1 });
+    expect(pricesAfterUpdate(oracle, fresh)).toEqual({ MUSD: 0.99, ETH: 2_800, USDC: 1, BTC: 80_000 });
+    expect(pricesAfterUpdate(oracle, {})).toEqual({ MUSD: 1, ETH: 3_200, USDC: 1, BTC: 80_000 });
   });
 });
 

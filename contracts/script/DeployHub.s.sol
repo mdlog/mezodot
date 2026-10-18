@@ -15,11 +15,15 @@ import {VaultManager} from "../src/hub/VaultManager.sol";
 import {WormholeAdapter} from "../src/hub/WormholeAdapter.sol";
 import {LeverageManager} from "../src/hub/LeverageManager.sol";
 import {KeeperGateway} from "../src/hub/KeeperGateway.sol";
+import {SwapLeverageManager} from "../src/hub/SwapLeverageManager.sol";
+import {ITigrisRouter} from "../src/interfaces/ITigrisRouter.sol";
 
 /// @notice Deploys the Mezo hub. Remote (spoke) collateral is registered later by ConfigureCrossChain.
-/// Env: NETWORK, MUSD, MEZO, WORMHOLE, CONSISTENCY_LEVEL (default 1), SEED_AMOUNT (default 1e18; 0 = none).
+/// Env: NETWORK, MUSD, MEZO, BTC, WORMHOLE, CONSISTENCY_LEVEL (default 1), SEED_AMOUNT (default 1e18; 0 = none).
+///      BTC leverage: TIGRIS_ROUTER, TIGRIS_FACTORY, TIGRIS_STABLE (default false: the volatile MUSD/BTC pool).
+///      Revenue: LIQUIDATION_FEE_BPS (protocol share of the liquidation bonus, default 1,000 = 10%).
 ///      Oracle: PYTH (Pyth Core), SUPRA_PULL (optional Supra DORA pull contract), and per symbol
-///      (MUSD, MEZO, ETH, USDC): <SYM>_FEED (Pyth price id), <SYM>_MAX_AGE (Pyth leg, default 120 s),
+///      (MUSD, MEZO, ETH, USDC, BTC): <SYM>_FEED (Pyth price id), <SYM>_MAX_AGE (Pyth leg, default 120 s),
 ///      <SYM>_MAX_CONF_BPS (default 200), <SYM>_SUPRA_PAIR (optional secondary leg),
 ///      SUPRA_MAX_AGE (default 120 s), DIVERGENCE_BPS (two-leg cross-check, default 150).
 /// Writes packages/sdk/src/deployments/<NETWORK>.json.
@@ -39,12 +43,14 @@ contract DeployHub is Script {
         address keeperGateway;
         address pMUSD;
         address pMEZO;
+        address swapLeverageManager;
     }
 
     function run() external returns (Deployed memory d) {
         string memory network = vm.envString("NETWORK");
         address musd = vm.envAddress("MUSD");
         address mezo = vm.envAddress("MEZO");
+        address btc = vm.envAddress("BTC");
         uint256 startBlock = block.number;
 
         _mockPrecompileToken(mezo);
@@ -70,6 +76,9 @@ contract DeployHub is Script {
         vaultManager.addMarket(pMEZO, keccak256("MEZO"));
         uint256 pMusdCollateral = vaultManager.addCollateral(_local(address(pMUSD), keccak256("MUSD"), 8000, 8500, 500));
         vaultManager.addCollateral(_local(address(pMEZO), keccak256("MEZO"), 5000, 6000, 1000));
+        // BTC held on the hub as a plain token: LTV 70%, liquidation threshold 78%, bonus 5% (≈ 3.3× max leverage).
+        uint256 btcCollateral = vaultManager.addCollateral(_plain(btc, keccak256("BTC"), 7000, 7800, 500));
+        vaultManager.setLiquidationFee(uint16(vm.envOr("LIQUIDATION_FEE_BPS", uint256(1000))));
 
         WormholeAdapter adapter = new WormholeAdapter(
             IWormhole(vm.envAddress("WORMHOLE")), vaultManager, uint8(vm.envOr("CONSISTENCY_LEVEL", uint256(1))), owner
@@ -77,6 +86,15 @@ contract DeployHub is Script {
         vaultManager.setAdapter(address(adapter));
         LeverageManager lev = new LeverageManager(vaultManager, pMUSD, musdMarket, pMusdCollateral);
         KeeperGateway keepers = new KeeperGateway(vaultManager, adapter);
+        SwapLeverageManager swapLev = new SwapLeverageManager(
+            vaultManager,
+            pMUSD,
+            musdMarket,
+            btcCollateral,
+            ITigrisRouter(vm.envAddress("TIGRIS_ROUTER")),
+            vm.envAddress("TIGRIS_FACTORY"),
+            vm.envOr("TIGRIS_STABLE", false)
+        );
 
         // Seed deposits (shares sent to a dead address) harden the vaults against share-price games.
         uint256 seed = vm.envOr("SEED_AMOUNT", uint256(1e18));
@@ -102,9 +120,10 @@ contract DeployHub is Script {
             address(lev),
             address(keepers),
             address(pMUSD),
-            address(pMEZO)
+            address(pMEZO),
+            address(swapLev)
         );
-        _write(network, d, musd, mezo, startBlock);
+        _write(network, d, musd, mezo, btc, startBlock);
     }
 
     /// @dev MEZO on Mezo is a precompile: forge's local EVM only sees a stub that cannot execute it, so the
@@ -132,6 +151,7 @@ contract DeployHub is Script {
         _setFeed(oracle, "MEZO", supraPull != address(0));
         _setFeed(oracle, "ETH", supraPull != address(0));
         _setFeed(oracle, "USDC", supraPull != address(0));
+        _setFeed(oracle, "BTC", supraPull != address(0));
     }
 
     /// Pyth primary leg per symbol, plus a Supra secondary leg when <SYM>_SUPRA_PAIR is set.
@@ -177,12 +197,40 @@ contract DeployHub is Script {
         });
     }
 
+    function _plain(address token, bytes32 priceKey, uint16 ltv, uint16 lt, uint16 bonus)
+        internal
+        pure
+        returns (VaultManager.CollateralConfig memory)
+    {
+        return VaultManager.CollateralConfig({
+            enabled: true,
+            isRemote: false,
+            isShare: false,
+            token: token,
+            chainId: 0,
+            remoteToken: bytes32(0),
+            decimals: 18,
+            priceKey: priceKey,
+            ltvBps: ltv,
+            ltBps: lt,
+            bonusBps: bonus,
+            cap: type(uint256).max
+        });
+    }
+
     function _seed(PToken pool, address token, uint256 amount) internal {
         IERC20(token).approve(address(pool), amount);
         pool.deposit(amount, address(0xdead));
     }
 
-    function _write(string memory network, Deployed memory d, address musd, address mezo, uint256 startBlock) internal {
+    function _write(
+        string memory network,
+        Deployed memory d,
+        address musd,
+        address mezo,
+        address btc,
+        uint256 startBlock
+    ) internal {
         string memory c = "contracts";
         vm.serializeAddress(c, "oracleRouter", d.oracle);
         vm.serializeAddress(c, "vaultManager", d.vaultManager);
@@ -191,19 +239,24 @@ contract DeployHub is Script {
         vm.serializeAddress(c, "keeperGateway", d.keeperGateway);
         vm.serializeAddress(c, "pMUSD", d.pMUSD);
         vm.serializeAddress(c, "pMEZO", d.pMEZO);
+        vm.serializeAddress(c, "swapLeverageManager", d.swapLeverageManager);
+        vm.serializeAddress(c, "tigrisRouter", vm.envAddress("TIGRIS_ROUTER"));
+        vm.serializeAddress(c, "tigrisFactory", vm.envAddress("TIGRIS_FACTORY"));
         vm.serializeAddress(c, "wormhole", vm.envAddress("WORMHOLE"));
         vm.serializeAddress(c, "supraPull", vm.envOr("SUPRA_PULL", address(0)));
         string memory contracts = vm.serializeAddress(c, "pyth", vm.envAddress("PYTH"));
 
         string memory t = "tokens";
         vm.serializeAddress(t, "MUSD", musd);
-        string memory tokens = vm.serializeAddress(t, "MEZO", mezo);
+        vm.serializeAddress(t, "MEZO", mezo);
+        string memory tokens = vm.serializeAddress(t, "BTC", btc);
 
         string memory f = "priceFeeds";
         vm.serializeBytes32(f, "MUSD", vm.envBytes32("MUSD_FEED"));
         vm.serializeBytes32(f, "MEZO", vm.envBytes32("MEZO_FEED"));
         vm.serializeBytes32(f, "ETH", vm.envBytes32("ETH_FEED"));
-        string memory feeds = vm.serializeBytes32(f, "USDC", vm.envBytes32("USDC_FEED"));
+        vm.serializeBytes32(f, "USDC", vm.envBytes32("USDC_FEED"));
+        string memory feeds = vm.serializeBytes32(f, "BTC", vm.envBytes32("BTC_FEED"));
 
         string memory root = "root";
         vm.serializeString(root, "network", network);

@@ -44,6 +44,19 @@ export const vaultManagerAbi = [
   },
   {
     type: 'function',
+    name: 'MAX_LIQUIDATION_FEE_BPS',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'uint16',
+        internalType: 'uint16',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
     name: 'MAX_MARKETS',
     inputs: [],
     outputs: [
@@ -91,6 +104,11 @@ export const vaultManagerAbi = [
           },
           {
             name: 'isRemote',
+            type: 'bool',
+            internalType: 'bool',
+          },
+          {
+            name: 'isShare',
             type: 'bool',
             internalType: 'bool',
           },
@@ -315,6 +333,11 @@ export const vaultManagerAbi = [
           },
           {
             name: 'isRemote',
+            type: 'bool',
+            internalType: 'bool',
+          },
+          {
+            name: 'isShare',
             type: 'bool',
             internalType: 'bool',
           },
@@ -558,6 +581,19 @@ export const vaultManagerAbi = [
   },
   {
     type: 'function',
+    name: 'liquidationFeeBps',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'uint16',
+        internalType: 'uint16',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
     name: 'marketCount',
     inputs: [],
     outputs: [
@@ -782,6 +818,19 @@ export const vaultManagerAbi = [
   },
   {
     type: 'function',
+    name: 'setLiquidationFee',
+    inputs: [
+      {
+        name: 'bps',
+        type: 'uint16',
+        internalType: 'uint16',
+      },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
     name: 'setOperator',
     inputs: [
       {
@@ -793,6 +842,19 @@ export const vaultManagerAbi = [
         name: 'approved',
         type: 'bool',
         internalType: 'bool',
+      },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'setTreasury',
+    inputs: [
+      {
+        name: 'treasury_',
+        type: 'address',
+        internalType: 'address',
       },
     ],
     outputs: [],
@@ -829,6 +891,19 @@ export const vaultManagerAbi = [
     ],
     outputs: [],
     stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'treasury',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'address',
+        internalType: 'address',
+      },
+    ],
+    stateMutability: 'view',
   },
   {
     type: 'function',
@@ -1018,6 +1093,11 @@ export const vaultManagerAbi = [
           },
           {
             name: 'isRemote',
+            type: 'bool',
+            internalType: 'bool',
+          },
+          {
+            name: 'isShare',
             type: 'bool',
             internalType: 'bool',
           },
@@ -1221,6 +1301,50 @@ export const vaultManagerAbi = [
   },
   {
     type: 'event',
+    name: 'LiquidationFeeSet',
+    inputs: [
+      {
+        name: 'bps',
+        type: 'uint16',
+        indexed: false,
+        internalType: 'uint16',
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: 'event',
+    name: 'LiquidationFeeTaken',
+    inputs: [
+      {
+        name: 'account',
+        type: 'address',
+        indexed: true,
+        internalType: 'address',
+      },
+      {
+        name: 'collateralId',
+        type: 'uint256',
+        indexed: true,
+        internalType: 'uint256',
+      },
+      {
+        name: 'amount',
+        type: 'uint256',
+        indexed: false,
+        internalType: 'uint256',
+      },
+      {
+        name: 'treasury',
+        type: 'address',
+        indexed: false,
+        internalType: 'address',
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: 'event',
     name: 'MarketAdded',
     inputs: [
       {
@@ -1406,6 +1530,19 @@ export const vaultManagerAbi = [
       },
       {
         name: 'payer',
+        type: 'address',
+        indexed: false,
+        internalType: 'address',
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: 'event',
+    name: 'TreasurySet',
+    inputs: [
+      {
+        name: 'treasury',
         type: 'address',
         indexed: false,
         internalType: 'address',

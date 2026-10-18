@@ -125,6 +125,104 @@ export function seizeAmount(repay: number, debtPrice: number, collateralPrice: n
   return (repay * debtPrice * (BPS + bonusBps)) / BPS / collateralPrice;
 }
 
+/** VaultManager.liquidate: the protocol keeps `liquidationFeeBps` of the bonus part of what is seized. */
+export function liquidatorShare(seizedUnits: number, bonusBps: number, liquidationFeeBps: number): { toLiquidator: number; toProtocol: number } {
+  const toProtocol = (((seizedUnits * bonusBps) / (BPS + bonusBps)) * liquidationFeeBps) / BPS;
+  return { toLiquidator: seizedUnits - toProtocol, toProtocol };
+}
+
+export type BtcLeveragePlan = {
+  principal: number;
+  leverage: number;
+  /** MUSD flash-borrowed and swapped into BTC. */
+  borrowMusd: number;
+  /** BTC the swap is expected to return (router quote, else the oracle price). */
+  boughtBtc: number;
+  /** Least BTC the transaction accepts from the swap. */
+  minBoughtBtc: number;
+  postedBtc: number;
+  /** MUSD debt opened: the flash amount plus the 0.09% fee. */
+  debtMusd: number;
+  ltv: number;
+  healthFactor: number;
+  /** BTC/USD price at which the health factor reaches 1. */
+  liquidationPrice: number;
+  /** 1 / (1 − LTV), before fees. */
+  maxLeverage: number;
+  /** Shortfall of the router quote against the oracle price (0.05 = 5% fewer BTC). */
+  priceImpact: number;
+  error: string | null;
+};
+
+/**
+ * SwapLeverageManager.open preview: `principal` BTC taken to `leverage`× by flash-borrowing MUSD and buying BTC.
+ * The LTV check uses the worst swap the transaction accepts (quote minus `slippageBps`), so a plan that passes
+ * here does not revert on the borrow limit.
+ */
+export function planBtcLeverage(p: {
+  principal: number;
+  leverage: number;
+  btcPrice: number;
+  musdPrice: number;
+  ltvBps: number;
+  ltBps: number;
+  quotedBtc?: number;
+  slippageBps?: number;
+}): BtcLeveragePlan {
+  const borrowMusd = p.musdPrice > 0 ? (p.principal * p.btcPrice * (p.leverage - 1)) / p.musdPrice : 0;
+  const oracleBtc = p.btcPrice > 0 ? (borrowMusd * p.musdPrice) / p.btcPrice : 0;
+  const boughtBtc = p.quotedBtc ?? oracleBtc;
+  const minBoughtBtc = (boughtBtc * (BPS - (p.slippageBps ?? 0))) / BPS;
+  const postedBtc = p.principal + boughtBtc;
+  const debtMusd = borrowMusd + flashFee(borrowMusd);
+  const debtUsd = debtMusd * p.musdPrice;
+  const collateralUsd = postedBtc * p.btcPrice;
+  const worstLtv = debtUsd / ((p.principal + minBoughtBtc) * p.btcPrice);
+  const maxLeverage = 1 / (1 - p.ltvBps / BPS);
+  let error: string | null = null;
+  if (!Number.isFinite(p.principal) || p.principal <= 0) error = 'Enter a valid amount';
+  else if (p.leverage <= 1) error = 'Leverage must be above 1×';
+  else if (worstLtv > p.ltvBps / BPS) error = `${p.leverage}× exceeds the ${p.ltvBps / 100}% max LTV (max ≈ ${maxLeverage.toFixed(2)}× before fees)`;
+  return {
+    principal: p.principal,
+    leverage: p.leverage,
+    borrowMusd,
+    boughtBtc,
+    minBoughtBtc,
+    postedBtc,
+    debtMusd,
+    ltv: collateralUsd > 0 ? debtUsd / collateralUsd : 0,
+    healthFactor: debtUsd > 0 ? (collateralUsd * p.ltBps) / BPS / debtUsd : Infinity,
+    liquidationPrice: postedBtc > 0 ? debtUsd / ((postedBtc * p.ltBps) / BPS) : 0,
+    maxLeverage,
+    priceImpact: oracleBtc > 0 ? 1 - boughtBtc / oracleBtc : 0,
+    error,
+  };
+}
+
+/** Extra BTC sold on close beyond the quote, covering interest accrued before inclusion. */
+const CLOSE_BUFFER_BPS = 10;
+
+/**
+ * SwapLeverageManager.close preview for a full close: how much BTC to sell so the proceeds repay the debt and
+ * the flash fee on it. `quotedMusdForAll` is the router quote for selling all `collateralBtc`; its average
+ * price is a conservative estimate for selling part of it.
+ */
+export function planBtcClose(p: { collateralBtc: number; debtMusd: number; quotedMusdForAll: number; slippageBps?: number }): {
+  sellBtc: number;
+  minProceeds: number;
+  collateralBack: number;
+  musdBack: number;
+  error: string | null;
+} {
+  const owed = p.debtMusd + flashFee(p.debtMusd);
+  const avgPrice = p.collateralBtc > 0 ? p.quotedMusdForAll / p.collateralBtc : 0;
+  const margin = 1 + ((p.slippageBps ?? 0) + CLOSE_BUFFER_BPS) / BPS;
+  const sellBtc = avgPrice > 0 ? Math.min(p.collateralBtc, (owed * margin) / avgPrice) : p.collateralBtc;
+  const error = p.quotedMusdForAll < owed ? 'There is not enough collateral value to repay the debt' : null;
+  return { sellBtc, minProceeds: owed, collateralBack: p.collateralBtc - sellBtc, musdBack: Math.max(0, sellBtc * avgPrice - owed), error };
+}
+
 /** Parses a user-entered amount; null for empty, non-numeric or non-positive input. */
 export const parseAmount = (raw: string): number | null => {
   if (raw.trim() === '') return null;

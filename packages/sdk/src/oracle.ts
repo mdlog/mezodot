@@ -196,7 +196,7 @@ export async function fetchOracleUpdate(agentUrl: string, symbols: PriceSymbol[]
 // --- Supra DORA -------------------------------------------------------------------------------------
 
 /** Supra pair indexes (docs.supra.com data-feed index) for the symbols Mezodot pulls. */
-export const SUPRA_PAIRS: Partial<Record<PriceSymbol, number>> = { ETH: 19, USDC: 89 };
+export const SUPRA_PAIRS: Partial<Record<PriceSymbol, number>> = { ETH: 19, USDC: 89, BTC: 18 };
 
 /** Fetches a signed proof for `pairs` from a Supra DORA `get_proof` endpoint (no key needed). */
 export async function fetchSupraProof(url: string, pairs: number[], fetchImpl: typeof fetch = fetch): Promise<Hex> {
