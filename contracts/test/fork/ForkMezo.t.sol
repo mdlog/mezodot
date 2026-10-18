@@ -233,7 +233,7 @@ contract ForkMezoTest is Test {
         (uint256 shares, uint256 debt) = lev.loop(1_000e18, 3e18, 0, new bytes[](0));
         assertGt(shares, 0);
         assertEq(debt, 2_001.8e18);
-        uint256 out = lev.unwind(type(uint256).max, type(uint256).max, 0, new bytes[](0));
+        (uint256 out,) = lev.unwind(type(uint256).max, type(uint256).max, 0, new bytes[](0));
         vm.stopPrank();
         assertGt(out, 990e18);
     }

@@ -200,6 +200,11 @@ export const leverageManagerAbi = [
         type: 'uint256',
         internalType: 'uint256',
       },
+      {
+        name: 'sharesReturned',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
     ],
     stateMutability: 'payable',
   },
@@ -281,8 +286,19 @@ export const leverageManagerAbi = [
         indexed: false,
         internalType: 'uint256',
       },
+      {
+        name: 'sharesReturned',
+        type: 'uint256',
+        indexed: false,
+        internalType: 'uint256',
+      },
     ],
     anonymous: false,
+  },
+  {
+    type: 'error',
+    name: 'InsufficientLiquidity',
+    inputs: [],
   },
   {
     type: 'error',

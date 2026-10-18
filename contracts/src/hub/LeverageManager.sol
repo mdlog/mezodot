@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IERC3156FlashBorrower} from "@openzeppelin/contracts/interfaces/IERC3156FlashBorrower.sol";
 import {PToken} from "./PToken.sol";
 import {VaultManager} from "./VaultManager.sol";
@@ -37,15 +38,18 @@ contract LeverageManager is IERC3156FlashBorrower, ReentrancyGuard {
     bool private _inFlash;
     uint256 private _lastShares;
     uint256 private _lastOut;
+    uint256 private _lastSharesReturned;
 
     event Looped(address indexed account, uint256 principal, uint256 leverage, uint256 shares, uint256 debt);
-    event Unwound(address indexed account, uint256 repaid, uint256 shares, uint256 out);
+    /// @param out MUSD paid out; @param sharesReturned pMUSD returned because the pool lacked the cash for them.
+    event Unwound(address indexed account, uint256 repaid, uint256 shares, uint256 out, uint256 sharesReturned);
 
     error InvalidLeverage();
     error SlippageExceeded();
     error UnauthorizedCallback();
     error ZeroAmount();
     error RefundFailed();
+    error InsufficientLiquidity();
 
     constructor(VaultManager vaultManager_, PToken pool_, uint256 marketId_, uint256 collateralId_) {
         vaultManager = vaultManager_;
@@ -80,12 +84,15 @@ contract LeverageManager is IERC3156FlashBorrower, ReentrancyGuard {
 
     /// @param repayAmount Debt to repay via flash loan; `type(uint256).max` repays all debt in this market.
     /// @param shares pToken collateral to withdraw; `type(uint256).max` withdraws all of it.
-    /// @param minOut Minimum equity returned to the caller.
+    /// @param minOut Minimum equity returned to the caller, in MUSD: cash paid out plus returned pMUSD at its
+    ///        redemption value.
+    /// @return out MUSD paid out.
+    /// @return sharesReturned pMUSD returned instead of MUSD because the pool's idle cash could not pay them.
     function unwind(uint256 repayAmount, uint256 shares, uint256 minOut, bytes[] calldata priceUpdate)
         external
         payable
         nonReentrant
-        returns (uint256 out)
+        returns (uint256 out, uint256 sharesReturned)
     {
         uint256 spent = _pushPrices(priceUpdate);
         if (repayAmount == type(uint256).max) repayAmount = pool.borrowBalanceCurrent(msg.sender);
@@ -93,8 +100,8 @@ contract LeverageManager is IERC3156FlashBorrower, ReentrancyGuard {
         if (repayAmount == 0 || shares == 0) revert ZeroAmount();
 
         _flash(repayAmount, abi.encode(Action.Unwind, msg.sender, shares, minOut));
-        out = _lastOut;
-        emit Unwound(msg.sender, repayAmount, shares, out);
+        (out, sharesReturned) = (_lastOut, _lastSharesReturned);
+        emit Unwound(msg.sender, repayAmount, shares, out, sharesReturned);
         _refund(spent);
     }
 
@@ -129,14 +136,20 @@ contract LeverageManager is IERC3156FlashBorrower, ReentrancyGuard {
         vaultManager.repay(marketId, amount, account);
         // Reverts if the remaining position would exceed its borrow limit.
         vaultManager.withdrawCollateralFor(account, collateralId, shares, address(this), new bytes[](0));
-        pool.redeem(shares, address(this), address(this));
+        // Redeem only what idle cash can pay: the whole collateral (debt + equity) can exceed the pool's cash
+        // at moderate utilisation, while the flash repayment never does. Unpaid equity stays in pMUSD.
+        uint256 redeemed = Math.min(shares, pool.maxRedeem(address(this)));
+        if (redeemed > 0) pool.redeem(redeemed, address(this), address(this));
         uint256 balance = asset.balanceOf(address(this));
         uint256 owed = amount + fee;
-        if (balance < owed) revert SlippageExceeded();
+        if (balance < owed) revert InsufficientLiquidity();
         uint256 out = balance - owed;
-        if (out < minOut) revert SlippageExceeded();
+        uint256 returned = shares - redeemed;
+        if (out + pool.convertToAssets(returned) < minOut) revert SlippageExceeded();
         if (out > 0) asset.safeTransfer(account, out);
+        if (returned > 0) IERC20(address(pool)).safeTransfer(account, returned);
         _lastOut = out;
+        _lastSharesReturned = returned;
     }
 
     function _flash(uint256 amount, bytes memory data) internal {

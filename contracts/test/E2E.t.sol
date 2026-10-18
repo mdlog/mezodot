@@ -88,7 +88,7 @@ contract E2ETest is CrossChainFixture {
         assertApproxEqAbs(pMUSD.convertToAssets(shares), 3_000e18, 1e6);
         assertEq(debt, 2_001.8e18);
         skip(30 days);
-        uint256 out = lev.unwind(type(uint256).max, type(uint256).max, 0, noUpdates());
+        (uint256 out,) = lev.unwind(type(uint256).max, type(uint256).max, 0, noUpdates());
         vm.stopPrank();
         assertGt(out, 990e18);
     }

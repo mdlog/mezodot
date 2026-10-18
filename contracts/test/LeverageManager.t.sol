@@ -73,12 +73,38 @@ contract LeverageManagerTest is HubFixture {
     function test_unwindReturnsEquity() public {
         _loop(1_000e18, 3e18);
         vm.prank(alice);
-        uint256 out = lev.unwind(type(uint256).max, type(uint256).max, 0, noUpdates());
-        // Equity back minus two flash fees (open 1.8 + close ≈1.8).
+        (uint256 out, uint256 sharesReturned) = lev.unwind(type(uint256).max, type(uint256).max, 0, noUpdates());
+        // Equity back minus two flash fees (open 1.8 + close ≈1.8), all in MUSD while the pool has the cash.
         assertApproxEqAbs(out, 1_000e18 - 3.6e18, 0.01e18);
+        assertEq(sharesReturned, 0);
         assertEq(musd.balanceOf(alice), 9_000e18 + out);
         assertEq(pMUSD.borrowBalanceStored(alice), 0);
         assertEq(vaultManager.collateralBalance(alice, pMusdCollateral), 0);
+    }
+
+    /// Audit (leverage#0): a full unwind used to redeem every pMUSD share inside the flash loan, so it needed
+    /// idle cash for the whole collateral (debt + equity) and reverted at moderate utilisation. Now it redeems
+    /// what the pool can pay (at least the flash repayment) and returns the rest of the equity as pMUSD.
+    function test_unwindAtHighUtilisationReturnsUnpaidEquityAsPTokens() public {
+        _loop(1_000e18, 3e18); // collateral 3,000 pMUSD, debt 2,001.8 MUSD
+        // Another borrower drains idle cash down to 2,500 MUSD (less than Alice's 3,000 of collateral).
+        address bob = makeAddr("bob");
+        vaultManager.setAdapter(address(this));
+        vaultManager.creditRemote(bob, wethBase, 1_000e18);
+        uint256 drain = pMUSD.cash() - 2_500e18; // computed before the prank: it is an external call
+        vm.prank(bob);
+        vaultManager.borrow(musdMarket, drain, noUpdates());
+
+        vm.prank(alice);
+        (uint256 out, uint256 sharesReturned) = lev.unwind(type(uint256).max, type(uint256).max, 990e18, noUpdates());
+        uint256 closeFee = pMUSD.flashFee(address(musd), 2_001.8e18);
+        assertApproxEqAbs(out, 2_500e18 - 2_001.8e18 - closeFee, 1e6); // all the cash the pool had, minus the flash
+        assertEq(pMUSD.balanceOf(alice), sharesReturned);
+        assertApproxEqAbs(pMUSD.convertToAssets(sharesReturned), 500e18, 1e6); // the rest, still earning
+        assertEq(pMUSD.borrowBalanceStored(alice), 0);
+        assertEq(vaultManager.collateralBalance(alice, pMusdCollateral), 0);
+        assertEq(musd.balanceOf(address(lev)), 0);
+        assertEq(pMUSD.balanceOf(address(lev)), 0);
     }
 
     function test_unwindMinOutGuard() public {
