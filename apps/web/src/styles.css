@@ -3009,267 +3009,386 @@ tbody tr:last-child td {
   color: var(--indigo);
   box-shadow: 0 1px 3px #34334712;
 }
-.topology {
-  min-height: 279px;
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr 115px 1.38fr 120px;
+/* Capital topology (components/Topology.tsx): zones, contract nodes and typed edges in one SVG. */
+.topo {
+  margin-top: 18px;
+}
+.topo-toolbar {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  padding: 24px 4px 6px;
+  justify-content: space-between;
+  gap: 12px 20px;
+  margin-bottom: 12px;
 }
-.topology-spoke,
-.topology-hub {
-  position: relative;
-  z-index: 1;
-}
-.topology-spoke {
-  height: 177px;
-  padding: 13px;
-  background: #f7f6f1;
-  border: 1px solid #e0ded8;
-  border-radius: 8px;
-  align-self: center;
-}
-.topology-label {
-  font: 11px var(--mono);
-  letter-spacing: 0.65px;
-  color: #9899a1;
-  display: block;
-}
-.spoke-chain {
+.topo-journeys {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 11px 0;
+  flex-wrap: wrap;
+  gap: 6px;
 }
-.spoke-chain b,
-.spoke-chain small {
-  display: block;
+.topo-journeys button {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid #e1dfd8;
+  background: var(--white);
+  color: #4f5262;
+  font:
+    500 12.5px 'IBM Plex Sans',
+    sans-serif;
+  cursor: pointer;
+  transition:
+    background 0.16s,
+    border-color 0.16s,
+    color 0.16s;
 }
-.spoke-chain b {
-  font-size: 12.5px;
+.topo-journeys button:hover {
+  border-color: var(--indigo-mid);
+  color: var(--indigo);
 }
-.spoke-chain small {
-  font-size: 11.5px;
-  color: #999aa1;
-  margin-top: 3px;
+.topo-journeys button.is-active {
+  background: var(--indigo);
+  border-color: var(--indigo);
+  color: #fff;
 }
-.spoke-assets {
+.topo-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
-  gap: 5px;
-  margin-bottom: 10px;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font: 11.5px var(--mono);
+  color: #7d7f8c;
 }
-.spoke-assets span {
-  padding: 4px 6px;
-  background: #eeede8;
-  border-radius: 3px;
-  font: 11px var(--mono);
-  color: #767781;
-}
-.spoke-contract {
-  display: flex;
+.topo-legend li {
+  display: inline-flex;
   align-items: center;
   gap: 7px;
-  border-top: 1px solid #e8e6e0;
-  padding-top: 8px;
-  color: #6d67b7;
 }
-.spoke-contract b,
-.spoke-contract small {
+.topo-canvas {
+  border: 1px solid #e7e5de;
+  border-radius: 12px;
+  background: #fdfcf9;
+  padding: 10px;
+  overflow-x: auto;
+}
+.topo-svg {
   display: block;
+  width: 100%;
+  height: auto;
 }
-.spoke-contract b {
-  font-size: 11.5px;
-  color: #5c5d6c;
+.topo-band {
+  font: 500 11.5px var(--mono);
+  letter-spacing: 1.4px;
+  fill: #9a9ba5;
 }
-.spoke-contract small {
-  font-size: 11px;
-  color: #a0a0a7;
-  margin-top: 2px;
+.topo-divider {
+  stroke: #e4e2db;
+  stroke-dasharray: 3 5;
 }
-.spoke-capability {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: #658762;
-  font-size: 11px;
-  margin-top: 9px;
+.topo-zone rect {
+  stroke-width: 1.2;
 }
-.topology-bridge {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  text-align: center;
-  color: #747588;
+.topo-zone--spoke rect {
+  fill: #f5f4ee;
+  stroke: #e2e0d8;
 }
-.bridge-wave {
-  height: 30px;
-  width: 67px;
-  border: 1px solid #dddbee;
-  background: #f1f0fa;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  position: relative;
-  color: #7770ca;
+.topo-zone--wormhole rect {
+  fill: #f6f5fd;
+  stroke: #c9c6e8;
+  stroke-dasharray: 5 5;
 }
-.bridge-wave span {
-  position: absolute;
-  height: 1px;
-  width: 15px;
-  border-top: 1px dashed #aaa6d2;
-  left: -11px;
-  top: 15px;
+.topo-zone--hub rect {
+  fill: #f1f0fc;
+  stroke: #d6d2f3;
 }
-.bridge-wave span:nth-child(2) {
-  left: auto;
-  right: -11px;
+.topo-zone-label {
+  font: 500 12px var(--mono);
+  letter-spacing: 1.2px;
+  fill: #6c6e7c;
 }
-.bridge-wave span:nth-child(3) {
-  left: 10px;
-  top: 21px;
-  width: 11px;
+.topo-chain {
+  font-size: 13.5px;
+  font-weight: 500;
+  fill: var(--ink);
 }
-.topology-bridge-label {
-  font: 11px var(--mono);
-  letter-spacing: 0.7px;
+.topo-chain-id,
+.topo-note {
+  font: 11.5px var(--mono);
+  fill: #8c8da0;
 }
-.topology-bridge small {
-  font-size: 11px;
-  color: #9c9ca3;
-  line-height: 1.5;
+.topo-ring {
+  fill: #fff;
+  stroke: #c9c6e8;
 }
-.topology-bridge > svg:last-child {
-  color: #aaa9b2;
-  margin-top: 1px;
+.topo-guardian {
+  fill: #a7a2e6;
 }
-.topology-hub {
-  background: #eeedfb;
-  border: 1px solid #d9d6ee;
-  border-radius: 9px;
-  padding: 13px;
-  height: 190px;
+.topo-guardian.is-signer {
+  fill: var(--indigo);
 }
-.hub-heading {
+.topo-node > rect:first-child {
+  fill: #fffefa;
+  stroke: #dddbd3;
+  stroke-width: 1.2;
+  filter: drop-shadow(0 1px 1.5px rgba(36, 38, 56, 0.07));
+}
+.topo-node--hub > rect:first-child {
+  stroke: #cfcaf0;
+}
+.topo-node-accent {
+  fill: var(--indigo);
+}
+.topo-node--offchain .topo-node-accent {
+  fill: #8b84f0;
+}
+.topo-node--spoke .topo-node-accent {
+  fill: #476ca9;
+}
+.topo-node--you .topo-node-accent {
+  fill: var(--ink);
+}
+.topo-node-title {
+  font-size: 15px;
+  font-weight: 600;
+  fill: var(--ink);
+}
+.topo-node-sub {
+  font-size: 13px;
+  fill: #7a7c8a;
+}
+.topo-status circle {
+  fill: #b9b9c2;
+}
+.topo-status circle.is-online {
+  fill: #6fa071;
+}
+.topo-status text {
+  font: 11.5px var(--mono);
+  fill: #8c8da0;
+}
+.topo-port {
+  fill: #fff;
+  stroke: #5b5e72;
+  stroke-width: 1.5;
+}
+.topo-edge {
+  fill: none;
+  stroke-width: 1.7;
+}
+.topo-edge--message {
+  stroke: #6d63f0;
+  stroke-dasharray: 6 5;
+  animation: topo-dash 1.2s linear infinite;
+}
+.topo-edge--call {
+  stroke: #5b5e72;
+}
+.topo-edge--price {
+  stroke: #568356;
+  stroke-dasharray: 2 4;
+  stroke-linecap: round;
+}
+.topo-edge--asset {
+  stroke: #ac7131;
+  stroke-width: 2;
+}
+.topo-arrow--message {
+  fill: #6d63f0;
+}
+.topo-arrow--call {
+  fill: #5b5e72;
+}
+.topo-arrow--price {
+  fill: #568356;
+}
+.topo-arrow--asset {
+  fill: #ac7131;
+}
+/* A halo in the canvas colour keeps labels legible where they sit near a line. */
+.topo-edge-label {
+  font: 11.5px var(--mono);
+  fill: #6c6e7c;
+  paint-order: stroke;
+  stroke: #fdfcf9;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+.topo-link,
+.topo-node,
+.topo-zone,
+.topo-port {
+  transition: opacity 0.3s;
+}
+.topo-svg .is-dim {
+  opacity: 0.2;
+}
+.topo-svg.is-journey .topo-edge-label {
+  display: none;
+}
+.topo-link.is-current .topo-edge {
+  stroke-width: 3;
+}
+.topo-badge circle {
+  fill: #fff;
+  stroke: var(--indigo);
+  stroke-width: 1.5;
+}
+.topo-badge text {
+  font: 600 11px var(--mono);
+  fill: var(--indigo);
+}
+.topo-badge.is-current circle {
+  fill: var(--indigo);
+}
+.topo-badge.is-current text {
+  fill: #fff;
+}
+.topo-runner {
+  fill: #c9f27c;
+  stroke: var(--indigo);
+  stroke-width: 2;
+}
+.topo-packet circle {
+  fill: var(--indigo);
+}
+.topo-packet .topo-packet-halo {
+  fill: rgba(109, 99, 240, 0.22);
+}
+.topo-scroll-hint {
+  display: none;
+  margin: 8px 2px 0;
+  font: 11.5px var(--mono);
+  color: #8c8da0;
+}
+.topo-steps {
+  margin-top: 12px;
+  border: 1px solid #e7e5de;
+  border-radius: 12px;
+  background: var(--panel);
+}
+.topo-steps-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 11px 14px;
+  border-bottom: 1px solid #efeee9;
 }
-.hub-network-badge {
-  font: 11px var(--mono);
-  color: #6762af;
-  background: #e3e1f8;
-  padding: 4px 6px;
-  border-radius: 3px;
+.topo-steps-head b {
+  font-size: 13.5px;
 }
-.hub-network-badge i {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
-  background: #83a675;
-  border-radius: 50%;
-  margin-right: 4px;
+.topo-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid #e1dfd8;
+  border-radius: 6px;
+  background: var(--white);
+  color: #4f5262;
+  font:
+    500 12px 'IBM Plex Sans',
+    sans-serif;
+  cursor: pointer;
 }
-.hub-vaults {
+.topo-steps ol {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  margin-top: 12px;
+  gap: 2px;
 }
-.hub-vault {
-  height: 42px;
-  background: #f9f8ff;
-  border: 1px solid #e5e3f3;
-  border-radius: 5px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 6px;
-  color: var(--indigo);
-}
-.hub-vault:nth-child(3) {
-  grid-column: span 2;
-}
-.hub-vault b,
-.hub-vault small {
-  display: block;
-}
-.hub-vault b {
-  font-size: 11.5px;
-  color: #535467;
-}
-.hub-vault small {
-  font-size: 11px;
-  color: #9999a7;
-  margin-top: 2px;
-}
-.hub-borrow-row {
-  height: 27px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 8px;
-  color: #797a88;
-  font-size: 11px;
-}
-.hub-borrow-row b {
-  color: #575a6c;
-  font: 11.5px var(--mono);
-  margin-left: auto;
-}
-.hub-borrow-row svg {
-  color: var(--indigo);
-}
-.topology-agent {
-  height: 116px;
-  background: #f7f6f1;
-  border: 1px dashed #d8d6d0;
+.topo-steps li button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 9px 8px;
+  border: 0;
   border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  z-index: 1;
+  background: transparent;
+  text-align: left;
+  font:
+    13px/1.5 'IBM Plex Sans',
+    sans-serif;
+  color: #4f5262;
+  cursor: pointer;
 }
-.agent-node {
-  width: 29px;
-  height: 29px;
-  border-radius: 8px;
-  background: #eeedf9;
-  color: var(--indigo);
+.topo-steps li button:hover {
+  background: #f4f3ee;
+}
+.topo-steps li.is-current button {
+  background: var(--indigo-light);
+  color: var(--ink);
+}
+.topo-step-n {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
   display: grid;
   place-items: center;
-  margin-bottom: 7px;
+  border: 1.5px solid var(--indigo);
+  color: var(--indigo);
+  font: 600 11px var(--mono);
 }
-.topology-agent b {
-  font-size: 12px;
-  margin-top: 5px;
+.topo-steps li.is-current .topo-step-n {
+  background: var(--indigo);
+  color: #fff;
 }
-.topology-agent small {
-  font-size: 11px;
-  line-height: 1.45;
-  color: #999aa2;
-  text-align: center;
+.topo-steps code {
+  display: block;
   margin-top: 3px;
+  font: 11.5px var(--mono);
+  color: #6c6e7c;
+  overflow-wrap: anywhere;
 }
-.topology-connector {
-  position: absolute;
-  z-index: 0;
-  border-top: 1px dashed #aaa6d0;
+.topo-facts {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
 }
-.topology-connector--agent {
-  right: calc(16% + 7px);
-  top: 48%;
-  width: 12%;
-  transform: rotate(-17deg);
+.topo-facts li {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f6f5f0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #686b7e;
 }
-.topology-connector--message {
-  left: 30%;
-  top: 49%;
-  width: 14%;
+.topo-facts b {
+  color: var(--ink);
+}
+@keyframes topo-dash {
+  to {
+    stroke-dashoffset: -22;
+  }
+}
+/* Edge labels would drop below a legible size once the diagram scales down; the journeys narrate instead. */
+@media (max-width: 1200px) {
+  .topo-edge-label {
+    display: none;
+  }
+}
+/* Phones: the diagram keeps a legible scale and scrolls sideways inside its frame. */
+@media (max-width: 860px) {
+  .topo-svg {
+    min-width: 860px;
+  }
+  .topo-canvas {
+    padding: 6px;
+  }
+  .topo-scroll-hint {
+    display: block;
+  }
+  .topo-facts {
+    grid-template-columns: 1fr;
+  }
 }
 .contract-map-list {
   margin-top: 16px;
@@ -3782,10 +3901,6 @@ tbody tr:last-child td {
   .stat-value-row strong {
     font-size: 21px;
   }
-  .topology {
-    grid-template-columns: 1fr 90px 1.25fr 100px;
-    gap: 6px;
-  }
   .contract-row {
     grid-template-columns: 25px 25px 132px 1fr 82px;
   }
@@ -3843,22 +3958,6 @@ tbody tr:last-child td {
   }
   .risk-metrics-grid {
     grid-template-columns: repeat(2, 1fr);
-  }
-  .topology {
-    grid-template-columns: 1fr 80px 1.2fr 90px;
-  }
-  .topology-spoke {
-    padding: 10px;
-  }
-  .topology-hub {
-    padding: 10px;
-  }
-  .hub-vault {
-    padding: 0 4px;
-    gap: 4px;
-  }
-  .hub-vault b {
-    font-size: 11px;
   }
 }
 @media (max-width: 680px) {
@@ -4244,112 +4343,6 @@ tbody tr:last-child td {
   .architecture-tabs button {
     flex: 1;
   }
-  .topology {
-    grid-template-columns: minmax(92px, 1fr) 56px minmax(145px, 1.25fr);
-    gap: 5px;
-    min-height: 270px;
-    padding: 18px 0;
-  }
-  .topology-spoke {
-    height: 166px;
-    padding: 8px;
-  }
-  .topology-label {
-    font-size: 11px;
-  }
-  .spoke-chain {
-    gap: 5px;
-    margin: 9px 0;
-  }
-  .spoke-chain b {
-    font-size: 11.5px;
-  }
-  .spoke-chain small {
-    font-size: 11px;
-  }
-  .spoke-assets span {
-    font-size: 11px;
-    padding: 4px;
-  }
-  .spoke-contract {
-    gap: 4px;
-  }
-  .spoke-contract b {
-    font-size: 11px;
-  }
-  .spoke-contract small {
-    font-size: 11px;
-  }
-  .spoke-capability {
-    font-size: 11px;
-  }
-  .topology-bridge {
-    font-size: 11px;
-  }
-  .bridge-wave {
-    width: 50px;
-  }
-  .topology-bridge small {
-    font-size: 11px;
-  }
-  .topology-hub {
-    height: 178px;
-    padding: 8px;
-  }
-  .hub-vaults {
-    gap: 4px;
-    margin-top: 9px;
-  }
-  .hub-vault {
-    height: 38px;
-    padding: 0 3px;
-    gap: 3px;
-  }
-  .hub-vault svg {
-    width: 13px;
-  }
-  .hub-vault b {
-    font-size: 11px;
-  }
-  .hub-vault small {
-    font-size: 11px;
-  }
-  .hub-borrow-row {
-    font-size: 11px;
-    gap: 2px;
-  }
-  .hub-borrow-row b {
-    font-size: 11px;
-  }
-  .topology-agent {
-    grid-column: 1/-1;
-    height: 62px;
-    flex-direction: row;
-    gap: 8px;
-    margin-top: 3px;
-    padding: 6px;
-  }
-  .agent-node {
-    margin: 0;
-    width: 26px;
-    height: 26px;
-  }
-  .topology-agent .topology-label {
-    margin-left: auto;
-  }
-  .topology-agent b {
-    font-size: 11.5px;
-    margin: 0;
-  }
-  .topology-agent small {
-    font-size: 11px;
-    text-align: left;
-    margin: 0;
-  }
-  .topology-connector--agent,
-  .topology-connector--message {
-    display: none;
-  }
   .architecture-notes {
     grid-template-columns: 1fr;
     gap: 7px;
@@ -4444,19 +4437,6 @@ tbody tr:last-child td {
   }
   .map-route > span {
     letter-spacing: 0;
-  }
-  .topology {
-    grid-template-columns: 88px 48px 1fr;
-    gap: 3px;
-  }
-  .topology-hub {
-    padding: 6px;
-  }
-  .hub-vault {
-    gap: 2px;
-  }
-  .hub-vault b {
-    font-size: 11px;
   }
   .market-yield-row strong {
     font-size: 15px;

@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { ArrowRight, ArrowUpRight, Blocks, Check, Code2, Coins, GitBranch, Layers3, Network, Radio, Shield, Waves } from 'lucide-react';
-import { ChainLogoStack } from '../components/Logos';
+import { Blocks, Code2, Network } from 'lucide-react';
+import { Topology } from '../components/Topology';
 import { AddressLink, InfoBar, PageTitle, SummaryStrip } from '../components/ui';
 import { HUB, SPOKES } from '../chain/env';
 import { useUi } from '../state/UiContext';
@@ -131,96 +131,8 @@ export function Architecture() {
         </div>
 
         {tab === 'flow' ? (
-          <div className="topology" role="tabpanel">
-            <div className="topology-spoke">
-              <div className="topology-label">EXTERNAL SPOKES</div>
-              <div className="spoke-chain">
-                <ChainLogoStack networks={SPOKES.map((s) => s.name)} />
-                <div>
-                  <b>{SPOKES.map((s) => s.label).join(' · ')}</b>
-                  <small>Collateral source</small>
-                </div>
-              </div>
-              <div className="spoke-assets">
-                <span>WETH</span>
-                <span>USDC</span>
-              </div>
-              <div className="spoke-contract">
-                <GitBranch size={14} />
-                <span>
-                  <b>SpokeGateway</b>
-                  <small>locks collateral · emits DEPOSIT</small>
-                </span>
-              </div>
-              <div className="spoke-capability">
-                <Check size={12} /> Principal stays on its chain
-              </div>
-            </div>
-            <div className="topology-bridge">
-              <div className="bridge-wave">
-                <Waves size={23} />
-                <span />
-                <span />
-                <span />
-              </div>
-              <div className="topology-bridge-label">WORMHOLE</div>
-              <small>
-                guardian-signed VAA
-                <br />
-                not a token bridge
-              </small>
-              <ArrowRight size={20} />
-            </div>
-            <div className="topology-hub">
-              <div className="hub-heading">
-                <div className="topology-label">MEZO HUB / CENTRAL MARKET</div>
-                <span className="hub-network-badge">
-                  <i /> MEZO
-                </span>
-              </div>
-              <div className="hub-vaults">
-                <div className="hub-vault">
-                  <Coins size={17} />
-                  <span>
-                    <b>MezodotPool</b>
-                    <small>liquidity & rates</small>
-                  </span>
-                </div>
-                <div className="hub-vault">
-                  <Shield size={17} />
-                  <span>
-                    <b>VaultManager</b>
-                    <small>state · LTV · health</small>
-                  </span>
-                </div>
-                <div className="hub-vault">
-                  <Layers3 size={17} />
-                  <span>
-                    <b>pMUSD / pMEZO</b>
-                    <small>ERC-4626 receipts</small>
-                  </span>
-                </div>
-              </div>
-              <div className="hub-borrow-row">
-                <span>Borrow from Hub</span>
-                <b>MUSD / MEZO → wallet</b>
-                <ArrowUpRight size={15} />
-              </div>
-            </div>
-            <div className="topology-agent">
-              <div className="agent-node">
-                <Radio size={17} />
-              </div>
-              <span className="topology-label">AGENT LAYER</span>
-              <b>KeeperGateway / MCP</b>
-              <small>
-                liquidation · relay
-                <br />
-                risk analytics
-              </small>
-            </div>
-            <div className="topology-connector topology-connector--agent" />
-            <div className="topology-connector topology-connector--message" />
+          <div role="tabpanel">
+            <Topology />
           </div>
         ) : (
           <div className="contract-map-list" role="tabpanel">
