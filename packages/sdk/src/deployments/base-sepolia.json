@@ -1,7 +1,15 @@
 {
+  "chainId": 84532,
+  "contracts": {
+    "spokeGateway": "0x34B74fC6537363d5934b705A806aC66bD828CDfb",
+    "wormhole": "0x79A1027a6A159502049F10906D333EC57E95F083"
+  },
   "network": "base-sepolia",
   "role": "spoke",
-  "chainId": 84532,
-  "wormholeChainId": 10004,
-  "contracts": null
+  "startBlock": 48259954,
+  "tokens": {
+    "USDC": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "WETH": "0x4200000000000000000000000000000000000006"
+  },
+  "wormholeChainId": 10004
 }
