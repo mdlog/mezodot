@@ -5,12 +5,13 @@ import { healthStatus, maxWithdrawableUnits, perSecondToAnnual, symbolForPriceKe
 import { HUB } from '../chain/env';
 import { borrowSteps, postCollateralSteps, repaySteps, supplySteps, withdrawCollateralSteps, withdrawSteps } from '../chain/actions';
 import { useTx } from '../chain/tx';
-import { useHubClient, useValuedPosition, useWalletBalances } from '../data/hooks';
+import { useHubClient, useProtocol, useValuedPosition, useWalletBalances } from '../data/hooks';
 import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { fmt, fmtApy, fmtHealth, money, units } from '../lib/format';
 import { useUi, type AmountModal } from '../state/UiContext';
 import { Modal } from './Modal';
 import { AmountInput, ConnectGate, PriceNotice } from './ui';
+import { TokenCollateralBody } from './TokenCollateralBody';
 
 const TITLES: Record<AmountModal['type'], string> = {
   supply: 'Supply',
@@ -27,10 +28,17 @@ const assetsFor = (m: MarketState, shares: bigint) => (shares * m.exchangeRate) 
 
 export function ActionModal() {
   const { modal, closeModal } = useUi();
+  const protocol = useProtocol().data;
   if (!modal) return null;
+  // Plain hub collateral (BTC) is posted in token units, without a pool behind it.
+  const plain = (modal.type === 'post' || modal.type === 'unpost') && protocol?.collaterals[modal.collateralId]?.isShare === false;
   return (
     <Modal id="action-modal" overline="MEZODOT / MEZO HUB" title={TITLES[modal.type]} onClose={closeModal}>
-      <ActionBody modal={modal} />
+      {plain && (modal.type === 'post' || modal.type === 'unpost') ? (
+        <TokenCollateralBody type={modal.type} collateralId={modal.collateralId} preset={modal.preset} />
+      ) : (
+        <ActionBody modal={modal} />
+      )}
     </Modal>
   );
 }

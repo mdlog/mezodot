@@ -1,6 +1,6 @@
 import { ArrowRight, Coins, LockKeyhole, Plus, TrendingUp } from 'lucide-react';
 import { useAccount } from 'wagmi';
-import { perSecondToAnnual, pTokenUnits } from '@mezodot/sdk';
+import { perSecondToAnnual, pTokenUnits, symbolForPriceKey } from '@mezodot/sdk';
 import { TokenLogo } from '../components/Logos';
 import { AddressLink, NotDeployed, PageTitle, SummaryStrip } from '../components/ui';
 import { HUB, HUB_DEPLOYED } from '../chain/env';
@@ -169,6 +169,85 @@ export function Markets() {
             </article>
           );
         })}
+        {/* Plain hub collateral (BTC): no pool and no interest, posted as the token itself. */}
+        {(protocol?.collaterals ?? [])
+          .filter((c) => !c.isRemote && !c.isShare)
+          .map((c) => {
+            const symbol = symbolForPriceKey(c.priceKey);
+            const price = symbol ? (prices?.[symbol] ?? 0) : 0;
+            const posted = position?.collateral.find((x) => x.id === c.id)?.balance ?? 0n;
+            const wallet = balances?.hub.tokens[c.symbol] ?? 0n;
+            return (
+              <article className="market-detail-card" key={`collateral-${c.id}`}>
+                <div className="market-detail-top">
+                  <div className="asset-cell">
+                    <TokenLogo symbol={c.symbol} size={31} />
+                    <span>
+                      <b>{c.symbol} collateral</b>
+                      <small>
+                        Held on the hub · {money(price, 0)} · <AddressLink network={HUB} address={c.token} />
+                      </small>
+                    </span>
+                  </div>
+                </div>
+                <div className="market-yield-row">
+                  <div>
+                    <span>MAX LTV</span>
+                    <strong>{c.ltvBps / 100}%</strong>
+                  </div>
+                  <div>
+                    <span>LIQUIDATION</span>
+                    <strong>{c.ltBps / 100}%</strong>
+                  </div>
+                  <div>
+                    <span>BONUS</span>
+                    <strong>{c.bonusBps / 100}%</strong>
+                  </div>
+                </div>
+                <div className="rate-box">
+                  <span>Mezo's native {c.symbol}, locked in VaultManager</span>
+                  <b>
+                    Total posted {fmt(units(c.total, c.decimals), 4)} {c.symbol}
+                  </b>
+                  <small>
+                    Earns no interest; borrow MUSD or MEZO against it, or take it to {Math.floor((1 / (1 - c.ltvBps / 10_000)) * 10) / 10}× on the Leverage
+                    desk.
+                  </small>
+                </div>
+                <div className="user-deposit">
+                  <span>In wallet</span>
+                  <strong>
+                    {fmt(units(wallet, c.decimals), 6)} <small>{c.symbol}</small>
+                  </strong>
+                  <span>Posted as collateral</span>
+                  <strong>
+                    {fmt(units(posted, c.decimals), 6)} <small>{c.symbol}</small>
+                  </strong>
+                </div>
+                <div className="market-actions">
+                  <button
+                    className="button button--dark"
+                    onClick={() => openModal({ type: 'post', collateralId: c.id })}
+                    disabled={isConnected && wallet === 0n}
+                  >
+                    Post {c.symbol}
+                  </button>
+                  <button
+                    className="button button--light"
+                    onClick={() => openModal({ type: 'unpost', collateralId: c.id })}
+                    disabled={isConnected && posted === 0n}
+                  >
+                    Remove
+                  </button>
+                </div>
+                <div className="market-actions">
+                  <button className="button button--outline" onClick={() => go('loop')}>
+                    Open a leveraged {c.symbol} position <ArrowRight size={13} />
+                  </button>
+                </div>
+              </article>
+            );
+          })}
       </div>
 
       {musd && (

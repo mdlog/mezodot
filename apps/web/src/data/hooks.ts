@@ -21,6 +21,7 @@ import {
   type PriceSymbol,
   type ProtocolState,
   type UsdPrices,
+  tigrisRouterAbi,
 } from '@mezodot/sdk';
 import { AGENT_URL, ENV_NAME, HUB, SPOKES } from '../chain/env';
 import { scanIncremental } from './incremental';
@@ -35,6 +36,7 @@ export const QK = {
   loopStats: ['loopStats'] as const,
   activity: (a?: Address) => ['activity', a] as const,
   agent: (path: string) => ['agent', path] as const,
+  tigrisQuote: (from?: Address, to?: Address, amount?: string) => ['tigrisQuote', from, to, amount] as const,
 };
 
 export const useHubClient = () => usePublicClient({ chainId: HUB.chain.id }) as PublicClient | undefined;
@@ -43,6 +45,31 @@ export const useHubClient = () => usePublicClient({ chainId: HUB.chain.id }) as 
 export function useSpokeClients(): (PublicClient | undefined)[] {
   const config = useConfig();
   return SPOKES.map((s) => getPublicClient(config, { chainId: s.chain.id }) as PublicClient | undefined);
+}
+
+/**
+ * Tigris DEX quote: output of swapping `amountIn` of `from` into `to` on the volatile pool the BTC leverage uses.
+ * Undefined until loaded or when Tigris is not configured.
+ */
+export function useTigrisQuote(from: Address | undefined, to: Address | undefined, amountIn: bigint) {
+  const client = useHubClient();
+  const router = HUB.deployment?.contracts.tigrisRouter;
+  const factory = HUB.deployment?.contracts.tigrisFactory;
+  return useQuery({
+    queryKey: QK.tigrisQuote(from, to, amountIn.toString()),
+    enabled: Boolean(client && router && factory && from && to && amountIn > 0n),
+    staleTime: 10_000,
+    refetchInterval: 15_000,
+    queryFn: async (): Promise<bigint> => {
+      const amounts = await client!.readContract({
+        address: router!,
+        abi: tigrisRouterAbi,
+        functionName: 'getAmountsOut',
+        args: [amountIn, [{ from: from!, to: to!, stable: false, factory: factory! }]],
+      });
+      return amounts[amounts.length - 1];
+    },
+  });
 }
 
 export function useProtocol() {
@@ -167,12 +194,14 @@ export function useWalletBalances() {
       const bal = (client: PublicClient, token: Address) =>
         client.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [address!] }).catch(() => 0n);
       const tokens: Record<string, bigint> = {};
-      await Promise.all(
-        protocol.data!.markets.flatMap((m) => [
+      await Promise.all([
+        ...protocol.data!.markets.flatMap((m) => [
           bal(hubClient!, m.asset).then((v) => (tokens[m.symbol] = v)),
           bal(hubClient!, m.pool).then((v) => (tokens[m.receiptSymbol] = v)),
         ]),
-      );
+        // Plain hub collateral (BTC) is held as the token itself.
+        ...protocol.data!.collaterals.filter((c) => !c.isRemote && !c.isShare).map((c) => bal(hubClient!, c.token).then((v) => (tokens[c.symbol] = v))),
+      ]);
       const native = await hubClient!.getBalance({ address: address! }).catch(() => 0n);
       const spokes: WalletBalances['spokes'] = {};
       await Promise.all(

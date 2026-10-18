@@ -124,8 +124,8 @@ function Hero({ onLaunch }: { onLaunch: () => void }) {
             Capital, <em>in motion.</em>
           </h1>
           <p className="lp-lead">
-            An omnichain money market on Mezo. Earn ERC-4626 yield on MUSD and MEZO, borrow against WETH and USDC that never leave Base or Ethereum, and loop to
-            3× in a single transaction.
+            An omnichain money market on Mezo. Earn ERC-4626 yield on MUSD and MEZO, borrow against BTC on Mezo or WETH and USDC that never leave Base or
+            Ethereum, and go long BTC up to 3× in a single transaction.
           </p>
           <div className="lp-cta-row">
             <button className="lp-button lp-button--primary" onClick={onLaunch}>
@@ -293,8 +293,8 @@ function Product() {
             <FeatureCopy
               icon={RefreshCw}
               kicker="ONE-TRANSACTION LEVERAGE"
-              title="Loop to 3× instead of signing six times"
-              body="A flash loan funds the extra supply and the borrow repays it, inside one LeverageManager call, priced with the pool's own fee and collateral terms."
+              title="Long BTC up to 3×, or loop MUSD, in one signature"
+              body="A flash loan from the MUSD pool buys BTC on Mezo's Tigris DEX (or adds pMUSD supply), the position is posted, and the borrow repays the loan, all in one call priced with the pool's own fee and collateral terms."
             />
             <div className="lp-feature-visual">
               <LoopDiagram plan={prdLoopPlan(protocol?.collaterals)} />

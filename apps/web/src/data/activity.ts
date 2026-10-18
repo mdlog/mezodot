@@ -1,7 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
 import { useAccount } from 'wagmi';
 import type { Address, Hex, PublicClient } from 'viem';
-import { leverageManagerAbi, pTokenAbi, spokeGatewayAbi, vaultManagerAbi, type BlockRange, type NetworkName, type ProtocolState } from '@mezodot/sdk';
+import {
+  leverageManagerAbi,
+  pTokenAbi,
+  spokeGatewayAbi,
+  swapLeverageManagerAbi,
+  vaultManagerAbi,
+  type BlockRange,
+  type NetworkName,
+  type ProtocolState,
+} from '@mezodot/sdk';
 import { HUB, SPOKES } from '../chain/env';
 import { QK, useHubClient, useProtocol, useSpokeClients } from './hooks';
 import { scanIncremental, spokeHistoryStart } from './incremental';
@@ -43,7 +52,8 @@ async function hubActivity(client: PublicClient, protocol: ProtocolState, accoun
   const collat = (id: bigint) => protocol.collaterals[Number(id)];
   const market = (id: bigint) => protocol.markets[Number(id)];
 
-  const [poolDeposits, poolWithdraws, cIn, cOut, credited, releases, borrows, repays, loops, unwinds, liqs] = await Promise.all([
+  const slm = dep.contracts.swapLeverageManager;
+  const [poolDeposits, poolWithdraws, cIn, cOut, credited, releases, borrows, repays, loops, unwinds, liqs, opened, closed] = await Promise.all([
     Promise.all(
       protocol.markets.map((m) =>
         client
@@ -67,6 +77,8 @@ async function hubActivity(client: PublicClient, protocol: ProtocolState, accoun
     client.getContractEvents({ address: dep.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Looped', args: { account }, ...range }),
     client.getContractEvents({ address: dep.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Unwound', args: { account }, ...range }),
     client.getContractEvents({ address: vm, abi: vaultManagerAbi, eventName: 'Liquidated', args: { account }, ...range }),
+    slm ? client.getContractEvents({ address: slm, abi: swapLeverageManagerAbi, eventName: 'Opened', args: { account }, ...range }) : Promise.resolve([]),
+    slm ? client.getContractEvents({ address: slm, abi: swapLeverageManagerAbi, eventName: 'Closed', args: { account }, ...range }) : Promise.resolve([]),
   ]);
 
   for (const { x, m } of poolDeposits.flat())
@@ -175,6 +187,30 @@ async function hubActivity(client: PublicClient, protocol: ProtocolState, accoun
       amount: x.args.out!,
       decimals: 18,
       detail: 'Loop closed, equity returned',
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
+  for (const x of opened) {
+    const principal = Number(x.args.principal!);
+    push({
+      kind: 'Loop',
+      asset: 'BTC',
+      amount: x.args.principal!,
+      decimals: 18,
+      detail: `${principal > 0 ? ((principal + Number(x.args.bought!)) / principal).toFixed(2) : '—'}× BTC via Tigris · debt ${(Number(x.args.debt!) / 1e18).toFixed(2)} MUSD`,
+      txHash: x.transactionHash,
+      blockNumber: x.blockNumber,
+      logIndex: x.logIndex,
+    });
+  }
+  for (const x of closed)
+    push({
+      kind: 'Unwind',
+      asset: 'BTC',
+      amount: x.args.collateralOut!,
+      decimals: 18,
+      detail: `BTC leverage closed · repaid ${(Number(x.args.repaid!) / 1e18).toFixed(2)} MUSD, sold ${(Number(x.args.sold!) / 1e18).toFixed(6)} BTC`,
       txHash: x.transactionHash,
       blockNumber: x.blockNumber,
       logIndex: x.logIndex,

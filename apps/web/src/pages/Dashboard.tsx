@@ -77,6 +77,32 @@ export function Dashboard() {
         />
       </div>
 
+      {protocol && (
+        <div className="revenue-strip" aria-label="Protocol revenue">
+          <span className="revenue-title">PROTOCOL REVENUE</span>
+          <span>
+            Reserves{' '}
+            <b>
+              {money(
+                protocol.markets.reduce((sum, m) => sum + units(m.totalReserves, m.decimals) * (prices?.prices[m.symbol as 'MUSD' | 'MEZO'] ?? 0), 0),
+                2,
+              )}
+            </b>
+          </span>
+          {protocol.markets.map((m) => (
+            <span key={m.id}>
+              {m.symbol} reserve factor <b>{pct(Number(m.reserveFactor) / 1e18, 0)}</b>
+            </span>
+          ))}
+          <span>
+            Flash fee <b>0.09%</b>
+          </span>
+          <span>
+            Liquidation fee <b>{pct(protocol.liquidationFeeBps / 10_000, 0)} of the bonus</b>
+          </span>
+        </div>
+      )}
+
       <div className="feature-grid">
         <article className="feature-card feature-card--loop">
           <div className="feature-copy">

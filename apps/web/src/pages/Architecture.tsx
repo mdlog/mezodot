@@ -59,6 +59,22 @@ function contractRows(): Row[] {
       network: HUB,
     },
     {
+      name: 'SwapLeverageManager.sol',
+      role: 'BTC leverage',
+      description: 'One-transaction BTC long: flash-borrow MUSD, swap it on Tigris, post the BTC, borrow back; close reverses it.',
+      location: 'Mezo Hub',
+      address: c?.swapLeverageManager,
+      network: HUB,
+    },
+    {
+      name: 'Tigris Router (Mezo DEX)',
+      role: 'External · swaps',
+      description: "Mezo's DEX router; SwapLeverageManager and the keeper swap MUSD ↔ BTC on its volatile pool.",
+      location: 'Mezo Hub',
+      address: c?.tigrisRouter,
+      network: HUB,
+    },
+    {
       name: 'KeeperGateway.sol',
       role: 'Agent layer',
       description: 'Permissionless liquidations and relays; keeper KPI.',

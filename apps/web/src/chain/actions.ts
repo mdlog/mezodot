@@ -4,11 +4,13 @@ import {
   keeperGatewayAbi,
   leverageManagerAbi,
   oracleRouterAbi,
+  PRICE_SYMBOLS,
   pTokenAbi,
   readOracle,
   riskCheckSymbols,
   spokeGatewayAbi,
   staleSymbols,
+  swapLeverageManagerAbi,
   symbolForPriceKey,
   toBytes32,
   vaultManagerAbi,
@@ -277,6 +279,70 @@ export const unwindSteps = ({ hub, protocol, position }: Ctx, minOut: bigint): T
         abi: leverageManagerAbi,
         functionName: 'unwind',
         args: [maxUint256, maxUint256, minOut, updates],
+        value: fee,
+      };
+    },
+  },
+];
+
+// --- BTC leverage (SwapLeverageManager on the Tigris DEX) --------------------------------
+
+/** DEX legs expire, so a transaction signed late cannot fill at a stale quote. */
+const swapDeadline = () => BigInt(Math.floor(Date.now() / 1000) + 20 * 60);
+const swapLeverageManager = () => {
+  const slm = d().contracts.swapLeverageManager;
+  if (!slm) throw new Error('BTC leverage is not deployed on this network');
+  return slm;
+};
+
+/** Opens a BTC position at `borrowAmount` MUSD of leverage; the BTC leg is priced even before it is held. */
+export const btcLeverageSteps = (
+  { account, hub, protocol, position }: Ctx,
+  btc: CollateralState,
+  principal: bigint,
+  borrowAmount: bigint,
+  minBought: bigint,
+  isOperator: boolean,
+): TxStep[] => [
+  {
+    label: 'Authorise SwapLeverageManager',
+    chainId: hubId,
+    request: async () =>
+      isOperator ? null : { address: d().contracts.vaultManager, abi: vaultManagerAbi, functionName: 'setOperator', args: [swapLeverageManager(), true] },
+  },
+  approveStep(hub, hubId, btc.token, account, swapLeverageManager(), principal, 'Approve BTC'),
+  {
+    label: 'Open BTC leverage',
+    chainId: hubId,
+    request: async () => {
+      const symbols = riskCheckSymbols(protocol, position, 'MUSD');
+      const { updates, fee } = await priceUpdate(
+        hub,
+        PRICE_SYMBOLS.filter((s) => s === 'BTC' || symbols.includes(s)),
+      );
+      return {
+        address: swapLeverageManager(),
+        abi: swapLeverageManagerAbi,
+        functionName: 'open',
+        args: [principal, borrowAmount, minBought, swapDeadline(), updates],
+        value: fee,
+      };
+    },
+  },
+];
+
+/** Repays all MUSD debt with a flash loan, withdraws all BTC, sells `sellBtc` of it and returns the rest. */
+export const btcCloseSteps = ({ hub, protocol, position }: Ctx, sellBtc: bigint, minProceeds: bigint): TxStep[] => [
+  {
+    label: 'Close BTC leverage',
+    chainId: hubId,
+    request: async () => {
+      const { updates, fee } = await priceUpdate(hub, riskCheckSymbols(protocol, position));
+      return {
+        address: swapLeverageManager(),
+        abi: swapLeverageManagerAbi,
+        functionName: 'close',
+        args: [maxUint256, maxUint256, sellBtc, minProceeds, swapDeadline(), updates],
         value: fee,
       };
     },

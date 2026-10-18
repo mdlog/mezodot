@@ -571,6 +571,29 @@ button:disabled {
   margin: 0;
   background: #7dae75;
 }
+/* Protocol revenue line under the overview stats (pages/Dashboard.tsx). */
+.revenue-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+  margin: -4px 0 14px;
+  padding: 9px 14px;
+  border: 1px solid #e1dfd8;
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 12.5px;
+  color: #6c6e7c;
+}
+.revenue-strip b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.revenue-title {
+  font: 11.5px var(--mono);
+  letter-spacing: 1px;
+  color: var(--indigo);
+}
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2377,6 +2400,52 @@ tbody tr:last-child td {
   color: #9b9ca4;
 }
 /* Loop */
+/* Leverage desk: product switch (pages/Loop.tsx). */
+.leverage-modes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.leverage-modes button {
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px;
+  border: 1px solid #e1dfd8;
+  border-radius: 10px;
+  background: var(--panel);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.16s,
+    background 0.16s;
+}
+.leverage-modes button b {
+  font-size: 14px;
+}
+.leverage-modes button small {
+  font-size: 12px;
+  color: #8c8da0;
+}
+.leverage-modes button.is-active {
+  border-color: var(--indigo);
+  background: var(--indigo-light);
+}
+.loop-verdict {
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.loop-verdict.is-better {
+  background: var(--green-light);
+  color: var(--green);
+}
+.loop-verdict.is-worse {
+  background: var(--amber-light);
+  color: #7a5a35;
+}
 .loop-layout {
   display: grid;
   grid-template-columns: minmax(355px, 0.92fr) minmax(420px, 1.08fr);
@@ -3148,6 +3217,12 @@ tbody tr:last-child td {
 }
 .topo-node--you .topo-node-accent {
   fill: var(--ink);
+}
+.topo-node--dex .topo-node-accent {
+  fill: #ac7131;
+}
+.topo-node--dex > rect:first-child {
+  stroke-dasharray: 4 3;
 }
 .topo-node-title {
   font-size: 15px;

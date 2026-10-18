@@ -13,9 +13,9 @@ import { ChainLogo } from './Logos';
  * Geometry is in viewBox units (980 × 556); every name below exists in contracts/ or services/agent.
  */
 
-type NodeId = 'agent' | 'supra' | 'spoke' | 'guardians' | 'keeper' | 'vault' | 'oracle' | 'adapter' | 'pools' | 'leverage' | 'wallet' | 'hub';
+type NodeId = 'agent' | 'supra' | 'spoke' | 'guardians' | 'keeper' | 'vault' | 'oracle' | 'adapter' | 'pools' | 'leverage' | 'tigris' | 'wallet' | 'hub';
 type Kind = 'message' | 'call' | 'price' | 'asset';
-type Box = { x: number; y: number; w: number; h: number; title: string; sub: string; zone: 'offchain' | 'spoke' | 'hub' | 'you' };
+type Box = { x: number; y: number; w: number; h: number; title: string; sub: string; zone: 'offchain' | 'spoke' | 'hub' | 'dex' | 'you' };
 
 const BOXES: Partial<Record<NodeId, Box>> = {
   agent: { x: 300, y: 38, w: 400, h: 50, title: 'Mezodot agent', sub: 'relayer · liquidator · oracle relay · MCP', zone: 'offchain' },
@@ -26,7 +26,10 @@ const BOXES: Partial<Record<NodeId, Box>> = {
   oracle: { x: 786, y: 170, w: 150, h: 64, title: 'OracleRouter', sub: 'Pyth · Supra', zone: 'hub' },
   adapter: { x: 426, y: 300, w: 150, h: 64, title: 'WormholeAdapter', sub: 'verifies VAAs', zone: 'hub' },
   pools: { x: 606, y: 300, w: 150, h: 64, title: 'MezodotPool', sub: 'pMUSD · pMEZO', zone: 'hub' },
-  leverage: { x: 786, y: 300, w: 150, h: 64, title: 'LeverageManager', sub: 'flash-loan loop', zone: 'hub' },
+  // LeverageManager (MUSD loop) and SwapLeverageManager (BTC long), both on the MUSD pool's flash loan.
+  leverage: { x: 786, y: 300, w: 150, h: 64, title: 'Leverage', sub: 'MUSD loop · BTC long', zone: 'hub' },
+  // Mezo's own DEX, not a Mezodot contract: the BTC leverage swaps MUSD ↔ BTC on its volatile pool.
+  tigris: { x: 786, y: 384, w: 150, h: 48, title: 'Tigris DEX', sub: 'MUSD/BTC pool', zone: 'dex' },
   wallet: { x: 380, y: 486, w: 380, h: 52, title: 'Your wallet', sub: 'one address on Mezo, Base and Ethereum', zone: 'you' },
 };
 const RING = { x: 316, y: 333, r: 26 };
@@ -211,6 +214,16 @@ const EDGES = {
       [756, 344],
     ],
   },
+  leverageTigris: {
+    from: 'leverage',
+    to: 'tigris',
+    kind: 'asset',
+    both: true,
+    points: [
+      [861, 364],
+      [861, 384],
+    ],
+  },
   walletHub: {
     from: 'wallet',
     to: 'hub',
@@ -267,6 +280,25 @@ const JOURNEYS: { id: string; label: string; steps: Step[] }[] = [
       },
       { edge: 'leverageVault', text: 'The pMUSD is posted for you and MUSD is borrowed against it.', fn: 'VaultManager.depositCollateralFor · borrowFor' },
       { edge: 'vaultPools', text: 'That borrow repays the flash loan, all inside the same transaction.', fn: 'flash loan repaid' },
+    ],
+  },
+  {
+    id: 'btc',
+    label: 'BTC leverage',
+    steps: [
+      {
+        edge: 'walletHub',
+        text: 'Your BTC goes in with a target leverage and a minimum for the swap.',
+        fn: 'SwapLeverageManager.open(principal, borrow, minBought, …)',
+      },
+      { edge: 'leveragePools', text: 'The MUSD pool flash-lends the MUSD to buy with (0.09% fee).', fn: 'MezodotPool.flashLoan(...)' },
+      { edge: 'leverageTigris', text: 'The MUSD is swapped for BTC on Tigris, never below your minimum.', fn: 'Router.swapExactTokensForTokens(...)' },
+      {
+        edge: 'leverageVault',
+        text: 'Your BTC plus the bought BTC is posted, and MUSD is borrowed against it.',
+        fn: 'VaultManager.depositCollateralFor · borrowFor',
+      },
+      { edge: 'vaultPools', text: 'That borrow repays the flash loan, all in the same transaction.', fn: 'flash loan repaid' },
     ],
   },
   {
@@ -500,7 +532,7 @@ export function Topology() {
           })}
           <circle className={`topo-port${dimNode('hub') ? ' is-dim' : ''}`} cx={PORT[0]} cy={PORT[1]} r={4.5} />
 
-          {(['agent', 'supra', 'spoke', 'keeper', 'vault', 'oracle', 'adapter', 'pools', 'leverage', 'wallet'] as const).map((id) => (
+          {(['agent', 'supra', 'spoke', 'keeper', 'vault', 'oracle', 'adapter', 'pools', 'leverage', 'tigris', 'wallet'] as const).map((id) => (
             <NodeBox key={id} id={id} dim={dimNode(id)} />
           ))}
           <g className="topo-status" aria-label={health?.ok ? 'agent online' : 'agent offline'}>

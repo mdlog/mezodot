@@ -3,16 +3,61 @@ import { ArrowRight, Check, Shield, Sparkles, TriangleAlert, Undo2, Zap } from '
 import { useAccount } from 'wagmi';
 import { healthStatus, perSecondToAnnual, planLoop } from '@mezodot/sdk';
 import { AmountInput, ConnectGate, NotDeployed, PageTitle, PanelTitle, SummaryStrip } from '../components/ui';
-import { HUB_DEPLOYED } from '../chain/env';
+import { HUB, HUB_DEPLOYED } from '../chain/env';
 import { loopSteps, unwindSteps } from '../chain/actions';
 import { useTx } from '../chain/tx';
 import { useHubClient, useValuedPosition, useWalletBalances } from '../data/hooks';
 import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { fmt, fmtApy, fmtHealth, money, pct, units } from '../lib/format';
+import { BtcLeverage } from './BtcLeverage';
 
 const LEVERAGE_OPTIONS = [1.5, 2, 2.5, 3, 3.5, 4];
 
+type Mode = 'btc' | 'musd';
+
 export function Loop() {
+  const [mode, setMode] = useState<Mode>(HUB.deployment?.contracts.swapLeverageManager ? 'btc' : 'musd');
+  return (
+    <>
+      <PageTitle
+        eyebrow="CAPITAL / 04"
+        title="Leverage desk."
+        subtitle="One-transaction positions on the Mezo Hub, built on the MUSD pool's flash loan: a leveraged BTC long through the Tigris DEX, or a pMUSD supply loop. VaultManager enforces the LTV, so an unsafe position simply reverts."
+        right={
+          <span className="security-pill">
+            <Shield size={14} /> ATOMIC FLASH-LOAN ROUTE
+          </span>
+        }
+      />
+      <SummaryStrip
+        snapshot={
+          <>
+            {mode === 'btc' ? 'SWAPLEVERAGEMANAGER · TIGRIS MUSD/BTC' : 'LEVERAGEMANAGER · pMUSD LOOP'} <i>/</i> ERC-3156 FLASH LOAN · 0.09% FEE
+          </>
+        }
+        time="One transaction"
+        icon={Zap}
+      />
+      {!HUB_DEPLOYED && <NotDeployed />}
+      <div className="leverage-modes" role="tablist" aria-label="Leverage product">
+        {(
+          [
+            ['btc', 'BTC leverage', 'Long BTC up to ~3× against MUSD debt'],
+            ['musd', 'MUSD loop', 'Multiply a pMUSD supply position'],
+          ] as const
+        ).map(([key, label, hint]) => (
+          <button key={key} role="tab" aria-selected={mode === key} className={mode === key ? 'is-active' : ''} onClick={() => setMode(key)}>
+            <b>{label}</b>
+            <small>{hint}</small>
+          </button>
+        ))}
+      </div>
+      {mode === 'btc' ? <BtcLeverage /> : <MusdLoop />}
+    </>
+  );
+}
+
+function MusdLoop() {
   const { address, isConnected } = useAccount();
   const hub = useHubClient();
   const { run, busy } = useTx();
@@ -63,27 +108,6 @@ export function Loop() {
 
   return (
     <>
-      <PageTitle
-        eyebrow="CAPITAL / 04"
-        title="Loop desk."
-        subtitle="LeverageManager opens a leveraged pMUSD position in one transaction: flash borrow → supply → borrow → repay. VaultManager enforces the LTV, so an unsafe loop simply reverts."
-        right={
-          <span className="security-pill">
-            <Shield size={14} /> ATOMIC FLASH-LOAN ROUTE
-          </span>
-        }
-      />
-      <SummaryStrip
-        snapshot={
-          <>
-            LEVERAGEMANAGER <i>/</i> ERC-3156 FLASH LOAN · 0.09% FEE
-          </>
-        }
-        time="One transaction"
-        icon={Zap}
-      />
-      {!HUB_DEPLOYED && <NotDeployed />}
-
       <div className="loop-layout">
         <section className="panel loop-config-panel">
           <PanelTitle label="Configure your position" meta="MUSD → pMUSD loop" />
@@ -193,7 +217,16 @@ export function Loop() {
                 <span>Net APY on equity</span>
                 <b className={plan.netApy >= 0 ? 'positive-text' : 'tone-danger'}>{fmtApy(plan.netApy)}</b>
               </div>
+              <div>
+                <span>Plain supply, no loop</span>
+                <b className="positive-text">{fmtApy(supplyApy)}</b>
+              </div>
             </div>
+            <p className={`loop-verdict ${plan.netApy >= supplyApy ? 'is-better' : 'is-worse'}`}>
+              {plan.netApy >= supplyApy
+                ? `The loop earns ${fmtApy(plan.netApy - supplyApy)} more than plain supply at current rates.`
+                : `The loop earns ${fmtApy(supplyApy - plan.netApy)} less than simply supplying: each borrowed MUSD costs ${fmtApy(borrowApy)} and earns back only ${fmtApy(supplyApy)}. Loop only for incentives paid on supplied MUSD.`}
+            </p>
             <div className="projection-foot">
               <TriangleAlert size={14} />
               <span>
