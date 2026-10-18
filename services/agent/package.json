@@ -7,8 +7,8 @@
     "mezodot-mcp": "./bin/mcp-stdio.mjs"
   },
   "scripts": {
-    "start": "tsx src/index.ts",
-    "mcp": "tsx src/mcp/stdio.ts",
+    "start": "tsx --env-file-if-exists=.env src/index.ts",
+    "mcp": "tsx --env-file-if-exists=.env src/mcp/stdio.ts",
     "test": "vitest run",
     "check": "tsc --noEmit && vitest run",
     "devnet:e2e": "tsx scripts/devnet-e2e.ts"

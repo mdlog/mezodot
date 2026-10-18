@@ -28,7 +28,7 @@ ctx.log('agent', 'starting', {
   env: config.env,
   modules: [...config.modules],
   keeper: ctx.hub.wallet?.account.address ?? 'read-only',
-  pythPusher: config.pythApiKey ? 'on' : 'off',
+  pythPusher: config.pythApiKey && config.env !== 'devnet' ? 'on' : 'off',
 });
 
 if (config.modules.has('http')) startHttp(services);
@@ -37,5 +37,5 @@ if (config.modules.has('liquidator')) every(config.pollMs * 2, 'liquidator', () 
 if (config.modules.has('risk')) every(30 * 60_000, 'risk', () => services.risk.refresh(), ctx.log);
 if (config.modules.has('oracle')) {
   every(config.oracleWatchMs, 'oracle', () => services.watchdog.check(), ctx.log);
-  if (config.pythApiKey) every(config.oracleWatchMs, 'pyth-pusher', () => services.pusher.tick(), ctx.log);
+  if (config.pythApiKey && config.env !== 'devnet') every(config.oracleWatchMs, 'pyth-pusher', () => services.pusher.tick(), ctx.log);
 }

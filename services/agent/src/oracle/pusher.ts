@@ -35,7 +35,8 @@ export class PythPusher {
   async tick(): Promise<{ pushed: PriceSymbol[]; txHash: Hex | null }> {
     const { pythApiKey, hermesUrl } = this.ctx.config;
     const { client, wallet, deployment } = this.ctx.hub;
-    if (!pythApiKey || !wallet) return { pushed: [], txHash: null };
+    // The devnet's MockPyth only accepts its own encoding, not real Hermes payloads.
+    if (!pythApiKey || !wallet || this.ctx.config.env === 'devnet') return { pushed: [], txHash: null };
     const oracle = await this.relay.oracle();
     const plan = pythPushPlan(oracle, Math.floor(this.now() / 1000));
     if (plan.length === 0) return { pushed: [], txHash: null };

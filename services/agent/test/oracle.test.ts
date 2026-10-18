@@ -198,3 +198,24 @@ describe('Pyth pusher plan (only with PYTH_API_KEY)', () => {
     expect(pythPushPlan(oracle, now)).toEqual(['MEZO', 'ETH']);
   });
 });
+
+describe('Pyth pusher environment', () => {
+  it('never runs on the devnet: MockPyth cannot parse real Hermes payloads', async () => {
+    const { PythPusher } = await import('../src/oracle/pusher');
+    let fetched = 0;
+    const fetchImpl = (async () => (fetched++, new Response('{}'))) as unknown as typeof fetch;
+    const ctx = {
+      config: { env: 'devnet', pythApiKey: 'test-key', hermesUrl: 'http://hermes.test' },
+      hub: { wallet: { account: { address: '0x00000000000000000000000000000000000000ee' } }, client: {}, deployment: { contracts: {} } },
+      log: () => {},
+    };
+    const relay = {
+      oracle: async () => {
+        throw new Error('must not read the router on the devnet');
+      },
+    };
+    const pusher = new PythPusher(ctx as never, relay as never, fetchImpl);
+    expect(await pusher.tick()).toEqual({ pushed: [], txHash: null });
+    expect(fetched).toBe(0);
+  });
+});
