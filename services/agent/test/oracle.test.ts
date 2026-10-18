@@ -12,6 +12,7 @@ const PYTH_ID: Record<PriceSymbol, Hex> = {
   MEZO: '0x80beaaedbdd228e77c5d62dfcd74b0305674b7e27a5cc6a46e71bd3a696826df',
   ETH: '0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace',
   USDC: '0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a',
+  BTC: '0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43',
 };
 const NO_LEG = { source: 0, maxAge: 0, id: `0x${'0'.repeat(64)}` as Hex };
 const pair = (n: number) => `0x${n.toString(16).padStart(64, '0')}` as Hex;
@@ -23,6 +24,7 @@ const FEEDS: Record<PriceSymbol, { primary: typeof NO_LEG; secondary: typeof NO_
   MEZO: { primary: { source: 1, maxAge: 3_900, id: PYTH_ID.MEZO }, secondary: NO_LEG },
   ETH: { primary: { source: 1, maxAge: 120, id: PYTH_ID.ETH }, secondary: { source: 2, maxAge: 120, id: pair(19) } },
   USDC: { primary: { source: 1, maxAge: 3_900, id: PYTH_ID.USDC }, secondary: { source: 2, maxAge: 120, id: pair(89) } },
+  BTC: { primary: { source: 1, maxAge: 3_900, id: PYTH_ID.BTC }, secondary: { source: 2, maxAge: 120, id: pair(18) } },
 };
 
 /** Fake hub client: router reads, MockSupraPull-style proof verification, latest block time. */
@@ -67,12 +69,12 @@ describe('OracleRelay', () => {
     const u = await relay.update(['MEZO', 'ETH']);
     expect(u.missing).toEqual([]);
     expect(u.updates).toHaveLength(2);
-    // Supra proof first, covering every Supra pair (ETH 19, USDC 89), stamped at the later of chain and wall time.
+    // Supra proof first, covering every Supra pair (ETH 19, USDC 89, BTC 18), stamped at the later of chain and wall time.
     expect(sliceHex(u.updates[0], 0, 1)).toBe('0x02');
     const [pairs, prices, timestamps] = decodeAbiParameters([ARR, ARR, ARR, ARR], sliceHex(u.updates[0], 1));
-    expect(pairs).toEqual([19n, 89n]);
-    expect(prices).toEqual([320_000_000_000n, 100_000_000n]);
-    expect(timestamps).toEqual([1_792_263_654_000n, 1_792_263_654_000n]);
+    expect(pairs).toEqual([19n, 89n, 18n]);
+    expect(prices).toEqual([320_000_000_000n, 100_000_000n, 8_000_000_000_000n]);
+    expect(timestamps).toEqual([1_792_263_654_000n, 1_792_263_654_000n, 1_792_263_654_000n]);
     expect(u.prices.ETH).toEqual({ price: 3_200, publishTime: 1_792_263_654, source: 'supra' });
     expect(u.prices.USDC).toBeUndefined(); // not requested
     // MockPyth payload for MEZO, tagged PYTH, with a realistic confidence interval.
@@ -105,7 +107,7 @@ describe('OracleRelay', () => {
     let now = 1_792_263_658_000;
     const relay = new OracleRelay(ctxFor('testnet', fakeClient(1_792_263_658n, calls)), fetchImpl, () => now);
     const u = await relay.update(['MUSD', 'ETH', 'USDC']);
-    expect(bodies).toEqual([{ pair_indexes: [19, 89], chain_type: 'evm' }]);
+    expect(bodies).toEqual([{ pair_indexes: [19, 89, 18], chain_type: 'evm' }]);
     expect(calls).toEqual(['verifyOracleProofV2']);
     expect(u.updates).toEqual([`0x02${proof.slice(2)}`]);
     expect(u.prices.ETH?.price).toBeCloseTo(2_412.98, 9);
@@ -156,6 +158,7 @@ describe('oracle health', () => {
       MEZO: status('MEZO', { ok: true, price: 3n * 10n ** 15n, validUntil: 10_000 + 500, lastPrice: 3n * 10n ** 15n, publishTime: 10_000 - 3_400 }),
       ETH: status('ETH', { feed: { primary: { source: 1, maxAge: 120, id: PYTH_ID.ETH }, secondary: supra, maxConfBps: 200, maxDivergenceBps: 150 } }),
       USDC: status('USDC', { lastPrice: 10n ** 18n, publishTime: 10_000 - 4_000 }),
+      BTC: status('BTC', { ok: true, price: 80_000n * 10n ** 18n, validUntil: 10_000 + 3_000, lastPrice: 80_000n * 10n ** 18n, publishTime: 10_000 - 900 }),
     };
     const h = oracleHealth(oracle, 10_000, (s) => s === 'ETH');
     expect(h.feeds.map((f) => [f.symbol, f.status])).toEqual([
@@ -163,6 +166,7 @@ describe('oracle health', () => {
       ['MEZO', 'expiring'], // 500 s left of a 3,900 s window (< 20%)
       ['ETH', 'on-demand'], // pull feed: fresh only when a proof is attached
       ['USDC', 'unavailable'], // push feed past its max age and nobody can refresh it
+      ['BTC', 'ok'],
     ]);
     expect(h.feeds[0]).toMatchObject({ price: 1, ageSec: 900, validForSec: 3_000, sources: ['pyth 3900s'] });
     expect(h.feeds[2].sources).toEqual(['pyth 120s', 'supra#19 120s']);
@@ -190,6 +194,7 @@ describe('Pyth pusher plan (only with PYTH_API_KEY)', () => {
       MEZO: status('MEZO', 3_900, { validUntil: now + 800 }), // 3,100 s ago: self-heal
       ETH: status('ETH', 120, { ok: false }), // never pushed
       USDC: status('USDC', 3_900, { feed: null }), // not configured
+      BTC: status('BTC', 3_900, { feed: null }),
     };
     expect(pythPushPlan(oracle, now)).toEqual(['MEZO', 'ETH']);
     oracle.ETH = status('ETH', 120, { validUntil: now + 70 });
@@ -242,6 +247,7 @@ describe('Pyth pusher entitlements (a real key: ETH/USDC entitled, MUSD/MEZO 403
       MEZO: status('MEZO', 3_900, { validUntil: nowSec() + 800 }), // Mezo's pusher is late: plan includes MEZO
       ETH: status('ETH', 120, { ok: false }),
       USDC: status('USDC', 3_900, { validUntil: nowSec() + 3_000 }),
+      BTC: status('BTC', 3_900, { validUntil: nowSec() + 3_000 }),
     });
     const requested: string[] = [];
     const fetchImpl = (async (url: string) => {

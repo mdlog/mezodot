@@ -53,7 +53,7 @@ export type RiskReport = {
 
 export const DSR_THRESHOLD = 0.95;
 const LEVERAGE_GRID = [1.5, 2, 2.5, 3, 3.5, 4];
-const COINGECKO_IDS: Record<PriceSymbol, string> = { ETH: 'ethereum', MEZO: 'mezo', MUSD: 'mezo-usd', USDC: 'usd-coin' };
+const COINGECKO_IDS: Record<PriceSymbol, string> = { ETH: 'ethereum', MEZO: 'mezo', MUSD: 'mezo-usd', USDC: 'usd-coin', BTC: 'bitcoin' };
 
 /** Highest LTV whose buffer to the liquidation threshold survives a VaR99 move: LT × (1 − VaR). */
 export const recommendLtv = (lt: number, var99: number): number => Math.max(0, lt * (1 - var99));

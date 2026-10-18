@@ -26,6 +26,7 @@ const market = (id: number, pool: `0x${string}`, symbol: 'MUSD' | 'MEZO') => ({
   supplyRatePerSecond: 0n,
   supplyCap: 0n,
   borrowCap: 0n,
+  reserveFactor: 10n ** 17n,
 });
 
 const protocol: ProtocolState = {
@@ -35,6 +36,7 @@ const protocol: ProtocolState = {
       id: 0,
       enabled: true,
       isRemote: false,
+      isShare: true,
       token: POOL_MEZO,
       chainId: 0,
       remoteToken: '0x',
@@ -51,6 +53,7 @@ const protocol: ProtocolState = {
       id: 1,
       enabled: true,
       isRemote: true,
+      isShare: false,
       token: '0x0000000000000000000000000000000000000000',
       chainId: 10004,
       remoteToken: '0x',
@@ -66,6 +69,8 @@ const protocol: ProtocolState = {
   ],
   keeperCount: 0n,
   blockNumber: 0n,
+  liquidationFeeBps: 0,
+  treasury: '0x0000000000000000000000000000000000000000',
 };
 
 const position = (wethUnits: bigint, debtMusd: bigint, mezoShares = 0n): PositionState => ({
@@ -80,6 +85,7 @@ const position = (wethUnits: bigint, debtMusd: bigint, mezoShares = 0n): Positio
     { marketId: 1, amount: 0n },
   ],
   isLeverageOperator: false,
+  isSwapLeverageOperator: false,
 });
 
 describe('evaluateAccount', () => {
@@ -100,6 +106,18 @@ describe('evaluateAccount', () => {
     expect(p.profitUsd).toBeCloseTo(1_175 * 0.07, 6);
     // minSeize = 98% of 1,175 × 1.07 / 2,800 wETH
     expect(Number(p.minSeize) / 1e18).toBeCloseTo(((1_175 * 1.07) / 2_800) * 0.98, 6);
+  });
+
+  it('leaves the protocol its share of the bonus out of the keeper profit', () => {
+    // 10% of the 7% wETH bonus goes to the protocol: the keeper keeps 6.3% of the repaid value, less a rounding hair.
+    const e = evaluateAccount({ ...protocol, liquidationFeeBps: 1_000 }, position(E18, 2_350n * E18), { ETH: 2_800, MUSD: 1, MEZO: 0.008 });
+    const p = e.plan!;
+    expect(p.repayAmount).toBe(1_175n * E18);
+    expect(p.profitUsd).toBeCloseTo(1_175 * 1.07 * (1 - 0.07 / 1.07 / 10) - 1_175, 6);
+    // minSeize is based on what the keeper receives, so the contract's check passes.
+    const received = (1_175 * 1.07 * (1 - 0.07 / 1.07 / 10)) / 2_800;
+    expect(Number(p.minSeize) / 1e18).toBeLessThan(received);
+    expect(Number(p.minSeize) / 1e18).toBeGreaterThan(received * 0.97);
   });
 
   it('caps repayment by keeper inventory', () => {

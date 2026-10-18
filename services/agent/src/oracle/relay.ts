@@ -28,8 +28,8 @@ const ORACLE_CACHE_MS = 2_000;
 const PROOF_CACHE_MS = 3_000;
 
 /** Devnet starting prices and confidence (fraction of price, like the live MUSD/MEZO feeds). */
-const DEVNET_PRICES: Record<PriceSymbol, number> = { MUSD: 1, MEZO: 0.00794, ETH: 3_200, USDC: 1 };
-const DEVNET_CONF: Record<PriceSymbol, number> = { MUSD: 0.0104, MEZO: 0.0057, ETH: 0.0005, USDC: 0.0005 };
+const DEVNET_PRICES: Record<PriceSymbol, number> = { MUSD: 1, MEZO: 0.00794, ETH: 3_200, USDC: 1, BTC: 80_000 };
+const DEVNET_CONF: Record<PriceSymbol, number> = { MUSD: 0.0104, MEZO: 0.0057, ETH: 0.0005, USDC: 0.0005, BTC: 0.0005 };
 
 type Proof = { proof: Hex; prices: Partial<Record<PriceSymbol, FreshPrice>> };
 

@@ -5,6 +5,7 @@ import {
   BPS,
   PRICE_SYMBOLS,
   keeperGatewayAbi,
+  liquidatorShare,
   NETWORKS,
   oracleRouterAbi,
   pTokenAbi,
@@ -12,6 +13,7 @@ import {
   readPosition,
   readProtocol,
   riskCheckSymbols,
+  tigrisRouterAbi,
   usablePrices,
   valuePosition,
   type UsdPrices,
@@ -104,7 +106,7 @@ export function evaluateAccount(
     if (debt.amount === 0n || debt.price <= 0) continue;
     for (const coll of collateralRows) {
       if (coll.balance === 0n || coll.price <= 0) continue;
-      const plan = planPair(debt, coll, inventory[debt.m.id]);
+      const plan = planPair(debt, coll, inventory[debt.m.id], protocol.liquidationFeeBps);
       if (!plan) continue;
       const better = !best || plan.profitUsd > best.profitUsd + 1e-9 || (Math.abs(plan.profitUsd - best.profitUsd) <= 1e-9 && best.isRemote && !plan.isRemote);
       if (better) best = plan;
@@ -116,8 +118,11 @@ export function evaluateAccount(
 type DebtRow = { m: ProtocolState['markets'][number]; amount: bigint; price: number; valueUsd: number };
 type CollateralRow = { c: ProtocolState['collaterals'][number]; balance: bigint; units: number; price: number; valueUsd: number };
 
-/** Mirrors VaultManager.liquidate/_seizeAmount for one pair: 50% close factor, bonus, scaled branch. */
-function planPair(debt: DebtRow, coll: CollateralRow, available: bigint | undefined): LiquidationPlan | null {
+/**
+ * Mirrors VaultManager.liquidate/_seizeAmount for one pair: 50% close factor, bonus, scaled branch, and the
+ * protocol's share of the bonus (`liquidationFeeBps`), which the keeper never receives.
+ */
+function planPair(debt: DebtRow, coll: CollateralRow, available: bigint | undefined, liquidationFeeBps = 0): LiquidationPlan | null {
   let repayAmount = (debt.amount * BigInt(CLOSE_FACTOR_BPS)) / BigInt(BPS);
   if (available !== undefined && available < repayAmount) repayAmount = available;
   if (repayAmount === 0n) return null;
@@ -131,6 +136,9 @@ function planPair(debt: DebtRow, coll: CollateralRow, available: bigint | undefi
     repayUsd *= scale;
     seizeUsd = coll.valueUsd;
   }
+  // What the keeper receives: the seizure minus the protocol's cut of the bonus.
+  const keeperFraction = liquidatorShare(1, coll.c.bonusBps, liquidationFeeBps).toLiquidator;
+  seizeUsd *= keeperFraction;
   const seizeFraction = coll.valueUsd > 0 ? seizeUsd / coll.valueUsd : 0;
   const expectedSeize = BigInt(Math.floor(Number(coll.balance) * seizeFraction));
   const minSeize = (expectedSeize * BigInt(BPS - SLIPPAGE_BPS)) / BigInt(BPS);
@@ -272,6 +280,32 @@ export class Liquidator {
     }
   }
 
+  /** Sells seized plain collateral (BTC) for the debt asset on the Tigris pool; keeps it on any failure. */
+  private async sellSeized(token: Address, to: Address, amount: bigint): Promise<void> {
+    const { client, wallet, deployment } = this.ctx.hub;
+    const router = deployment.contracts.tigrisRouter;
+    const factory = deployment.contracts.tigrisFactory;
+    if (!wallet || amount === 0n || !router || !factory) return;
+    const routes = [{ from: token, to, stable: false, factory }] as const;
+    try {
+      const quote = await client.readContract({ address: router, abi: tigrisRouterAbi, functionName: 'getAmountsOut', args: [amount, routes] });
+      const minOut = (quote[1] * BigInt(BPS - SLIPPAGE_BPS)) / BigInt(BPS);
+      const approve = await writeWithBuffer(client, wallet, { address: token, abi: erc20Abi, functionName: 'approve', args: [router, amount] });
+      await client.waitForTransactionReceipt({ hash: approve });
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
+      const hash = await writeWithBuffer(client, wallet, {
+        address: router,
+        abi: tigrisRouterAbi,
+        functionName: 'swapExactTokensForTokens',
+        args: [amount, minOut, routes, wallet.account.address, deadline],
+      });
+      const receipt = await client.waitForTransactionReceipt({ hash });
+      if (receipt.status !== 'success') throw new Error(`swap ${hash} reverted`);
+    } catch (err) {
+      this.ctx.log('liquidator', 'selling seized collateral failed (kept as is)', { token, amount: String(amount), error: errorLine(err) });
+    }
+  }
+
   private async inventory(protocol: ProtocolState): Promise<Record<number, bigint>> {
     const wallet = this.ctx.hub.wallet;
     if (!wallet) return {};
@@ -351,7 +385,10 @@ export class Liquidator {
     this.ctx.log('liquidator', 'liquidated', { account: e.account, txHash, profitUsd: plan.profitUsd.toFixed(2), remote: plan.isRemote });
     // Seized pTokens go back into the underlying, which is the repay inventory for the next liquidation
     // (pMUSD → MUSD, pMEZO → MEZO). Best effort: at full utilisation the pool may not have the cash yet.
-    if (!plan.isRemote) await this.redeemSeized(protocol.collaterals[plan.collateralId].token, result);
+    // Plain hub collateral (BTC) is sold for the debt asset on Tigris for the same reason.
+    const seized = protocol.collaterals[plan.collateralId];
+    if (seized.isShare) await this.redeemSeized(seized.token, result);
+    else if (!seized.isRemote) await this.sellSeized(seized.token, protocol.markets[plan.marketId].asset, result);
     return { simulated: result, txHash };
   }
 }
