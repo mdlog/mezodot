@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {stdJson} from "forge-std/StdJson.sol";
+import {VmSafe} from "forge-std/Vm.sol";
 import {PToken} from "../src/hub/PToken.sol";
 import {VaultManager} from "../src/hub/VaultManager.sol";
 import {SwapLeverageManager} from "../src/hub/SwapLeverageManager.sol";
@@ -42,7 +43,12 @@ contract DeploySwapLeverage is Script {
         }
         vm.serializeAddress(obj, "tigrisPool", address(pair));
         string memory contracts = vm.serializeAddress(obj, "swapLeverageManager", address(manager));
-        vm.writeJson(contracts, path, ".contracts");
+        // A dry run never overwrites the deployment record (see DeployHub).
+        if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptResume)) {
+            vm.writeJson(contracts, path, ".contracts");
+        } else {
+            console2.log("dry run: deployment not written to", path);
+        }
         console2.log("SwapLeverageManager", address(manager));
         console2.log("Tigris pool", address(pair));
     }

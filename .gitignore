@@ -15,3 +15,7 @@ services/agent/.state/
 services/agent/.env
 .worktrees/
 .secrets/
+# Signing material belongs outside the repository (docs/DEPLOY.md, key storage); never commit any of it
+*.password
+*.keystore
+keystores/

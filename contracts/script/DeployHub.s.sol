@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Script, console2} from "forge-std/Script.sol";
+import {VmSafe} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
@@ -287,7 +288,17 @@ contract DeployHub is Script {
         vm.serializeString(root, "priceFeeds", feeds);
         string memory json = vm.serializeString(root, "tokens", tokens);
         string memory path = string.concat(vm.projectRoot(), "/../packages/sdk/src/deployments/", network, ".json");
-        vm.writeJson(json, path);
-        console2.log("hub deployment written to", path);
+        // A dry run never overwrites the deployment record. A broadcast writes it before its transactions are
+        // mined, so run `pnpm verify:deployment` once they are (docs/DEPLOY.md).
+        if (_broadcasting()) {
+            vm.writeJson(json, path);
+            console2.log("hub deployment written to", path);
+        } else {
+            console2.log("dry run: deployment not written to", path);
+        }
+    }
+
+    function _broadcasting() internal view returns (bool) {
+        return vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptResume);
     }
 }

@@ -1,0 +1,133 @@
+# Nightly (and on demand): checks that depend on live networks or a running stack, kept out of pull-request CI so
+# an RPC hiccup cannot block a merge.
+#   - the testnet deployment against the code and the documented configuration (docs/DEPLOY.md, verify)
+#   - the hub flows on a fork of Mezo testnet (ForkMezo)
+#   - a devnet deployment, its deployment check and the autonomous keeper E2E
+#   - opt-in: the BTC smoke test on testnet (the real BTC precompile and Tigris pool, which no fork can run)
+name: Nightly
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  testnet-deployment:
+    name: Testnet deployment check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Loads the deploy inputs (addresses, feeds, max ages, caps, fee) so the deployment is compared with them too.
+      - name: pnpm verify:deployment mezo-testnet
+        run: |
+          set -a; source contracts/.env.example; set +a
+          pnpm verify:deployment mezo-testnet --brief
+
+  mezo-fork:
+    name: Mezo testnet fork tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+      - name: forge test --match-contract ForkMezo
+        env:
+          MEZO_FORK_RPC: https://rpc.test.mezo.org
+        run: forge test --root contracts --match-contract ForkMezo -vv
+
+  devnet-e2e:
+    name: Devnet deploy and keeper E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Two anvils plus the production deploy and configure scripts (scripts/devnet/start.sh).
+      - name: pnpm devnet
+        run: pnpm devnet
+
+      - name: pnpm verify:deployment devnet-hub
+        run: pnpm verify:deployment devnet-hub --brief
+
+      # Foundry's public anvil keys (#1 keeper, #9 dev guardian), as in the README quickstart. Never real funds.
+      - name: Start the agent
+        working-directory: services/agent
+        env:
+          MEZODOT_ENV: devnet
+          KEEPER_PRIVATE_KEY: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d'
+          DEVNET_GUARDIAN_KEY: '0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6'
+        run: |
+          nohup pnpm start > "$RUNNER_TEMP/agent.log" 2>&1 &
+          # /health answers 503 while a check is degraded; any answer means the HTTP server is up.
+          for _ in $(seq 1 90); do
+            case "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/health || true)" in
+              200 | 503) exit 0 ;;
+            esac
+            sleep 2
+          done
+          echo "::error::the agent did not start"
+          tail -n 100 "$RUNNER_TEMP/agent.log"
+          exit 1
+
+      - name: pnpm devnet:e2e
+        run: pnpm devnet:e2e
+
+      - name: Agent log
+        if: always()
+        run: tail -n 300 "$RUNNER_TEMP/agent.log" || true
+
+      - name: Stop the devnet
+        if: always()
+        run: pnpm devnet:stop
+
+  # Opt-in: set the repository variable BTC_SMOKE=true and the secrets SMOKE_KEYSTORE_JSON (a Foundry keystore of a
+  # dedicated smoke account funded with ~0.002 testnet BTC, never the owner key) and SMOKE_KEYSTORE_PASSWORD.
+  btc-smoke:
+    name: BTC smoke test on testnet
+    if: ${{ vars.BTC_SMOKE == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+      - name: Smoke-test keystore
+        env:
+          SMOKE_KEYSTORE_JSON: ${{ secrets.SMOKE_KEYSTORE_JSON }}
+          SMOKE_KEYSTORE_PASSWORD: ${{ secrets.SMOKE_KEYSTORE_PASSWORD }}
+        run: |
+          umask 077
+          printf '%s' "$SMOKE_KEYSTORE_JSON" > "$RUNNER_TEMP/smoke-keystore.json"
+          printf '%s' "$SMOKE_KEYSTORE_PASSWORD" > "$RUNNER_TEMP/smoke-keystore.password"
+          command -v bc >/dev/null || sudo apt-get install -y bc
+      - name: scripts/smoke-btc.sh
+        run: scripts/smoke-btc.sh --keystore "$RUNNER_TEMP/smoke-keystore.json" --password-file "$RUNNER_TEMP/smoke-keystore.password"
+      - name: Remove the keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/smoke-keystore.json" "$RUNNER_TEMP/smoke-keystore.password"

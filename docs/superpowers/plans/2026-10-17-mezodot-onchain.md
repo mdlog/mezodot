@@ -1,5 +1,7 @@
 # Mezodot On-chain Implementation Plan
 
+> **Historical document (2026-10-17).** Kept as the record of the original design; where it differs from the code, the code wins. Since then the oracle moved from Hermes pulls on Pyth `0x2880…` to Pyth Core `0x933a…1315` pushed by Mezo plus keyless Supra proofs, and BTC collateral, BTC leverage through Tigris, the netted unwind, protocol revenue and the ops tooling were added. Current documentation: [README](../../../README.md), [DEPLOY](../../DEPLOY.md), [SECURITY](../../SECURITY.md), [RUNBOOK](../../RUNBOOK.md), [REVENUE](../../REVENUE.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the Mezodot PRD as real contracts (Mezo hub + Base/Eth Sepolia spokes), an agent service (relayer, liquidator, risk engine, MCP) and an on-chain frontend, fully tested on a local two-chain devnet; deployment scripts prepared but not executed.

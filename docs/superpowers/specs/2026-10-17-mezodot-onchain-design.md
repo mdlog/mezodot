@@ -1,5 +1,7 @@
 # Mezodot Protocol — On-chain Design Spec
 
+> **Historical document (2026-10-17).** Kept as the record of the original design; where it differs from the code, the code wins. Since then the oracle moved from Hermes pulls on Pyth `0x2880…` to Pyth Core `0x933a…1315` pushed by Mezo plus keyless Supra proofs, and BTC collateral, BTC leverage through Tigris, the netted unwind, protocol revenue and the ops tooling were added. Current documentation: [README](../../../README.md), [DEPLOY](../../DEPLOY.md), [SECURITY](../../SECURITY.md), [RUNBOOK](../../RUNBOOK.md), [REVENUE](../../REVENUE.md).
+
 Date: 2026-10-17 · Status: approved in brainstorming (sections 1–3 approved in chat; section 4 approved via "lanjutkan semua")
 Target: Mezo Buildathon, Track 1, **Wave 1 (deadline 2026-10-26)** — all four subsystems.
 Out of scope for this spec: running the actual testnet deployment (scripts are prepared, executed later), pitch deck, video.

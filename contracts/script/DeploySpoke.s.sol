@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Script, console2} from "forge-std/Script.sol";
+import {VmSafe} from "forge-std/Vm.sol";
 import {IWormhole} from "../src/interfaces/IWormhole.sol";
 import {SpokeGateway} from "../src/spoke/SpokeGateway.sol";
 
@@ -50,8 +51,14 @@ contract DeploySpoke is Script {
         vm.serializeString(root, "contracts", contracts);
         string memory json = vm.serializeString(root, "tokens", tokens);
         string memory path = string.concat(vm.projectRoot(), "/../packages/sdk/src/deployments/", network, ".json");
-        vm.writeJson(json, path);
-        console2.log("spoke deployment written to", path);
+        // A dry run never overwrites the deployment record. A broadcast writes it before its transactions are
+        // mined, so run `pnpm verify:deployment` once they are (docs/DEPLOY.md).
+        if (_broadcasting()) {
+            vm.writeJson(json, path);
+            console2.log("spoke deployment written to", path);
+        } else {
+            console2.log("dry run: deployment not written to", path);
+        }
     }
 
     /// The hub's Wormhole chain id; a mismatch would make every DEPOSIT from this spoke unclaimable.
@@ -63,5 +70,9 @@ contract DeploySpoke is Script {
         uint16 fromHub = uint16(vm.parseJsonUint(json, ".wormholeChainId"));
         require(vm.envOr("HUB_CHAIN_ID", uint256(fromHub)) == fromHub, "HUB_CHAIN_ID does not match the hub deployment");
         return fromHub;
+    }
+
+    function _broadcasting() internal view returns (bool) {
+        return vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptResume);
     }
 }

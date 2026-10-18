@@ -9,3 +9,7 @@ contracts/broadcast
 **/.state
 **/.env
 .git
+# Never in an image or build context.
+.secrets
+**/.secrets
+.worktrees

@@ -7,14 +7,20 @@
     "dev": "pnpm --filter @mezodot/web dev",
     "build": "pnpm -r build",
     "test:contracts": "forge test --root contracts",
-    "check": "pnpm -r check && pnpm test:contracts",
+    "check": "pnpm -r check && pnpm check:scripts && pnpm check:admin-docs && pnpm test:contracts && pnpm check:abis",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "devnet": "scripts/devnet/start.sh",
     "devnet:stop": "scripts/devnet/stop.sh",
     "devnet:agent": "pnpm --filter @mezodot/agent start",
     "devnet:e2e": "pnpm --filter @mezodot/agent devnet:e2e",
-    "e2e:ui": "node scripts/e2e/ui-flows.mjs"
+    "e2e:ui": "node scripts/e2e/ui-flows.mjs",
+    "check:scripts": "pnpm --dir services/agent -s exec tsc -p ../../scripts/tsconfig.json && pnpm --dir services/agent -s exec vitest run --root ../../scripts",
+    "check:abis": "bash scripts/check-abis.sh",
+    "check:admin-docs": "pnpm --dir services/agent -s exec tsx --tsconfig ../../scripts/tsconfig.json ../../scripts/check-admin-docs.ts",
+    "verify:deployment": "pnpm --dir services/agent -s exec tsx --tsconfig ../../scripts/tsconfig.json ../../scripts/verify-deployment.ts",
+    "revenue:report": "pnpm --dir services/agent -s exec tsx --tsconfig ../../scripts/tsconfig.json ../../scripts/revenue-report.ts",
+    "smoke:btc": "bash scripts/smoke-btc.sh"
   },
   "devDependencies": {
     "prettier": "^3.9.10",

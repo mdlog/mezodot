@@ -1,0 +1,91 @@
+# Every push to main and every pull request: contracts (format, build, tests), the SDK ABIs against the forge
+# build, formatting, the TypeScript packages and the ops scripts. Network-dependent checks (testnet deployment,
+# Mezo fork, devnet E2E) run nightly in nightly.yml.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: Contracts and SDK ABIs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Same forge as local development: fmt and lint output differ between releases.
+          version: v1.5.1
+
+      - uses: pnpm/action-setup@v4 # version from package.json "packageManager"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: forge fmt
+        run: forge fmt --check --root contracts
+
+      - name: forge build
+        run: forge build --root contracts
+
+      # ForkMezo skips itself without MEZO_FORK_RPC; it runs nightly.
+      - name: forge test
+        run: forge test --root contracts
+
+      # The SDK, agent and web decode every call with packages/sdk/src/abis: they must come from this build.
+      - name: SDK ABIs match the contracts
+        run: |
+          pnpm --filter @mezodot/sdk gen:abis
+          pnpm exec prettier --log-level warn --write packages/sdk/src/abis
+          if [ -n "$(git status --porcelain -- packages/sdk/src/abis)" ]; then
+            git status --short -- packages/sdk/src/abis
+            git --no-pager diff -- packages/sdk/src/abis | head -n 300
+            echo "::error title=SDK ABIs out of date::Regenerate and commit them with the contract change: forge build --root contracts && pnpm --filter @mezodot/sdk gen:abis && pnpm exec prettier --write packages/sdk/src/abis (pnpm check:abis checks without writing)"
+            exit 1
+          fi
+          echo "SDK ABIs match the forge build"
+
+  packages:
+    name: Formatting, SDK, agent, web and ops scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: prettier
+        run: pnpm format:check
+
+      # Typecheck, lint and unit tests of every workspace package.
+      - name: pnpm -r check
+        run: pnpm -r check
+
+      # scripts/: verify-deployment, revenue-report, check-admin-docs and their tests.
+      - name: ops scripts
+        run: pnpm check:scripts
+
+      # Auditors start from docs/SECURITY.md: every onlyOwner function must be listed under "Admin powers".
+      - name: admin powers documented
+        run: pnpm check:admin-docs
