@@ -34,13 +34,15 @@ cast send $PMEZO "deposit(uint256,address)" 1000000000000000000 0x00000000000000
 
 ```bash
 NETWORK=base-sepolia WORMHOLE=$BASE_WORMHOLE WORMHOLE_CHAIN_ID=10004 WETH=$BASE_WETH USDC=$BASE_USDC \
-forge script script/DeploySpoke.s.sol --rpc-url $BASE_SEPOLIA_RPC --account deployer --broadcast --slow
+forge script script/DeploySpoke.s.sol --rpc-url $BASE_SEPOLIA_RPC --account deployer --broadcast --skip-simulation --slow
 
 NETWORK=eth-sepolia WORMHOLE=$ETH_WORMHOLE WORMHOLE_CHAIN_ID=10002 WETH=$ETH_WETH USDC=$ETH_USDC \
-forge script script/DeploySpoke.s.sol --rpc-url $ETH_SEPOLIA_RPC --account deployer --broadcast --slow
+forge script script/DeploySpoke.s.sol --rpc-url $ETH_SEPOLIA_RPC --account deployer --broadcast --skip-simulation --slow
 ```
 
 `WORMHOLE_CHAIN_ID` is only a cross-check: the chain id is read from Wormhole Core. Optional caps: `WETH_CAP`, `USDC_CAP` (token units).
+
+Use `--skip-simulation` here too: forge's local EVM prices contract creation with its own (Cancun) schedule, while Sepolia now charges far more (node estimate for SpokeGateway: 8.4 M gas vs forge's 1.2 M, so a forge-estimated creation ran out of gas on 2026-10-18). With the flag the node estimates every transaction.
 
 ## 3. Link hub â‡„ spokes (both directions, per spoke)
 
@@ -49,8 +51,8 @@ Run from `contracts/` (the scripts read the deployment JSON written in steps 1â€
 ```bash
 for SPOKE in base-sepolia eth-sepolia; do
   RPC=$([ $SPOKE = base-sepolia ] && echo $BASE_SEPOLIA_RPC || echo $ETH_SEPOLIA_RPC)
-  MODE=hub   HUB_NETWORK=mezo-testnet SPOKE_NETWORK=$SPOKE forge script script/ConfigureCrossChain.s.sol --rpc-url $MEZO_RPC --account deployer --broadcast
-  MODE=spoke HUB_NETWORK=mezo-testnet SPOKE_NETWORK=$SPOKE forge script script/ConfigureCrossChain.s.sol --rpc-url $RPC      --account deployer --broadcast
+  MODE=hub   HUB_NETWORK=mezo-testnet SPOKE_NETWORK=$SPOKE forge script script/ConfigureCrossChain.s.sol --rpc-url $MEZO_RPC --account deployer --broadcast --skip-simulation
+  MODE=spoke HUB_NETWORK=mezo-testnet SPOKE_NETWORK=$SPOKE forge script script/ConfigureCrossChain.s.sol --rpc-url $RPC      --account deployer --broadcast --skip-simulation
 done
 ```
 
