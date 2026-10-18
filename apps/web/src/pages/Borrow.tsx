@@ -11,8 +11,7 @@ import { useHubClient, useValuedPosition } from '../data/hooks';
 import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { fmt, fmtApy, fmtHealth, money, pct, units } from '../lib/format';
 import { useUi } from '../state/UiContext';
-
-const METER_SPAN = 0.9;
+import { HealthGauge, LtvMeter } from './shared';
 
 export function Borrow() {
   const { go, openModal } = useUi();
@@ -182,29 +181,14 @@ export function Borrow() {
                 <strong className={`tone-${status.tone}`}>{fmtHealth(valued?.healthFactor ?? Infinity)}</strong>
                 <em>Liquidatable below 1.00×</em>
               </div>
-              <div className="health-gauge">
-                <div className="gauge-inner">
-                  <b>{pct(valued?.ltv ?? 0)}</b>
-                  <small>CURRENT LTV</small>
-                </div>
-                <div className="gauge-needle" style={{ transform: `rotate(${-125 + Math.min(100, (valued?.ltv ?? 0) * 100) * 2.5}deg)` }} />
-              </div>
+              <HealthGauge hf={valued?.healthFactor ?? Infinity} />
             </div>
             <div className="risk-meter">
               <div>
                 <span>Current LTV</span>
                 <b>{pct(valued?.ltv ?? 0)}</b>
               </div>
-              <div className="meter-track meter-track--marked">
-                <i style={{ width: `${Math.min(100, ((valued?.ltv ?? 0) / METER_SPAN) * 100)}%` }} />
-                <span className="meter-mark" style={{ left: `${(maxLtv / METER_SPAN) * 100}%` }} />
-                <span className="meter-mark meter-mark--danger" style={{ left: `${(liqLtv / METER_SPAN) * 100}%` }} />
-              </div>
-              <div className="meter-labels">
-                <span>0%</span>
-                <span>{pct(maxLtv, 0)} max borrow</span>
-                <span>{pct(liqLtv, 0)} liquidation</span>
-              </div>
+              <LtvMeter ltv={valued?.ltv ?? 0} maxLtv={maxLtv} liqLtv={liqLtv} hf={valued?.healthFactor ?? Infinity} />
             </div>
             <div className="risk-math">
               <span>

@@ -1177,8 +1177,8 @@ tbody tr:last-child td {
   border-top: 1px solid #eeede7;
   padding-top: 10px;
   display: grid;
-  grid-template-columns: 76px 1fr 50px;
-  gap: 8px;
+  grid-template-columns: 76px 1fr auto;
+  gap: 12px;
   align-items: center;
 }
 .health-row > div:first-child span,
@@ -1194,18 +1194,57 @@ tbody tr:last-child td {
   font-size: 13px;
   margin-top: 4px;
 }
-.health-bar {
-  height: 4px;
-  background: #eeede8;
-  border-radius: 4px;
+/* Health and LTV scales (pages/shared.tsx): coloured bands, tick lines and a marker at the current value. */
+.scale-track {
+  position: relative;
+  height: 6px;
+}
+.scale-bands {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
   overflow: hidden;
 }
-.health-bar i {
-  display: block;
-  height: 100%;
-  background: #6fa071;
-  border-radius: 4px;
-  transition: width 0.3s;
+.scale-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: currentColor;
+  opacity: 0.28;
+}
+.scale-band.is-active {
+  opacity: 0.62;
+}
+/* Past the liquidation line: hatched, so it reads as a zone a position must never reach. */
+.scale-band--liquidation {
+  color: #b4553f;
+  opacity: 0.5;
+  background: repeating-linear-gradient(135deg, currentColor 0 2px, transparent 2px 5px);
+}
+.scale-tick {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: #8a83c9;
+}
+.scale-tick--liquidation {
+  background: #b4553f;
+}
+.scale-marker {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow:
+    0 0 0 2px var(--panel),
+    0 1px 3px rgba(36, 38, 56, 0.25);
+  transform: translate(-50%, -50%);
+  transition: left 0.3s;
 }
 .health-status {
   font-size: 11.5px;
@@ -2188,45 +2227,34 @@ tbody tr:last-child td {
   font-style: normal;
 }
 .health-gauge {
-  width: 89px;
-  height: 48px;
-  border-radius: 55px 55px 0 0;
-  border: 7px solid transparent;
-  border-top-color: #d0e1ca;
-  border-left-color: #e0e9dc;
-  border-right-color: #88ad7d;
-  position: relative;
-  margin: 13px 18px 0 0;
+  flex: none;
+  width: 120px;
+  height: 72px;
+  margin: 4px 6px 0 0;
+  overflow: visible;
 }
-.gauge-inner {
-  position: absolute;
-  left: 50%;
-  top: 9px;
-  transform: translateX(-50%);
-  text-align: center;
-  white-space: nowrap;
+.gauge-band {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 9;
+  opacity: 0.3;
 }
-.gauge-inner b,
-.gauge-inner small {
-  display: block;
-}
-.gauge-inner b {
-  font: 13px var(--mono);
-}
-.gauge-inner small {
-  font: 11px var(--mono);
-  color: #9b9ca4;
-  margin-top: 3px;
+.gauge-band.is-active {
+  opacity: 1;
 }
 .gauge-needle {
-  position: absolute;
-  left: 50%;
-  bottom: -3px;
-  width: 30px;
-  height: 2px;
-  border-radius: 3px;
-  background: #555766;
-  transform-origin: left center;
+  stroke: #3a3c4c;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+.gauge-pivot {
+  fill: #3a3c4c;
+  stroke: var(--panel);
+  stroke-width: 2;
+}
+.gauge-tick {
+  font: 9px var(--mono);
+  fill: #9b9ca4;
 }
 .risk-meter {
   padding: 13px 1px 10px;
@@ -2241,34 +2269,22 @@ tbody tr:last-child td {
   font: 12px var(--mono);
   color: #5b5d6b;
 }
-.meter-track {
-  height: 5px;
-  background: #eeede8;
-  border-radius: 5px;
-  overflow: hidden;
-  margin: 8px 0 5px;
+.ltv-meter {
   position: relative;
+  margin: 6px 0 2px;
+  padding: 19px 0 18px;
 }
-.meter-track:after {
-  content: '';
+.ltv-label {
   position: absolute;
-  left: 82%;
-  top: 0;
-  height: 100%;
-  width: 1px;
-  background: #bc7f4d;
-}
-.meter-track i {
-  display: block;
-  height: 100%;
-  background: linear-gradient(90deg, #85aa7e, #d3b26c);
-  border-radius: 5px;
-}
-.meter-labels {
-  display: flex;
-  justify-content: space-between;
-  color: #a1a1a8;
+  bottom: 0;
   font: 11px var(--mono);
+  color: #a1a1a8;
+  white-space: nowrap;
+}
+.ltv-label--above {
+  top: 0;
+  bottom: auto;
+  color: #b4553f;
 }
 .risk-math {
   border-top: 1px solid #eeede7;
@@ -2768,9 +2784,6 @@ tbody tr:last-child td {
 }
 .risk-metric-card > strong small {
   font-size: 14px;
-}
-.risk-metric-card > .meter-track {
-  margin: 0 0 6px;
 }
 .risk-metric-card > small {
   font-size: 11px;
@@ -4524,12 +4537,6 @@ tbody tr:last-child td {
 .health-badge.tone-danger i {
   background: #b4553f;
 }
-.health-bar.tone-warn i {
-  background: #d0a15c;
-}
-.health-bar.tone-danger i {
-  background: #b4553f;
-}
 .toast--error > span {
   background: #b4553f;
 }
@@ -4573,23 +4580,6 @@ ol.message-steps {
   margin: 0 0 10px;
   color: #5d8859;
   font-size: 12px;
-}
-.meter-track--marked {
-  overflow: visible;
-}
-.meter-track--marked:after {
-  display: none;
-}
-.meter-mark {
-  position: absolute;
-  top: -3px;
-  width: 2px;
-  height: 11px;
-  border-radius: 1px;
-  background: #8a83c9;
-}
-.meter-mark--danger {
-  background: #bc7f4d;
 }
 .apy-split {
   display: block;
