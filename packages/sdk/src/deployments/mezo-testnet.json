@@ -1,7 +1,7 @@
 {
   "chainId": 31611,
   "contracts": {
-    "keeperGateway": "0x6085FdD53b25109d73822AC6c7f241757CdEbBAf",
+    "keeperGateway": "0x2e63B1Af8E56E5a7Af02Da36E0B0313f91dedc11",
     "leverageManager": "0x32295B6C7EBd6434D7C930FFf4b5845fccA4d32d",
     "oracleRouter": "0x5d676a3F6477651C7BdE6442D0FD08aDf0b2eaeD",
     "pMEZO": "0x91Ba543447b23e199F0223198e61E6Bb812dAcfc",
