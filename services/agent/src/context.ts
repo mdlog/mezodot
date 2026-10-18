@@ -58,7 +58,10 @@ export function createContext(config: AgentConfig, log: Logger = logJson): Conte
     // Concurrent reads are batched into Multicall3 calls where it is deployed: one position read is ~19 eth_calls.
     const client = createPublicClient({ chain, transport, batch: multicall3 ? { multicall: true } : undefined }) as PublicClient;
     const wallet = account ? (createWalletClient({ account, chain, transport }) as Wallet) : null;
-    const sender = wallet ? new TxSender(network, client, wallet, { receiptTimeoutMs: config.receiptTimeoutMs, log }) : null;
+    // A process that follows another's state read-only (the stdio MCP server) could not record what a keeper
+    // transaction changes, and a second sender on the key would race the agent's for nonces: it gets none. Its
+    // wallet still lets dry runs simulate from the keeper's address.
+    const sender = wallet && !config.stateReadOnly ? new TxSender(network, client, wallet, { receiptTimeoutMs: config.receiptTimeoutMs, log }) : null;
     return { client, wallet, sender };
   };
 

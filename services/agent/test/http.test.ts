@@ -1,9 +1,10 @@
 import { request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 import { describe, expect, it } from 'vitest';
-import type { PriceSymbol } from '@mezodot/sdk';
+import { PRICE_SYMBOLS, type OracleState, type PriceSymbol } from '@mezodot/sdk';
 import { loadConfig } from '../src/config';
 import { createContext } from '../src/context';
+import { OracleWatchdog } from '../src/oracle/watchdog';
 import type { Services } from '../src/services';
 
 const LEAKY = new Error('HTTP request failed.\n\nURL: https://rpc.example/v2/SECRET_API_KEY_123\nRequest body: {"method":"eth_call"}');
@@ -37,7 +38,7 @@ async function serve(opts: Overrides = {}, calls: unknown[] = []) {
     },
     watchdog: opts.watchdog ?? {
       status: () => ({ report, stale: false, ageSec: 3, error: null }),
-      check: async () => report,
+      refresh: async () => report,
     },
   } as unknown as Services;
   const server = startHttp(services, '127.0.0.1');
@@ -109,7 +110,10 @@ describe('oracle endpoints', () => {
       fresh.server.close();
     }
     const report = { checkedAt: 1, healthy: true, feeds: [] };
-    const stale = await serve({ watchdog: { status: () => ({ report, stale: true, ageSec: 900, error: 'HTTP request failed.' }), check: async () => report } });
+    // The router stays unreadable: the old report is served as stale.
+    const stale = await serve({
+      watchdog: { status: () => ({ report, stale: true, ageSec: 900, error: 'HTTP request failed.' }), refresh: async () => Promise.reject(LEAKY) },
+    });
     try {
       const res = await fetch(`${stale.base}/oracle/health`);
       expect(res.status).toBe(503);
@@ -120,7 +124,7 @@ describe('oracle endpoints', () => {
     const never = await serve({
       watchdog: {
         status: () => ({ report: null, stale: true, ageSec: null, error: null }),
-        check: async () => Promise.reject(LEAKY),
+        refresh: async () => Promise.reject(LEAKY),
       },
     });
     try {
@@ -130,6 +134,41 @@ describe('oracle endpoints', () => {
       expect(text).not.toMatch(/rpc\.example|SECRET/);
     } finally {
       never.server.close();
+    }
+  });
+
+  it('stays live without the oracle module: a stale report is checked again, once for concurrent requests (final review A8)', async () => {
+    // Every feed usable at a Pyth push price (what the router serves while nothing needs a pull update).
+    const oracle = Object.fromEntries(
+      PRICE_SYMBOLS.map((symbol) => [
+        symbol,
+        {
+          symbol,
+          feed: { primary: { source: 1, maxAge: 3_900, id: `0x${'1'.repeat(64)}` }, secondary: null, maxConfBps: 500, maxDivergenceBps: 0 },
+          ok: true,
+          price: 10n ** 18n,
+          validUntil: 4_000_000_000,
+          lastPrice: 10n ** 18n,
+          publishTime: 1,
+          legs: [],
+        },
+      ]),
+    ) as unknown as OracleState;
+    let now = 1_000_000;
+    let reads = 0;
+    const relay = { oracle: async () => (reads++, await new Promise((r) => setTimeout(r, 20)), oracle) };
+    const watchdog = new OracleWatchdog({ config: { env: 'testnet', oracleWatchMs: 30_000 }, log: () => {} } as never, relay as never, () => now);
+    // AGENT_MODULES=http: no oracle loop keeps the report fresh.
+    const { server, base } = await serve({ watchdog });
+    try {
+      expect((await fetch(`${base}/oracle/health`)).status).toBe(200);
+      now += 10 * 60_000; // ten minutes later, far past two watchdog intervals
+      const [a, b] = await Promise.all([fetch(`${base}/oracle/health`), fetch(`${base}/oracle/health`)]);
+      expect([a.status, b.status]).toEqual([200, 200]);
+      expect(await a.json()).toMatchObject({ healthy: true, stale: false });
+      expect(reads).toBe(2); // one read when there was no report, one shared by both stale requests
+    } finally {
+      server.close();
     }
   });
 

@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { parseEther } from 'viem';
+import { spokeGatewayAbi } from '@mezodot/sdk';
 import { Monitor, loopCheck } from '../src/health';
 import { Loops, type LoopStats } from '../src/loops';
 import type { RelayMessage } from '../src/relayer';
+import { StuckTransactionError, TxSender } from '../src/tx';
+import { scriptedChain } from './chain';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -75,6 +78,7 @@ type Sender = {
   counts: Record<string, Record<string, number>>;
   lastError: string | null;
   revertRate: () => number | null;
+  refreshStuck: () => Promise<void>;
 };
 
 const sender = (over: Partial<Sender> = {}): Sender => ({
@@ -84,6 +88,7 @@ const sender = (over: Partial<Sender> = {}): Sender => ({
   counts: {},
   lastError: null,
   revertRate: () => null,
+  refreshStuck: async () => {},
   ...over,
 });
 
@@ -110,7 +115,7 @@ function monitorWith(o: {
   oracle?: { healthy?: boolean; stale?: boolean; report?: boolean };
   messages?: RelayMessage[];
   skipped?: Record<string, number>;
-  hubSender?: Sender;
+  hubSender?: Sender | TxSender;
   webhook?: string;
   fetch?: typeof fetch;
   events?: unknown[];
@@ -167,7 +172,19 @@ function monitorWith(o: {
       syncError: null,
       lastInventory: { MUSD: '50.0' },
       lastRun: null,
-      heldSummary: () => [{ collateral: 'BTC', market: 'MUSD', amount: '0.01', cost: '780', minProceeds: '780', since: 0 }],
+      heldSummary: () => [
+        { collateral: 'BTC', market: 'MUSD', amount: '0.01', cost: '780', minProceeds: '780', since: 0, redeemed: null },
+        {
+          collateral: 'pMEZO',
+          market: 'MUSD',
+          amount: '0',
+          cost: '0',
+          minProceeds: '0',
+          since: 0,
+          redeemed: { asset: 'MEZO', amount: '250000', cost: '1100' },
+        },
+      ],
+      pendingTransactions: () => [],
       store: { get: () => ({ accounts: ['0xa'] }) },
     },
     watchdog: {
@@ -210,7 +227,7 @@ describe('health checks (health-monitoring-gaps)', () => {
       ['base-sepolia', '1', true],
     ]);
     expect(r.keeperInventory).toEqual({ MUSD: '50.0' });
-    expect(r.heldCollateral).toHaveLength(1);
+    expect(r.heldCollateral).toHaveLength(2);
     expect(r.deployment.hub).toMatchObject({ vaultManager: '0x01', startBlock: 1 });
     expect(r.checks.every((c) => c.ok)).toBe(true);
   });
@@ -279,6 +296,22 @@ describe('health checks (health-monitoring-gaps)', () => {
     expect(r.checks.find((c) => c.name === 'tx:mezo-testnet')).toMatchObject({ ok: false, severity: 'critical' });
   });
 
+  it('recovers once the stuck transaction is mined, even when the keeper sends nothing afterwards (final review A6)', async () => {
+    const chain = scriptedChain();
+    const keeper = new TxSender('mezo-testnet', chain.client, chain.wallet, { receiptTimeoutMs: 20, pollMs: 2, log: () => {} });
+    const request = { address: '0x00000000000000000000000000000000000000ab', abi: spokeGatewayAbi, functionName: 'receiveMessage', args: ['0x01'] };
+    const stuck = (await keeper.send(request, { kind: 'relay-release' }).catch((e: unknown) => e)) as StuckTransactionError;
+    expect(stuck).toBeInstanceOf(StuckTransactionError);
+    const { monitor, logs } = monitorWith({ hubSender: keeper });
+    await monitor.tick();
+    expect(monitor.report().checks.find((c) => c.name === 'tx:mezo-testnet')).toMatchObject({ ok: false, severity: 'critical' });
+    chain.mine(stuck.hashes.at(-1)!); // its last fee bump is mined; the relayer then finds the VAA consumed and sends nothing
+    await monitor.tick();
+    expect(monitor.report().checks.find((c) => c.name === 'tx:mezo-testnet')).toMatchObject({ ok: true });
+    expect(logs).toContain('recovered: tx:mezo-testnet');
+    expect(monitor.metrics()).toContain('mezodot_agent_transaction_stuck{env="testnet",network="mezo-testnet"} 0');
+  });
+
   it('flags loops that stopped succeeding', async () => {
     let t = 0;
     const { monitor } = monitorWith({ now: () => t });
@@ -345,6 +378,8 @@ describe('alerts and metrics', () => {
     expect(text).toContain('mezodot_agent_native_balance{env="testnet",network="base-sepolia",symbol="ETH"} 1');
     expect(text).toContain('mezodot_agent_inventory{env="testnet",asset="MUSD"} 50');
     expect(text).toContain('mezodot_agent_held_collateral{env="testnet",collateral="BTC",market="MUSD"} 0.01');
+    expect(text).toContain('mezodot_agent_held_redeemed{env="testnet",collateral="pMEZO",market="MUSD",asset="MEZO"} 250000');
+    expect(text).toContain('mezodot_agent_liquidator_pending_transactions{env="testnet"} 0');
     expect(text).toContain('mezodot_protocol_reserves{env="testnet",market="MUSD"} 12.5');
     expect(text).toContain('mezodot_protocol_treasury_collateral_usd{env="testnet",collateral="BTC"} 41');
     expect(text).toContain('# TYPE mezodot_protocol_flash_fees_total counter');

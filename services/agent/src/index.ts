@@ -86,8 +86,10 @@ loops.every('monitor', MONITOR_INTERVAL_MS, () => monitor.tick(), { critical: fa
 
 /**
  * SIGTERM (docker stop) and SIGINT: no new loop runs, wait for the ones in flight (a liquidation waiting for its
- * receipt, a seized-collateral sale) up to SHUTDOWN_GRACE_MS, then close the HTTP server. Held collateral is
- * persisted, so a conversion cut short resumes on the next start. A second signal exits at once.
+ * receipt, a seized-collateral sale, relay deliveries) up to SHUTDOWN_GRACE_MS, then close the HTTP server. Cutting a
+ * wait short loses nothing: the liquidator records every transaction before broadcasting it and settles it from
+ * chain state after the restart (a mined sale is never sold again), and the relayer checks on-chain whether a
+ * message was consumed before it delivers it again. A second signal exits at once.
  */
 let stopping = false;
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
@@ -95,8 +97,9 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   stopping = true;
   ctx.log('agent', 'shutting down', { signal });
   loops.stop();
-  const idle = await loops.idle(SHUTDOWN_GRACE_MS);
-  if (!idle) ctx.log('agent', 'runs still in flight at the shutdown deadline; held collateral is converted after the restart');
+  const [idle, delivered] = await Promise.all([loops.idle(SHUTDOWN_GRACE_MS), services.relayer.idle(SHUTDOWN_GRACE_MS)]);
+  if (!idle || !delivered)
+    ctx.log('agent', 'work still in flight at the shutdown deadline; recorded transactions are settled from chain state after the restart');
   if (server) {
     const closing = server;
     await new Promise<void>((resolve) => {

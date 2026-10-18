@@ -31,4 +31,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:' + (process.env.HTTP_PORT || 8787) + '/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
 # node is the main process (no npm/pnpm wrapper), so SIGTERM reaches the agent's graceful shutdown.
 CMD ["node", "--enable-source-maps", "agent.mjs"]
-# MCP over stdio from the image:  docker run --rm -i --env-file services/agent/.env mezodot-agent node mcp-stdio.mjs
+# MCP over stdio from the image, following the agent's state volume read-only (it never sends transactions):
+#   docker run --rm -i --env-file services/agent/.env -v mezodot_agent-state:/data:ro mezodot-agent node mcp-stdio.mjs

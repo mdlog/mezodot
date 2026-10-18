@@ -2,11 +2,13 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { encodeAbiParameters, encodeEventTopics, type Hex } from 'viem';
 import {
   PRICE_KEYS,
   PRICE_SYMBOLS,
   readPosition,
   readProtocol,
+  vaultManagerAbi,
   type OracleState,
   type PositionState,
   type PriceSymbol,
@@ -150,11 +152,22 @@ function setup(opts: { positions: PositionState[]; accounts: `0x${string}`[]; in
     ),
   };
   const keeper = opts.keeper ?? true;
+  // VaultManager's Liquidated event for what each triggerLiquidation(account, market, repay, collateral, …) asked.
+  const liquidated = ([account, marketId, repaid, collateralId]: readonly unknown[]) => ({
+    address: VAULT,
+    topics: encodeEventTopics({
+      abi: vaultManagerAbi,
+      eventName: 'Liquidated',
+      args: { account: account as Hex, liquidator: GATEWAY, marketId: marketId as bigint },
+    }),
+    data: encodeAbiParameters([{ type: 'uint256' }, { type: 'uint256' }, { type: 'uint256' }], [collateralId as bigint, repaid as bigint, 1n]),
+  });
   const sender = {
     address: KEEPER,
     send: async (request: { functionName: string; args: readonly unknown[] }) => {
       sent.push(request);
-      return { hash: `0x${'ab'.repeat(32)}`, receipt: { status: 'success', logs: [] }, gas: 0n, nonce: 0 };
+      const logs = request.functionName === 'triggerLiquidation' ? [liquidated(request.args)] : [];
+      return { hash: `0x${'ab'.repeat(32)}`, receipt: { status: 'success', logs }, gas: 0n, nonce: 0 };
     },
   };
   const ctx = {
@@ -173,7 +186,8 @@ function setup(opts: { positions: PositionState[]; accounts: `0x${string}`[]; in
       sender: keeper ? sender : null,
       deployment: { startBlock: 0, contracts: { vaultManager: VAULT, keeperGateway: GATEWAY }, tokens: { MUSD } },
     },
-    spokes: [],
+    // The spoke WETH is released on: the keeper relays those releases to itself.
+    spokes: [{ network: 'base-sepolia', client: { getGasPrice: async () => 0n }, deployment: { wormholeChainId: 10004, contracts: {} } }],
     log: (_s: string, message: string, extra?: Record<string, unknown>) => logs.push({ message, extra }),
   };
   const symbolsAsked: PriceSymbol[][] = [];

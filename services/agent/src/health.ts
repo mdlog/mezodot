@@ -245,7 +245,13 @@ export class Monitor {
       heldCollateral: liquidator.heldSummary(),
       backlog: {
         relayer: relayer.summary(now),
-        liquidator: { indexed: liquidator.store.get().accounts.length, lastTick: liquidator.lastTick, syncError: liquidator.syncError },
+        liquidator: {
+          indexed: liquidator.store.get().accounts.length,
+          lastTick: liquidator.lastTick,
+          syncError: liquidator.syncError,
+          // Sent and not settled yet (stuck, or receipts not found yet): settled from chain state every tick.
+          pendingTransactions: liquidator.pendingTransactions(),
+        },
       },
       oracle: { healthy: oracle.report?.healthy ?? null, checkedAt: oracle.report?.checkedAt ?? null, stale: oracle.stale, error: oracle.error },
       pythPusher: pusher?.status() ?? null,
@@ -356,11 +362,20 @@ export class Monitor {
         Object.entries(tick.skipped).map(([reason, n]) => [{ reason }, n]),
       );
     }
+    const held = liquidator.heldSummary();
     m.gauge(
       'mezodot_agent_held_collateral',
       'Seized collateral not converted back into a debt asset yet (whole units).',
-      liquidator.heldSummary().map((h) => [{ collateral: h.collateral, market: h.market }, Number(h.amount)]),
+      held.map((h) => [{ collateral: h.collateral, market: h.market }, Number(h.amount)]),
     );
+    m.gauge(
+      'mezodot_agent_held_redeemed',
+      'What seized pTokens of another asset than the debt redeemed into and is not sold yet (whole units of that asset).',
+      held.flatMap((h) => (h.redeemed ? [[{ collateral: h.collateral, market: h.market, asset: h.redeemed.asset }, Number(h.redeemed.amount)] as const] : [])),
+    );
+    m.gauge('mezodot_agent_liquidator_pending_transactions', 'Liquidator transactions sent and not settled yet.', [
+      [{}, liquidator.pendingTransactions().length],
+    ]);
 
     const txs = this.senders().flatMap(({ network, sender }) =>
       Object.entries(sender.counts).flatMap(([kind, outcomes]) =>
@@ -414,9 +429,12 @@ export class Monitor {
     return m.text();
   }
 
-  /** Samples balances, then logs and pushes every health check that changed state and every new admin event. */
+  /**
+   * Samples balances and clears a stuck state whose nonce has been mined since (also when nothing else is sent
+   * afterwards), then logs and pushes every health check that changed state and every new admin event.
+   */
   async tick(): Promise<void> {
-    await this.sampleBalances();
+    await Promise.all([this.sampleBalances(), ...this.senders().map(({ sender }) => sender.refreshStuck().catch(() => undefined))]);
     await this.alert();
   }
 

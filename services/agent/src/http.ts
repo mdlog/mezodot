@@ -171,12 +171,15 @@ export function startHttp(s: Services, host = s.ctx.config.httpHost ?? '127.0.0.
         }
       }
       if (url.pathname === '/oracle/health') {
+        // A missing or stale report is checked again here (one router read for all concurrent requests), so the
+        // endpoint stays live without the `oracle` module too. 503 means a feed is unusable or the router unreadable:
+        // a monitoring signal, not a routing one (probe /status for that).
         let status = s.watchdog.status();
-        if (!status.report) {
+        if (!status.report || status.stale) {
           try {
-            await s.watchdog.check();
+            await s.watchdog.refresh();
           } catch (err) {
-            return send(res, 503, { healthy: false, stale: true, error: publicError(err) });
+            if (!status.report) return send(res, 503, { healthy: false, stale: true, error: publicError(err) });
           }
           status = s.watchdog.status();
         }

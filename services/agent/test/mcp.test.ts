@@ -1,11 +1,16 @@
+import { spawn } from 'node:child_process';
+import { copyFileSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createPublicClient, http } from 'viem';
-import { PRICE_KEYS, devnetHub, getHubDeployment, type ProtocolState } from '@mezodot/sdk';
+import { PRICE_KEYS, devnetHub, getHubDeployment, getSpokeDeployment, type ProtocolState } from '@mezodot/sdk';
 import { loadConfig } from '../src/config';
 import { createContext } from '../src/context';
-import { createMcpServer } from '../src/mcp/server';
+import { STDIO_WRITES_OFF, createMcpServer, createStdioMcpServer } from '../src/mcp/server';
 import { collateralDecimals, createTools, describeCollaterals } from '../src/mcp/tools';
 import type { Services } from '../src/services';
 import type { RelayMessage } from '../src/relayer';
@@ -98,6 +103,15 @@ describe('MCP server', () => {
     expect((await open.relay_message({ id: message.id, dry_run: true })).executed).toBe(false);
     expect((await open.relay_message({ id: message.id, dry_run: false })).executed).toBe(true);
     expect(relayed).toEqual([message.id]);
+  });
+
+  it('reports a message archived during a manual relay instead of crashing (final review V2)', async () => {
+    const services = fakeServices(true);
+    services.relayer.relay = async () => null;
+    const tools = createTools(services, { allowWrite: true });
+    const result = await tools.relay_message({ id: message.id, dry_run: false });
+    expect(result).toMatchObject({ executed: false, reason: expect.stringMatching(/archived as undeliverable/) });
+    expect(result.message).not.toHaveProperty('vaa'); // VAA bytes are still not returned
   });
 
   it('rejects invalid addresses', async () => {
@@ -279,4 +293,69 @@ describe('MCP over HTTP is not reachable from arbitrary web pages (final review 
     expect(mcpWriteAllowed(loadConfig({ MEZODOT_ENV: 'devnet', MCP_ALLOW_WRITE: 'true', MCP_TOKEN: 'a-long-random-test-token-123' }))).toBe(true);
     expect(mcpWriteAllowed(loadConfig({ MEZODOT_ENV: 'devnet', MCP_TOKEN: 'a-long-random-test-token-123' }))).toBe(false);
   });
+});
+
+describe('the stdio MCP server (final review A3, F8)', () => {
+  /** Anvil's well-known test key #1. */
+  const KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
+  const AGENT_DIR = fileURLToPath(new URL('..', import.meta.url));
+
+  it('never sends keeper transactions, whatever MCP_ALLOW_WRITE says: no senders, and its write tools dry-run', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mezodot-stdio-'));
+    const hub = getHubDeployment('devnet-hub')!;
+    const spoke = getSpokeDeployment('devnet-spoke')!;
+    // A message the running agent has pending, in the state directory both processes use.
+    const pending = { ...message, emitter: spoke.contracts.spokeGateway, targetContract: hub.contracts.wormholeAdapter };
+    writeFileSync(
+      join(dir, 'relayer-devnet.json'),
+      JSON.stringify({ cursors: {}, sequences: {}, messages: { [message.id]: { ...pending, sequence: { $bigint: '1' }, blockNumber: { $bigint: '1' } } } }),
+    );
+    const logs: string[] = [];
+    const config = loadConfig({ MEZODOT_ENV: 'devnet', MCP_ALLOW_WRITE: 'true', KEEPER_PRIVATE_KEY: KEY, STATE_DIR: dir });
+    const { ctx, server } = createStdioMcpServer(config, (_scope, m) => logs.push(m));
+    expect(ctx.config.stateReadOnly).toBe(true);
+    expect(ctx.hub.wallet).not.toBeNull(); // dry runs still simulate from the keeper's address
+    expect([ctx.hub.sender, ...ctx.spokes.map((sp) => sp.sender)]).toEqual([null, null]);
+    expect(logs).toContain(`MCP_ALLOW_WRITE is ignored over stdio: ${STDIO_WRITES_OFF}`);
+
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test', version: '1' });
+    await Promise.all([server.connect(a), client.connect(b)]);
+    const res = await client.callTool({ name: 'relay_message', arguments: { id: message.id, dry_run: false } });
+    expect(JSON.parse((res.content as { text: string }[])[0].text)).toMatchObject({ executed: false, reason: STDIO_WRITES_OFF });
+    await client.close();
+  });
+
+  it('follows the agent state in services/agent/.state, whatever directory the MCP client starts it in', async () => {
+    // The launcher, copied next to the real sources and modules (and without the package's .env).
+    const pkg = mkdtempSync(join(tmpdir(), 'mezodot-launcher-'));
+    mkdirSync(join(pkg, 'bin'));
+    copyFileSync(join(AGENT_DIR, 'bin/mcp-stdio.mjs'), join(pkg, 'bin/mcp-stdio.mjs'));
+    symlinkSync(join(AGENT_DIR, 'src'), join(pkg, 'src'));
+    symlinkSync(join(AGENT_DIR, 'node_modules'), join(pkg, 'node_modules'));
+    const clientCwd = mkdtempSync(join(tmpdir(), 'mezodot-client-'));
+    const child = spawn(process.execPath, [join(pkg, 'bin/mcp-stdio.mjs')], {
+      cwd: clientCwd,
+      env: { PATH: process.env.PATH, MEZODOT_ENV: 'devnet' },
+      stdio: ['pipe', 'ignore', 'pipe'],
+    });
+    try {
+      const ready = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        let stderr = '';
+        const timer = setTimeout(() => reject(new Error(`no ready line: ${stderr}`)), 25_000);
+        child.stderr.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString();
+          for (const line of stderr.split('\n')) {
+            if (!line.includes('stdio server ready')) continue;
+            clearTimeout(timer);
+            resolve(JSON.parse(line) as Record<string, unknown>);
+          }
+        });
+        child.on('exit', (code) => reject(new Error(`exited with ${code}: ${stderr}`)));
+      });
+      expect(ready.stateDir).toBe(join(pkg, '.state'));
+    } finally {
+      child.kill();
+    }
+  }, 30_000);
 });

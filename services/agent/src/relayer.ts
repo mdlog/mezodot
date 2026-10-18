@@ -16,7 +16,7 @@ import {
   type NetworkName,
 } from '@mezodot/sdk';
 import type { Context } from './context';
-import { publicError } from './errors';
+import { errorText, publicError } from './errors';
 import { LogWindow, isRateLimited } from './scan';
 import { JsonStore, appendArchive, sameAddress } from './store';
 import type { TxSender } from './tx';
@@ -95,8 +95,30 @@ const KEEP_DELIVERED = 500;
 const KEEP_DELIVERED_MS = 7 * 24 * 3_600_000;
 /** A missing sequence is looked up at most this often. */
 const BACKFILL_RETRY_MS = 60_000;
-/** Errors meaning the RPC does not support the "finalized" block tag. */
+/** Node answers meaning the RPC does not support the "finalized" block tag. */
 const NO_FINALIZED_TAG = /finali[sz]ed|block tag|unknown block|invalid (argument|param|block)|not supported/i;
+/** An RPC that refused the "finalized" tag is asked again after this long (it may have been a passing answer, or an upgrade). */
+export const FINALIZED_RETRY_MS = 10 * 60_000;
+/** How long a tick waits for the deliveries it started when the config sets no POLL_MS (the rest go on in the background). */
+const DEFAULT_DELIVERY_WAIT_MS = 4_000;
+
+/**
+ * Whether a failed `getBlock({ blockTag: 'finalized' })` means the RPC does not know the tag. Only what the node said
+ * counts: viem repeats the request body (which names "finalized") in every error message, so a timeout or a 5xx
+ * would otherwise read as an unsupported tag.
+ */
+export const rejectsFinalizedTag = (err: unknown): boolean => !isRateLimited(err) && NO_FINALIZED_TAG.test(errorText(err));
+
+/** Resolves true once every promise settled, or false after `ms`. */
+async function settledWithin(work: Promise<unknown>[], ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), ms)));
+  try {
+    return await Promise.race([Promise.allSettled(work).then(() => true as const), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** Exponential backoff for the n-th consecutive failure (n >= 1), capped. Messages are never abandoned. */
 export const retryDelayMs = (attempts: number): number => Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1));
@@ -165,13 +187,19 @@ export type RelayerSummary = {
  * Sources with guardian-signed VAAs are scanned up to their finalized block (guardians sign nothing earlier, so
  * this costs no latency and no reorg can move a log below the cursor). Per-emitter sequences are tracked: a
  * sequence that never showed up in the logs is fetched by number from the VAA sources.
+ *
+ * Deliveries run in one queue per target chain, so a congested chain (a release stuck through every fee bump on a
+ * spoke) never holds up deposits to the hub or releases to the other spokes, nor the next scans.
  */
 export class Relayer {
   readonly store: JsonStore<RelayState>;
   private readonly windows = new Map<NetworkName, LogWindow>();
   /** Messages being delivered right now (loop or MCP tool): never two deliveries of the same message. */
   private readonly inFlight = new Set<string>();
-  private readonly noFinalizedTag = new Set<NetworkName>();
+  /** Networks whose RPC refused the "finalized" tag, and until when they are scanned to the latest block instead. */
+  private readonly noFinalizedTagUntil = new Map<NetworkName, number>();
+  /** Delivery queue per target chain while it works through the messages it was given. */
+  private readonly queues = new Map<NetworkName, Promise<void>>();
   private readonly backfillTried = new Map<string, number>();
   private readonly archivePath: string;
   /** Sources whose scan is failing: since when, and the latest error (logged once per change). */
@@ -254,16 +282,37 @@ export class Relayer {
       );
     }
     await this.backfill().catch((err: unknown) => this.ctx.log('relayer', 'sequence backfill failed', { error: publicError(err) }));
-    const now = this.now();
-    for (const m of this.pending()) {
-      if ((m.nextAttemptAt ?? 0) > now) continue;
-      await this.advance(m).catch((err: unknown) => this.fail(m, err));
-    }
+    // Usually done in seconds; a chain whose deliveries take longer keeps its queue running past this tick.
+    await settledWithin(this.dispatch(), this.ctx.config.pollMs ?? DEFAULT_DELIVERY_WAIT_MS);
     this.prune();
   }
 
+  /** Resolves true once no delivery is in progress, or false after `timeoutMs` (graceful shutdown). */
+  idle(timeoutMs: number): Promise<boolean> {
+    return settledWithin([...this.queues.values()], timeoutMs);
+  }
+
+  /**
+   * Starts a delivery queue for every target chain with messages due and no queue running yet: each delivers its
+   * messages in turn (their sender serializes them anyway), independently of the other chains.
+   */
+  private dispatch(): Promise<void>[] {
+    const now = this.now();
+    const due = this.pending().filter((m) => (m.nextAttemptAt ?? 0) <= now && !this.inFlight.has(m.id));
+    for (const target of new Set(due.map((m) => m.target))) {
+      if (this.queues.has(target)) continue; // still busy with an earlier batch
+      const batch = due.filter((m) => m.target === target);
+      const queue = (async () => {
+        for (const m of batch) await this.advance(m).catch((err: unknown) => this.fail(m, err));
+      })().finally(() => this.queues.delete(target));
+      this.queues.set(target, queue);
+    }
+    return [...this.queues.values()];
+  }
+
   /** Manually relay one message (MCP tool). A failure is recorded on the message like a loop attempt. */
-  async relay(id: string): Promise<RelayMessage> {
+  /** Relays one message now; null when delivery found it addressed elsewhere and archived it as undeliverable. */
+  async relay(id: string): Promise<RelayMessage | null> {
     const m = this.store.get().messages[id];
     if (!m) throw new Error(`Unknown message ${id}`);
     if (this.inFlight.has(id)) throw new Error(`Message ${id} is already being relayed`);
@@ -273,7 +322,7 @@ export class Relayer {
       this.fail(m, err);
       throw err;
     }
-    return this.store.get().messages[id];
+    return this.store.get().messages[id] ?? null;
   }
 
   // --- deployment identity ---------------------------------------------------------
@@ -304,6 +353,12 @@ export class Relayer {
   private targetContract(target: NetworkName): Address | null {
     if (target === this.ctx.hub.network) return this.ctx.hub.deployment.contracts.wormholeAdapter ?? null;
     return this.ctx.spokes.find((s) => s.network === target)?.deployment.contracts.spokeGateway ?? null;
+  }
+
+  /** Wormhole chain id of `target`. */
+  private targetChainId(target: NetworkName): number | null {
+    if (target === this.ctx.hub.network) return this.ctx.hub.deployment.wormholeChainId;
+    return this.ctx.spokes.find((s) => s.network === target)?.deployment.wormholeChainId ?? null;
   }
 
   /**
@@ -363,17 +418,34 @@ export class Relayer {
     return w;
   }
 
-  /** Last block worth scanning: the finalized one where guardians sign, else the latest. */
+  /** Whether `network` is scanned to its latest block for now (its RPC refused the "finalized" tag recently). */
+  private scansToLatest(network: NetworkName): boolean {
+    const until = this.noFinalizedTagUntil.get(network);
+    return until !== undefined && this.now() < until;
+  }
+
+  /**
+   * Last block worth scanning: the finalized one where guardians sign, else the latest. Only an RPC that answers
+   * that it does not know the tag is scanned to the latest block, and only until FINALIZED_RETRY_MS later: a timeout,
+   * a 5xx or a rate limit fails this scan instead (the next tick tries again).
+   */
   private async head(src: Source): Promise<bigint> {
-    if (!this.usesGuardians(src.network) || this.noFinalizedTag.has(src.network)) return src.client.getBlockNumber();
+    if (!this.usesGuardians(src.network) || this.scansToLatest(src.network)) return src.client.getBlockNumber();
+    const refusedBefore = this.noFinalizedTagUntil.has(src.network);
     try {
       const block = await src.client.getBlock({ blockTag: 'finalized' });
-      if (block.number !== null) return block.number;
+      if (block.number !== null) {
+        if (refusedBefore) {
+          this.noFinalizedTagUntil.delete(src.network);
+          this.ctx.log('relayer', 'RPC serves the finalized block tag again; scanning to the finalized block', { network: src.network });
+        }
+        return block.number;
+      }
     } catch (err) {
-      if (isRateLimited(err) || !NO_FINALIZED_TAG.test(err instanceof Error ? err.message : String(err))) throw err;
+      if (!rejectsFinalizedTag(err)) throw err;
     }
-    this.noFinalizedTag.add(src.network);
-    this.ctx.log('relayer', 'RPC has no finalized block tag; scanning to the latest block', { network: src.network });
+    this.noFinalizedTagUntil.set(src.network, this.now() + FINALIZED_RETRY_MS);
+    if (!refusedBefore) this.ctx.log('relayer', 'RPC has no finalized block tag; scanning to the latest block', { network: src.network });
     return src.client.getBlockNumber();
   }
 
@@ -437,7 +509,7 @@ export class Relayer {
     if (s.messages[id]) return;
     // Scanned to the latest block (the RPC has no "finalized" tag): guardians sign once the block is final, so the
     // first signed-VAA lookup waits for that instead of polling Wormholescan for the whole finality window.
-    const awaitFinality = !m.vaa && this.usesGuardians(src.network) && this.noFinalizedTag.has(src.network);
+    const awaitFinality = !m.vaa && this.usesGuardians(src.network) && this.scansToLatest(src.network);
     const now = this.now();
     s.messages[id] = {
       id,
@@ -516,6 +588,13 @@ export class Relayer {
       this.patch(m.id, { vaaPolls: polls, nextAttemptAt: this.now() + vaaPollDelayMs(polls) });
       return;
     }
+    // The payload names the only contract allowed to execute the message. One addressed elsewhere (a deposit made
+    // under a replaced hub, seen again by a rescan of a reused spoke) reverts WrongTarget forever: archive it.
+    const elsewhere = this.addressedElsewhere(m, vaa);
+    if (elsewhere) {
+      this.archiveMisaddressed(m, vaa, elsewhere);
+      return;
+    }
     if (!m.vaa) this.patch(m.id, { vaa, status: 'ready' });
 
     if (await this.isConsumed(m, vaaHash(vaa))) {
@@ -544,6 +623,34 @@ export class Relayer {
       return;
     }
     this.ctx.log('relayer', 'delivered', { id: m.id, txHash: hash });
+  }
+
+  /**
+   * Why `vaa` can never be executed on the message's target: its payload is addressed to another chain or contract
+   * (null when it is addressed here, or cannot be decoded: then the target contract decides).
+   */
+  private addressedElsewhere(m: RelayMessage, vaa: Hex): string | null {
+    let payload: ReturnType<typeof decodePayload>;
+    try {
+      payload = decodePayload(parseVaa(vaa).payload);
+    } catch {
+      return null;
+    }
+    const expectedType = m.direction === 'deposit' ? MessageType.DEPOSIT : MessageType.RELEASE;
+    if (payload.msgType !== expectedType) return `it carries message type ${payload.msgType}, not ${expectedType}`;
+    const chain = this.targetChainId(m.target);
+    const contract = this.targetContract(m.target);
+    if (chain === null || contract === null) return null;
+    const addressed = fromBytes32(payload.target);
+    if (payload.targetChain === chain && sameAddress(addressed, contract)) return null;
+    return `its payload is addressed to ${addressed} on wormhole chain ${payload.targetChain}, not to ${contract} on ${chain} (a replaced deployment)`;
+  }
+
+  private archiveMisaddressed(m: RelayMessage, vaa: Hex, reason: string): void {
+    this.store.update((s) => void delete s.messages[m.id]);
+    if (this.store.readOnly) return;
+    appendArchive(this.archivePath, { archivedAt: new Date(this.now()).toISOString(), reason: `undeliverable: ${reason}`, messages: [{ ...m, vaa }] });
+    this.ctx.log('relayer', 'message addressed to another contract: archived, not retried', { id: m.id, reason, file: this.archivePath });
   }
 
   private delivered(id: string, deliveredTx?: Hex): void {

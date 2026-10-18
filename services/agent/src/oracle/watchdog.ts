@@ -68,6 +68,7 @@ export function oracleHealth(oracle: OracleState, nowSec: number, pullable: (s: 
 export class OracleWatchdog {
   private last: OracleHealth | null = null;
   private lastError: string | null = null;
+  private checking: Promise<OracleHealth> | null = null;
 
   constructor(
     private readonly ctx: Context,
@@ -88,6 +89,15 @@ export class OracleWatchdog {
     const ageSec = report ? Math.max(0, Math.floor(this.now() / 1000) - report.checkedAt) : null;
     const maxAgeSec = (2 * (this.ctx.config.oracleWatchMs ?? 30_000)) / 1000;
     return { report, stale: ageSec === null || ageSec > maxAgeSec, ageSec, error: this.lastError };
+  }
+
+  /**
+   * A check shared by concurrent callers: what serves a report on demand (/oracle/health, MCP) when it is missing or
+   * stale, e.g. without the `oracle` module, whose loop otherwise keeps it fresh.
+   */
+  refresh(): Promise<OracleHealth> {
+    this.checking ??= this.check().finally(() => (this.checking = null));
+    return this.checking;
   }
 
   async check(): Promise<OracleHealth> {

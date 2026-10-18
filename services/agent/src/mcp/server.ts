@@ -2,11 +2,28 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { NETWORKS } from '@mezodot/sdk';
+import type { AgentConfig } from '../config';
+import { createContext, type Context, type Logger } from '../context';
 import { publicError } from '../errors';
-import { toJson, type Services } from '../services';
+import { createServices, toJson, type Services } from '../services';
 import { createTools, type ToolOptions } from './tools';
 
 const text = (value: unknown): CallToolResult => ({ content: [{ type: 'text', text: toJson(value) }] });
+
+/** Why write tools never execute over stdio. */
+export const STDIO_WRITES_OFF =
+  'write tools execute only in the running agent, over its HTTP /mcp: this stdio server follows the agent state read-only and could not record what a keeper transaction changes';
+
+/**
+ * The MCP server for stdio clients (src/mcp/stdio.ts). It shares STATE_DIR with a running agent, so it only reads
+ * the state files (following the agent's writes) and has no keeper senders: write tools dry-run whatever
+ * MCP_ALLOW_WRITE says (a second sender on the key would also race the agent for nonces).
+ */
+export function createStdioMcpServer(config: AgentConfig, log?: Logger): { ctx: Context; server: McpServer } {
+  const ctx = createContext({ ...config, stateReadOnly: true }, log);
+  if (config.mcpAllowWrite) ctx.log('mcp', `MCP_ALLOW_WRITE is ignored over stdio: ${STDIO_WRITES_OFF}`);
+  return { ctx, server: createMcpServer(createServices(ctx), { allowWrite: false, writesOff: STDIO_WRITES_OFF }) };
+}
 
 /** MCP server exposing Mezodot market data, risk analytics and keeper actions to AI agents. */
 export function createMcpServer(services: Services, opts: ToolOptions): McpServer {
@@ -170,7 +187,7 @@ export function createMcpServer(services: Services, opts: ToolOptions): McpServe
     {
       title: 'Trigger liquidation',
       description:
-        'Liquidate an unhealthy account via KeeperGateway. Dry-run by default; executes only with dry_run=false and MCP_ALLOW_WRITE=true on the agent.',
+        'Liquidate an unhealthy account via KeeperGateway, on the pair the keeper can realise best. Dry-run by default; executes only with dry_run=false and MCP_ALLOW_WRITE=true, over the agent HTTP /mcp (never over stdio).',
       inputSchema: { address: z.string(), dry_run: z.boolean().default(true), force: z.boolean().default(false).describe('ignore MIN_PROFIT_USD') },
       annotations: write,
     },
@@ -181,7 +198,8 @@ export function createMcpServer(services: Services, opts: ToolOptions): McpServe
     'relay_message',
     {
       title: 'Relay message',
-      description: 'Deliver a pending Wormhole message (id from list_pending_messages). Dry-run by default.',
+      description:
+        'Deliver a pending Wormhole message (id from list_pending_messages). Dry-run by default; executes like trigger_liquidation (agent HTTP /mcp only).',
       inputSchema: { id: z.string(), dry_run: z.boolean().default(true) },
       annotations: write,
     },

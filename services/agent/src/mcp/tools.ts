@@ -23,7 +23,8 @@ import type { Services } from '../services';
 
 /**
  * MCP tool handlers as plain async functions (the MCP server wires them up; tests call them
- * directly). Write tools default to dry-run and only execute with MCP_ALLOW_WRITE=true.
+ * directly). Write tools default to dry-run and only execute with MCP_ALLOW_WRITE=true, in the agent itself
+ * (over its HTTP /mcp): the stdio server never executes them.
  */
 
 const addr = (raw: string): Address => {
@@ -93,12 +94,17 @@ export function describeCollaterals(protocol: ProtocolState) {
 }
 
 export type ToolOptions = {
-  /** Whether write tools may execute (dry_run=false). Decided by the transport: see http.ts / stdio.ts. */
+  /** Whether write tools may execute (dry_run=false). Decided by the transport: see http.ts / server.ts (stdio). */
   allowWrite: boolean;
+  /** Why they may not, when allowWrite is false (default: the HTTP rule, MCP_ALLOW_WRITE and MCP_TOKEN). */
+  writesOff?: string;
 };
+
+const HTTP_WRITES_OFF = 'writes disabled (MCP_ALLOW_WRITE=true, and MCP_TOKEN over HTTP)';
 
 export function createTools(s: Services, opts: ToolOptions) {
   const { ctx } = s;
+  const writesOff = opts.writesOff ?? HTTP_WRITES_OFF;
   const protocol = () => readProtocol(ctx.hub.client, ctx.hub.deployment);
 
   /** What the Tigris MUSD/BTC pool pays for `amount` of `from` (pair.getAmountOut, as SwapLeverageManager checks). */
@@ -168,7 +174,14 @@ export function createTools(s: Services, opts: ToolOptions) {
 
     async get_oracle_health() {
       const status = s.watchdog.status();
-      const report = status.report ?? (await s.watchdog.check());
+      // A missing or stale report is checked again (the oracle loop may not run in this process).
+      const report =
+        status.report && !status.stale
+          ? status.report
+          : await s.watchdog.refresh().catch((err: unknown) => {
+              if (status.report) return status.report;
+              throw err;
+            });
       const now = s.watchdog.status();
       return { ...report, stale: now.stale, ageSec: now.ageSec, error: now.error };
     },
@@ -192,12 +205,15 @@ export function createTools(s: Services, opts: ToolOptions) {
       const collateral = p.collaterals.find((c) => c.symbol === 'pMUSD');
       if (!musd || !collateral) throw new Error('MUSD market not configured');
       let account: ReturnType<typeof valuePosition> | undefined;
-      let musdPrice: number | undefined;
+      let musdPrice: number;
       if (address) {
         const position = await readPosition(ctx.hub.client, ctx.hub.deployment, p, addr(address));
         const { prices } = await s.oracle.pricing(riskCheckSymbols(p, position, 'MUSD'));
         account = valuePosition(p, position, prices);
-        musdPrice = prices.MUSD;
+        musdPrice = prices.MUSD ?? 0;
+      } else {
+        // The loop's borrow is priced strictly: without a usable MUSD price the preview must say it would revert.
+        musdPrice = (await s.oracle.pricing(['MUSD'])).prices.MUSD ?? 0;
       }
       // pMUSD shares the cap still accepts, converted to MUSD through the exchange rate (undefined: uncapped).
       const roomShares = collateral.cap === maxUint256 ? undefined : collateral.cap > collateral.total ? collateral.cap - collateral.total : 0n;
@@ -381,16 +397,17 @@ export function createTools(s: Services, opts: ToolOptions) {
       if (!e.plan) return { executed: false, reason: 'Account is not liquidatable (or the keeper holds none of its debt asset)', healthFactor: e.healthFactor };
       if (!ctx.hub.wallet) return { executed: false, reason: 'No keeper key configured; returning plan only', plan: e.plan };
       const updates = await s.liquidator.updatesFor(e);
-      const assessment = await s.liquidator.assess(p, e, prices, updates);
+      // The pair the keeper loop would send: the best one it can realise, not only the best at oracle prices.
+      const { plan, assessment } = await s.liquidator.choose(p, e, prices, updates);
       if (!force && assessment.action === 'skip') {
-        return { executed: false, reason: `${assessment.reason} (pass force=true to override)`, plan: e.plan, assessment };
+        return { executed: false, reason: `${assessment.reason} (pass force=true to override)`, plan, assessment };
       }
       const execute = !dry_run && opts.allowWrite;
-      const result = await s.liquidator.execute(p, e, updates, !execute, { assessment, prices });
+      const result = await s.liquidator.execute(p, e, updates, !execute, { assessment, prices, plan });
       return {
         executed: execute,
-        reason: execute ? 'sent' : dry_run ? 'dry run (pass dry_run=false to execute)' : 'writes disabled (MCP_ALLOW_WRITE=true, and MCP_TOKEN over HTTP)',
-        plan: e.plan,
+        reason: execute ? 'sent' : dry_run ? 'dry run (pass dry_run=false to execute)' : writesOff,
+        plan,
         assessment,
         simulatedSeize: result.simulated,
         seized: result.seized,
@@ -403,9 +420,13 @@ export function createTools(s: Services, opts: ToolOptions) {
       if (!m) throw new Error(`Unknown message ${id}`);
       if (dry_run || !opts.allowWrite) {
         const { vaa: _vaa, ...rest } = m;
-        return { executed: false, reason: dry_run ? 'dry run' : 'writes disabled (MCP_ALLOW_WRITE=true, and MCP_TOKEN over HTTP)', message: rest };
+        return { executed: false, reason: dry_run ? 'dry run' : writesOff, message: rest };
       }
-      const { vaa: _vaa, ...after } = await s.relayer.relay(id);
+      const relayed = await s.relayer.relay(id);
+      const { vaa: _vaa, ...before } = m;
+      if (!relayed)
+        return { executed: false, reason: 'archived as undeliverable: it is addressed to another deployment (see the archived state file)', message: before };
+      const { vaa: _after, ...after } = relayed;
       return { executed: true, message: after };
     },
   };

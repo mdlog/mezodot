@@ -2,16 +2,29 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { encodeAbiParameters, encodeEventTopics, getAddress, keccak256, sliceHex, type Hex } from 'viem';
+import {
+  HttpRequestError,
+  InvalidParamsRpcError,
+  RpcRequestError,
+  TimeoutError,
+  encodeAbiParameters,
+  encodeEventTopics,
+  getAddress,
+  keccak256,
+  sliceHex,
+  type Hex,
+} from 'viem';
 import { MessageType, encodePayload, signDevVaa, spokeGatewayAbi, toBytes32, vaaBody } from '@mezodot/sdk';
-import { Relayer, markSeen, messageId, releaseDeferred, stuckAfterMs, vaaHash, vaaPollDelayMs, type RelayMessage } from '../src/relayer';
+import { FINALIZED_RETRY_MS, Relayer, markSeen, messageId, releaseDeferred, stuckAfterMs, vaaHash, vaaPollDelayMs, type RelayMessage } from '../src/relayer';
 import { JsonStore } from '../src/store';
 import { TxSender, type SendOptions } from '../src/tx';
+import { scriptedChain } from './chain';
 
 const GUARDIAN = '0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6';
 const GATEWAY = '0x00000000000000000000000000000000000000ab';
 const OLD_GATEWAY = '0x00000000000000000000000000000000000000a0';
 const ADAPTER = '0x00000000000000000000000000000000000000ad';
+const OLD_ADAPTER = '0x00000000000000000000000000000000000000ac';
 const KEEPER_GATEWAY = '0x00000000000000000000000000000000000000ee';
 const KEEPER = '0x000000000000000000000000000000000000beef';
 const VAA_API = 'http://vaa.test';
@@ -42,11 +55,12 @@ type CtxOptions = {
   logs?: string[];
   hubNetwork?: string;
   spokeNetwork?: string;
+  pollMs?: number;
 };
 
 /** Devnet-shaped context (agent-signed VAAs) unless `vaaApis` names guardian sources for a network. */
 const relayCtx = (o: CtxOptions = {}) => ({
-  config: { stateDir: o.dir ?? stateDir(), env: 'devnet', devGuardianKey: null, vaaApis: o.vaaApis ?? {} },
+  config: { stateDir: o.dir ?? stateDir(), env: 'devnet', devGuardianKey: null, vaaApis: o.vaaApis ?? {}, pollMs: o.pollMs },
   hub: {
     network: o.hubNetwork ?? 'devnet-hub',
     client: o.hubClient ?? { getBlockNumber: async () => 0n, getContractEvents: async () => [], readContract: async () => false },
@@ -82,7 +96,12 @@ const deposit = (over: Partial<RelayMessage> = {}): RelayMessage => ({
   ...over,
 });
 
-const depositVaa = (sequence: bigint, emitter: Hex = GATEWAY) =>
+/** A RELEASE from the hub adapter to the base-sepolia gateway. */
+const release = (over: Partial<RelayMessage> = {}): RelayMessage =>
+  deposit({ direction: 'release', source: 'devnet-hub', target: 'base-sepolia', emitterChain: 50, emitter: ADAPTER, ...over });
+
+/** A DEPOSIT VAA from the spoke gateway, addressed to `target` (the hub adapter unless a replaced one is named). */
+const depositVaa = (sequence: bigint, emitter: Hex = GATEWAY, target: Hex = ADAPTER) =>
   signDevVaa(GUARDIAN, {
     timestamp: 1,
     nonce: 0,
@@ -94,7 +113,27 @@ const depositVaa = (sequence: bigint, emitter: Hex = GATEWAY) =>
       msgType: MessageType.DEPOSIT,
       nonce: sequence,
       targetChain: 50,
-      target: toBytes32(ADAPTER),
+      target: toBytes32(target),
+      account: toBytes32(KEEPER),
+      token: toBytes32('0x4200000000000000000000000000000000000006'),
+      amount: 10n ** 15n,
+    }),
+  });
+
+/** A RELEASE VAA from the hub adapter, addressed to the base-sepolia gateway unless another one is named. */
+const releaseVaa = (sequence: bigint, target: Hex = GATEWAY) =>
+  signDevVaa(GUARDIAN, {
+    timestamp: 1,
+    nonce: 0,
+    emitterChain: 50,
+    emitter: ADAPTER,
+    sequence,
+    consistencyLevel: 1,
+    payload: encodePayload({
+      msgType: MessageType.RELEASE,
+      nonce: sequence,
+      targetChain: 10004,
+      target: toBytes32(target),
       account: toBytes32(KEEPER),
       token: toBytes32('0x4200000000000000000000000000000000000006'),
       amount: 10n ** 15n,
@@ -493,29 +532,208 @@ describe('relayer after a redeploy (redeploy-agent-cursor-skip, state-survives-r
 
 describe('gas floor on Mezo (testnet: estimates far below what a VAA delivery uses)', () => {
   it('relayer deliveries never go below the VAA relay floor', async () => {
-    const sentGas: bigint[] = [];
-    const hubClient = {
-      getBlockNumber: async () => 0n,
-      getContractEvents: async () => [],
-      readContract: async () => false,
-      estimateContractGas: async () => 24_000n, // what a misbehaving backend returned
-      estimateFeesPerGas: async () => ({ maxFeePerGas: 2n, maxPriorityFeePerGas: 1n }),
-      getTransactionCount: async () => 0,
-      waitForTransactionReceipt: async ({ hash }: { hash: Hex }) => ({ status: 'success', gasUsed: 163_000n, transactionHash: hash, logs: [] }),
-    };
-    const wallet = {
-      account: { address: KEEPER },
-      writeContract: async (req: { gas: bigint }) => (sentGas.push(req.gas), `0x${'33'.repeat(32)}`),
-    };
-    const sender = new TxSender('devnet-hub', hubClient as never, wallet as never, { receiptTimeoutMs: 1_000, log: () => {} });
+    // 24,000 is what a misbehaving backend estimated; the node mines what it accepts.
+    const chain = scriptedChain({ estimateGas: 24_000n, onSend: (h, _tx, c) => c.mine(h) });
+    const sender = new TxSender('devnet-hub', chain.client, chain.wallet, { receiptTimeoutMs: 1_000, pollMs: 2, log: () => {} });
+    const hubClient = { getBlockNumber: async () => 0n, getContractEvents: async () => [], readContract: async () => false };
     const relayer = new Relayer(relayCtx({ hubClient, hubSender: sender }) as never, fetch, () => 0);
     const vaa = await depositVaa(2n);
     relayer.store.update((s) => {
       s.messages['g'] = deposit({ id: 'g', sequence: 2n, status: 'ready', vaa });
     });
     await relayer.tick();
-    expect(sentGas).toEqual([250_000n]); // GAS_FLOOR.vaaRelay, not 24,000 × 1.3 + 20,000
-    expect(relayer.store.get().messages['g']).toMatchObject({ status: 'delivered', deliveredTx: `0x${'33'.repeat(32)}` });
+    const [hash] = chain.accepted;
+    expect(chain.gasOf(hash)).toBe(250_000n); // GAS_FLOOR.vaaRelay, not 24,000 × 1.3 + 20,000
+    expect(relayer.store.get().messages['g']).toMatchObject({ status: 'delivered', deliveredTx: hash });
     expect(relayer.store.get().messages['g'].vaa).toBeUndefined();
+  });
+});
+
+describe('relayer and transactions at the same nonce (final review A1)', () => {
+  it('never marks a release delivered on the receipt of another transaction at its nonce, and retries it', async () => {
+    const vaaX = await releaseVaa(1n);
+    const vaaY = await releaseVaa(2n);
+    let autoMine = false;
+    let lookups = 0;
+    const chain = scriptedChain({
+      onSend: (h, _tx, c) => void (autoMine && c.mine(h)),
+      // Release Y took over the nonce X left stuck; while Y waits, a builder that still had X's last attempt mines it.
+      onCall: (method, params, c) => {
+        const y = c.accepted[3];
+        if (method === 'eth_getTransactionReceipt' && y !== undefined && params[0] === y && ++lookups === 2) c.mine(c.accepted[2]);
+      },
+    });
+    // SpokeGateway.isConsumed: whether a mined transaction delivered that VAA.
+    const vaaOf = new Map([vaaX, vaaY].map((v) => [vaaHash(v), v]));
+    const consumed = (digest: Hex) => chain.mined.some((h) => (chain.dataOf(h) ?? '').includes(vaaOf.get(digest)!.slice(2)));
+    const spokeClient = {
+      getBlockNumber: async () => 0n,
+      getContractEvents: async () => [],
+      readContract: async ({ args }: { args: [Hex] }) => consumed(args[0]),
+    };
+    const sender = new TxSender('base-sepolia', chain.client, chain.wallet, { receiptTimeoutMs: 30, pollMs: 2, log: () => {} });
+    let now = 1_000;
+    const relayer = new Relayer(relayCtx({ spokeClient, spokeSender: sender }) as never, fetch, () => now);
+    relayer.store.update((s) => {
+      // Newest first: X is delivered before Y.
+      s.messages['x'] = release({ id: 'x', sequence: 1n, status: 'ready', vaa: vaaX, observedAt: 2 });
+      s.messages['y'] = release({ id: 'y', sequence: 2n, status: 'ready', vaa: vaaY, observedAt: 1 });
+    });
+    await relayer.tick();
+    expect(chain.mined).toEqual([chain.accepted[2]]); // only X's last attempt, at nonce 0
+    const y = relayer.store.get().messages['y'];
+    expect(y).toMatchObject({ status: 'ready', attempts: 1 });
+    expect(y.deliveredTx).toBeUndefined();
+    expect(y.lastError).toMatch(/consumed by another transaction/);
+    expect(relayer.store.get().messages['x']).toMatchObject({ status: 'ready', attempts: 1 }); // stuck: it may still be mined
+
+    autoMine = true;
+    now += 60_000; // past both backoffs
+    await relayer.tick();
+    // X was delivered by its own transaction after all; Y is sent again, at the next nonce.
+    expect(relayer.store.get().messages['x']).toMatchObject({ status: 'delivered' });
+    const delivered = relayer.store.get().messages['y'];
+    expect(delivered.status).toBe('delivered');
+    expect(chain.nonceOf(delivered.deliveredTx!)).toBe(1);
+    expect(chain.dataOf(delivered.deliveredTx!)).toContain(vaaY.slice(2));
+  });
+});
+
+describe('relayer and messages for replaced contracts (final review A5)', () => {
+  it('archives a deposit addressed to the replaced hub adapter instead of retrying it forever', async () => {
+    const dir = stateDir();
+    const logs: string[] = [];
+    // A rescan of a reused spoke sees a deposit made under the previous hub again: its payload names the old adapter.
+    const vaas = new Map([
+      [1n, await depositVaa(1n, GATEWAY, OLD_ADAPTER)],
+      [2n, await depositVaa(2n)],
+    ]);
+    const { sender, sent } = fakeSender();
+    const relayer = new Relayer(relayCtx({ dir, hubSender: sender, logs, vaaApis: { 'base-sepolia': [VAA_API] } }) as never, vaaSource(vaas), () => 0);
+    relayer.store.update((s) => {
+      s.messages['old'] = deposit({ id: 'old', sequence: 1n });
+      s.messages['new'] = deposit({ id: 'new', sequence: 2n });
+    });
+    await relayer.tick();
+    expect(Object.keys(relayer.store.get().messages)).toEqual(['new']);
+    expect(relayer.store.get().messages['new'].status).toBe('delivered');
+    expect(sent).toHaveLength(1); // nothing was sent for the old deposit
+    expect(relayer.pending()).toEqual([]); // nothing left to flag on /health
+    const archive = JSON.parse(readFileSync(join(dir, 'relayer-devnet.archived.json'), 'utf8'));
+    expect(archive).toMatchObject([
+      { reason: expect.stringMatching(new RegExp(`^undeliverable: its payload is addressed to ${OLD_ADAPTER}`)), messages: [{ id: 'old' }] },
+    ]);
+    expect(logs).toContain('message addressed to another contract: archived, not retried');
+  });
+
+  it('archives a release addressed to another spoke gateway', async () => {
+    const dir = stateDir();
+    const { sender, sent } = fakeSender();
+    const relayer = new Relayer(relayCtx({ dir, spokeSender: sender }) as never, fetch, () => 0);
+    const vaa = await releaseVaa(3n, OLD_GATEWAY);
+    relayer.store.update((s) => {
+      s.messages['r'] = release({ id: 'r', sequence: 3n, status: 'ready', vaa });
+    });
+    await relayer.tick();
+    expect(relayer.store.get().messages['r']).toBeUndefined();
+    expect(sent).toEqual([]);
+    expect(JSON.parse(readFileSync(join(dir, 'relayer-devnet.archived.json'), 'utf8'))[0].messages[0]).toMatchObject({ id: 'r', vaa });
+  });
+});
+
+describe('relayer and the finalized block tag (final review A7)', () => {
+  const body = { method: 'eth_getBlockByNumber', params: ['finalized', false] };
+  const url = 'https://rpc.example/v2/KEY';
+
+  it.each([
+    ['a timeout', () => new TimeoutError({ body, url })],
+    ['a 503', () => new HttpRequestError({ body, url, status: 503, details: 'Service Unavailable' })],
+  ])('%s on the finalized block fails that scan only, and never switches the source to the latest block', async (_what, failure) => {
+    let fail = true;
+    const ranges: [bigint, bigint][] = [];
+    const logs: string[] = [];
+    const spokeClient = {
+      getBlockNumber: async () => 1_000n,
+      getBlock: async () => {
+        if (fail) throw failure(); // its message repeats the request body, which names "finalized"
+        return { number: 900n };
+      },
+      getContractEvents: async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) => (ranges.push([fromBlock, toBlock]), []),
+    };
+    const relayer = new Relayer(relayCtx({ spokeClient, vaaApis: { 'base-sepolia': [VAA_API] }, logs }) as never, fetch, () => 0);
+    await relayer.tick();
+    expect(ranges).toEqual([]); // nothing scanned past the finalized block
+    expect(relayer.failingScans().map((f) => f.network)).toEqual(['base-sepolia']);
+    expect(logs).not.toContain('RPC has no finalized block tag; scanning to the latest block');
+    fail = false;
+    await relayer.tick();
+    expect(ranges.at(-1)![1]).toBe(900n);
+    expect(relayer.store.get().cursors['base-sepolia']?.block).toBe(901n);
+  });
+
+  it('scans an RPC that refuses the tag to the latest block for a while, then asks for the tag again', async () => {
+    let refuses = true;
+    let latest = 1_000n;
+    let now = 0;
+    let asked = 0;
+    const logs: string[] = [];
+    const spokeClient = {
+      getBlockNumber: async () => latest,
+      getBlock: async () => {
+        asked += 1;
+        if (refuses) throw new InvalidParamsRpcError(new RpcRequestError({ body, url, error: { code: -32_602, message: 'invalid block tag "finalized"' } }));
+        return { number: latest - 20n };
+      },
+      getContractEvents: async () => [],
+    };
+    const relayer = new Relayer(relayCtx({ spokeClient, vaaApis: { 'base-sepolia': [VAA_API] }, logs }) as never, fetch, () => now);
+    const cursor = () => relayer.store.get().cursors['base-sepolia']?.block;
+    await relayer.tick();
+    expect(cursor()).toBe(1_001n);
+    expect(logs).toContain('RPC has no finalized block tag; scanning to the latest block');
+    refuses = false;
+    latest = 1_050n;
+    now = FINALIZED_RETRY_MS - 1;
+    await relayer.tick();
+    expect([asked, cursor()]).toEqual([1, 1_051n]); // not asked again yet
+    latest = 1_100n;
+    now = FINALIZED_RETRY_MS + 1;
+    await relayer.tick();
+    expect([asked, cursor()]).toEqual([2, 1_081n]); // back to the finalized block
+    expect(logs).toContain('RPC serves the finalized block tag again; scanning to the finalized block');
+  });
+});
+
+describe('relayer deliveries per target chain (final review A11)', () => {
+  it('a release stuck on one spoke holds up neither deposits to the hub nor the next ticks', async () => {
+    let unblock!: () => void;
+    const stalled = new Promise<void>((resolve) => (unblock = resolve));
+    const spokeSent: Record<string, unknown>[] = [];
+    const spokeSender = {
+      address: KEEPER,
+      send: async (request: Record<string, unknown>) => {
+        spokeSent.push(request);
+        await stalled; // e.g. unmined through every fee bump during a Sepolia fee spike
+        return { hash: `0x${'44'.repeat(32)}`, receipt: { status: 'success', logs: [] }, gas: 0n, nonce: 0 };
+      },
+    };
+    const { sender: hubSender, sent: hubSent } = fakeSender();
+    const relayer = new Relayer(relayCtx({ hubSender, spokeSender, pollMs: 20 }) as never, fetch, () => 0);
+    const releaseFirst = await releaseVaa(1n);
+    const depositAfter = await depositVaa(1n);
+    relayer.store.update((s) => {
+      s.messages['r'] = release({ id: 'r', status: 'ready', vaa: releaseFirst, observedAt: 2 });
+      s.messages['d'] = deposit({ id: 'd', status: 'ready', vaa: depositAfter, observedAt: 1 });
+    });
+    await relayer.tick();
+    expect(hubSent).toHaveLength(1);
+    expect(relayer.store.get().messages['d'].status).toBe('delivered');
+    expect(relayer.store.get().messages['r'].status).toBe('ready'); // still in flight
+    await relayer.tick(); // returns too, and does not deliver the in-flight release a second time
+    expect(spokeSent).toHaveLength(1);
+    expect(await relayer.idle(10)).toBe(false);
+    unblock();
+    expect(await relayer.idle(1_000)).toBe(true);
+    expect(relayer.store.get().messages['r'].status).toBe('delivered');
   });
 });

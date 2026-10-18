@@ -1,10 +1,11 @@
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { encodeAbiParameters, encodeEventTopics } from 'viem';
-import { PRICE_KEYS, vaultManagerAbi, type PositionState, type ProtocolState } from '@mezodot/sdk';
-import { evaluateAccount } from '../src/liquidator';
+import { describe, expect, it, vi } from 'vitest';
+import { encodeAbiParameters, encodeEventTopics, erc20Abi, type Hex } from 'viem';
+import { PRICE_KEYS, pTokenAbi, vaultManagerAbi, type PositionState, type ProtocolState } from '@mezodot/sdk';
+import { READ_ONLY_SENDS, evaluateAccount } from '../src/liquidator';
+import { StuckTransactionError, type SendOptions, type Settlement } from '../src/tx';
 
 const E18 = 10n ** 18n;
 const POOL_MUSD = '0x00000000000000000000000000000000000000a1';
@@ -184,31 +185,57 @@ const KEEPER = '0x00000000000000000000000000000000000000ee';
 
 type Call = { address?: string; functionName: string; args?: readonly unknown[] };
 
-/** Keeper sender double: records every request and answers with a receipt from `receiptFor`. */
-function fakeSender(receiptFor: (request: Call) => Record<string, unknown> = () => ({})) {
+/**
+ * Keeper sender double: records every request, reports it to `onBroadcast` like TxSender, and answers with a receipt
+ * from `receiptFor` (or throws the error it returns). `settled` is what `settle` reports for anything sent earlier.
+ */
+function fakeSender(receiptFor: (request: Call) => Record<string, unknown> | Error = () => ({})) {
   const sent: Call[] = [];
   const sender = {
     address: KEEPER,
-    send: async (request: Call) => {
+    settled: { status: 'pending' } as Settlement,
+    settle: async () => sender.settled,
+    send: async (request: Call, options?: SendOptions) => {
       sent.push(request);
-      return {
-        hash: `0x${String(sent.length).padStart(64, '0')}`,
-        receipt: { status: 'success', logs: [], ...receiptFor(request) },
-        gas: 0n,
-        nonce: sent.length - 1,
-      };
+      const nonce = sent.length - 1;
+      const hash = `0x${String(sent.length).padStart(64, '0')}` as Hex;
+      options?.onBroadcast?.({ network: 'devnet-hub', nonce, hashes: [hash] });
+      const answer = receiptFor(request);
+      if (answer instanceof Error) throw answer;
+      return { hash, receipt: { status: 'success', logs: [], transactionHash: hash, ...answer }, gas: 0n, nonce };
     },
   };
   return { sender, sent };
 }
 
-const liquidatedLog = (seized: bigint, repaid: bigint, collateralId = 0n) => ({
+const liquidatedLog = (seized: bigint, repaid: bigint, collateralId = 0n, account: Hex = ALICE) => ({
   address: VAULT,
-  topics: encodeEventTopics({ abi: vaultManagerAbi, eventName: 'Liquidated', args: { account: ALICE, liquidator: GATEWAY, marketId: 0n } }),
+  topics: encodeEventTopics({ abi: vaultManagerAbi, eventName: 'Liquidated', args: { account, liquidator: GATEWAY, marketId: 0n } }),
   data: encodeAbiParameters([{ type: 'uint256' }, { type: 'uint256' }, { type: 'uint256' }], [collateralId, repaid, seized]),
 });
 
-function keeperCtx(client: Record<string, unknown>, sender: unknown, config: Record<string, unknown> = {}) {
+/** What PToken.redeem emits: the shares burnt and the assets paid to the keeper. */
+const withdrawLog = (pool: Hex, assets: bigint, shares: bigint) => ({
+  address: pool,
+  topics: encodeEventTopics({ abi: pTokenAbi, eventName: 'Withdraw', args: { sender: KEEPER, receiver: KEEPER, owner: KEEPER } }),
+  data: encodeAbiParameters([{ type: 'uint256' }, { type: 'uint256' }], [assets, shares]),
+});
+
+/** The debt asset a Tigris sale paid the keeper. */
+const proceedsLog = (token: Hex, value: bigint) => ({
+  address: token,
+  topics: encodeEventTopics({ abi: erc20Abi, eventName: 'Transfer', args: { from: TIGRIS_POOL, to: KEEPER } }),
+  data: encodeAbiParameters([{ type: 'uint256' }], [value]),
+});
+
+/** The Ethereum Sepolia-like spoke WETH is released on (wormhole chain 10004), with its gas price. */
+const wethSpoke = (gasPrice = 0n) => ({
+  network: 'devnet-spoke',
+  client: { getGasPrice: async () => gasPrice },
+  deployment: { wormholeChainId: 10004, contracts: {} },
+});
+
+function keeperCtx(client: Record<string, unknown>, sender: unknown, config: Record<string, unknown> = {}, spokes: unknown[] = [wethSpoke()]) {
   return {
     config: {
       stateDir: mkdtempSync(join(tmpdir(), 'mezodot-liq-')),
@@ -238,7 +265,7 @@ function keeperCtx(client: Record<string, unknown>, sender: unknown, config: Rec
         tokens: { MUSD: MUSD_TOKEN, MEZO: POOL_MEZO, BTC: BTC_TOKEN },
       },
     },
-    spokes: [],
+    spokes,
     log: () => {},
   };
 }
@@ -422,8 +449,14 @@ describe('keeper liveness (audit r2-keeper-liveness)', () => {
   });
 });
 
+/** The fixture with pMUSD instead of pMEZO as collateral 0: a pToken of the MUSD debt itself. */
+const pMusdProtocol: ProtocolState = {
+  ...protocol,
+  collaterals: [{ ...protocol.collaterals[0], token: POOL_MUSD, priceKey: PRICE_KEYS.MUSD, symbol: 'pMUSD' }, protocol.collaterals[1]],
+};
+
 describe('recycling seized collateral (inventory-recycling)', () => {
-  const pMezoLiquidation = () => evaluateAccount(protocol, position(0n, 3_900n * E18, 1_000_000n * 10n ** 24n), { MEZO: 0.004764, MUSD: 1, ETH: 3_000 });
+  const pMusdLiquidation = () => evaluateAccount(pMusdProtocol, position(0n, 3_900n * E18, 4_000n * 10n ** 24n), { MEZO: 0.004764, MUSD: 1, ETH: 3_000 });
 
   it('redeems what the receipt says was seized, not what the earlier simulation returned', async () => {
     const { Liquidator } = await import('../src/liquidator');
@@ -435,12 +468,13 @@ describe('recycling seized collateral (inventory-recycling)', () => {
       simulateContract: async () => ({ result: 123n, request: { functionName: 'triggerLiquidation', address: GATEWAY, args: [] } }),
     };
     const liq = new Liquidator(keeperCtx(client, sender) as never, {} as never);
-    const out = await liq.execute(protocol, pMezoLiquidation(), []);
+    const out = await liq.execute(pMusdProtocol, pMusdLiquidation(), []);
     expect(out.seized).toBe(100n);
     expect(sent.map((w) => w.functionName)).toEqual(['triggerLiquidation', 'redeem']);
-    expect(sent[1].address).toBe(POOL_MEZO);
+    expect(sent[1].address).toBe(POOL_MUSD);
     expect(sent[1].args).toEqual([100n, KEEPER, KEEPER]);
     expect(liq.held()).toEqual([]);
+    expect(liq.pendingTransactions()).toEqual([]); // both settled by their receipts
   });
 
   it('redeems only what the pool can pay out now and converts the rest on later ticks', async () => {
@@ -453,7 +487,7 @@ describe('recycling seized collateral (inventory-recycling)', () => {
       simulateContract: async () => ({ result: 100n, request: { functionName: 'triggerLiquidation', address: GATEWAY, args: [] } }),
     };
     const liq = new Liquidator(keeperCtx(client, sender) as never, {} as never);
-    await liq.execute(protocol, pMezoLiquidation(), []);
+    await liq.execute(pMusdProtocol, pMusdLiquidation(), []);
     expect(sent[1].args).toEqual([40n, KEEPER, KEEPER]);
     expect(liq.held()).toMatchObject([{ collateralId: 0, marketId: 0, amount: 60n }]);
     // Persisted: a restart still knows about it.
@@ -463,10 +497,10 @@ describe('recycling seized collateral (inventory-recycling)', () => {
     );
     expect(again.held()).toMatchObject([{ amount: 60n }]);
     maxRedeem = 0n;
-    await liq.convertHeld(protocol, {});
+    await liq.convertHeld(pMusdProtocol, {});
     expect(sent).toHaveLength(2); // no idle cash: nothing sent
     maxRedeem = 10n ** 30n;
-    await liq.convertHeld(protocol, {});
+    await liq.convertHeld(pMusdProtocol, {});
     expect(sent[2].args).toEqual([60n, KEEPER, KEEPER]);
     expect(liq.held()).toEqual([]);
   });
@@ -474,7 +508,7 @@ describe('recycling seized collateral (inventory-recycling)', () => {
   it('remote seizures are paid on the spoke: nothing to convert on the hub; a reverted liquidation is an error', async () => {
     const { Liquidator } = await import('../src/liquidator');
     let status = 'success';
-    const { sender, sent } = fakeSender(() => ({ status }));
+    const { sender, sent } = fakeSender(() => ({ status, logs: [liquidatedLog(4n * 10n ** 17n, 1_175n * E18, 1n)] }));
     const client = {
       readContract: async ({ functionName }: Call) => (functionName === 'allowance' ? 10n ** 30n : 0n),
       simulateContract: async () => ({ result: 1n, request: { functionName: 'triggerLiquidation', address: GATEWAY, args: [] } }),
@@ -483,8 +517,10 @@ describe('recycling seized collateral (inventory-recycling)', () => {
     const remote = evaluateAccount(protocol, position(E18, 2_350n * E18), { ETH: 2_800, MUSD: 1 });
     await liq.execute(protocol, remote, []);
     expect(sent.map((w) => w.functionName)).toEqual(['triggerLiquidation']);
+    expect(liq.held()).toEqual([]);
     status = 'reverted';
     await expect(liq.execute(protocol, remote, [])).rejects.toThrow(/reverted/);
+    expect(liq.pendingTransactions()).toEqual([]);
   });
 });
 
@@ -620,5 +656,319 @@ describe('liquidator after a redeploy (redeploy-agent-cursor-skip)', () => {
     const liq = new Liquidator(keeperCtx({}, null, { stateDir: dir }) as never);
     expect(liq.store.get()).toMatchObject({ cursor: 42n, accounts: [ALICE] });
     expect(existsSync(join(dir, 'liquidator-devnet.archived.json'))).toBe(false);
+  });
+});
+
+// --- final review A1 / A2 / A3 / A4 / A9 / A10 ---------------------------------------------------------------------
+
+const MEZO_TOKEN = '0x00000000000000000000000000000000000000c2';
+/** MUSD debt against pMEZO, whose pool pays out MEZO: pTokens of another asset than the debt. */
+const crossProtocol: ProtocolState = {
+  ...protocol,
+  markets: [
+    { ...market(0, POOL_MUSD, 'MUSD'), asset: MUSD_TOKEN },
+    { ...market(1, POOL_MEZO, 'MEZO'), asset: MEZO_TOKEN },
+  ],
+};
+const MEZO_PRICES = { MEZO: 0.004764, MUSD: 1, ETH: 3_000 };
+/** 1,000,000 MEZO of pMEZO against 3,900 MUSD: repay 1,950, seize 2,145 MUSD of MEZO (450,251 MEZO). */
+const pMezoForMusd = () => evaluateAccount(crossProtocol, position(0n, 3_900n * E18, 1_000_000n * 10n ** 24n), MEZO_PRICES);
+
+/** Hub reads for the pMEZO pool and a Tigris MEZO → MUSD route paying `mezoPrice` MUSD per MEZO. */
+const mezoClient = (mezoPrice: number, balances: Record<string, bigint> = {}) => ({
+  getGasPrice: async () => 0n,
+  getBalance: async () => 0n,
+  readContract: async (c: Call) => {
+    if (c.functionName === 'getAmountsOut') {
+      const amount = c.args![0] as bigint;
+      return [amount, (amount * BigInt(Math.round(mezoPrice * 1e9))) / 10n ** 9n];
+    }
+    if (c.functionName === 'maxRedeem') return 10n ** 40n;
+    if (c.functionName === 'balanceOf') return balances[c.address!.toLowerCase()] ?? 0n;
+    return 0n;
+  },
+  simulateContract: async () => ({ result: 1n, request: { functionName: 'triggerLiquidation', address: GATEWAY, args: [] } }),
+});
+
+describe('only receipts of a liquidation count as one (final review A1)', () => {
+  it('a successful receipt without a Liquidated event seized nothing: nothing is held, no keeper BTC is sold', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    // E.g. the receipt of another transaction mined at the liquidation's nonce: status success, no Liquidated event.
+    const { sender, sent } = fakeSender();
+    const liq = new Liquidator(keeperCtx(btcClient(80_000), sender) as never, {} as never);
+    const e = evaluateAccount(btcProtocol, btcPosition(E18, 63_000n * E18), BTC_PRICES);
+    await expect(liq.execute(btcProtocol, e, [])).rejects.toThrow(/no Liquidated event/);
+    expect(liq.held()).toEqual([]);
+    expect(sent.map((w) => w.functionName)).toEqual(['triggerLiquidation']);
+  });
+});
+
+describe('liquidator transactions are settled from chain state (final review A2)', () => {
+  const client = {
+    readContract: async ({ functionName }: Call) =>
+      functionName === 'allowance' || functionName === 'maxRedeem' || functionName === 'balanceOf' ? 10n ** 30n : 0n,
+    simulateContract: async () => ({ result: 123n, request: { functionName: 'triggerLiquidation', address: GATEWAY, args: [] } }),
+  };
+  const pMusdLiquidation = () => evaluateAccount(pMusdProtocol, position(0n, 3_900n * E18, 4_000n * 10n ** 24n), { MUSD: 1, MEZO: 0.004764, ETH: 3_000 });
+  const stuck = () => new StuckTransactionError('devnet-hub', 0, [`0x${'01'.padStart(64, '0')}`]);
+  const dirOf = (liq: { store: unknown }) => (liq.store as { path: string }).path.replace(/\/[^/]+$/, '');
+
+  it('records a liquidation before it is sent, and applies its receipt once found, also after a restart', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const { sender, sent } = fakeSender((r) => (r.functionName === 'triggerLiquidation' ? stuck() : {}));
+    const liq = new Liquidator(keeperCtx(client, sender) as never, {} as never);
+    await expect(liq.execute(pMusdProtocol, pMusdLiquidation(), [])).rejects.toBeInstanceOf(StuckTransactionError);
+    expect(liq.held()).toEqual([]);
+    expect(liq.pendingTransactions()).toMatchObject([{ action: { type: 'liquidation', account: ALICE, collateralId: 0, marketId: 0 }, nonce: 0 }]);
+
+    // The agent restarts (a shutdown cut the wait short); the liquidation was mined after all.
+    const after = new Liquidator(keeperCtx(client, sender, { stateDir: dirOf(liq) }) as never, {} as never);
+    sender.settled = { status: 'mined', receipt: { status: 'success', transactionHash: sent[0] as never, logs: [liquidatedLog(100n, 1_950n * E18)] } as never };
+    await after.settlePending();
+    expect(after.held()).toMatchObject([{ collateralId: 0, marketId: 0, amount: 100n, cost: 1_950n * E18 }]);
+    expect(after.pendingTransactions()).toEqual([]);
+  });
+
+  it('never sells a lot again while its sale may still be mined, and releases it once the sale is found', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const { sender, sent } = fakeSender((r) => (r.functionName === 'swapExactTokensForTokens' ? stuck() : {}));
+    const liq = new Liquidator(keeperCtx(btcClient(80_000), sender) as never, {} as never);
+    liq.store.update((s) => {
+      s.held['0:0'] = { collateralId: 0, marketId: 0, amount: 4n * 10n ** 17n, cost: 31_500n * E18, minProceeds: 0n, since: 0, lastTx: '0x01' };
+    });
+    const swaps = () => sent.filter((w) => w.functionName === 'swapExactTokensForTokens').length;
+    await liq.convertHeld(btcProtocol, BTC_PRICES); // broadcast, then unmined through every fee bump
+    expect(swaps()).toBe(1);
+    expect(liq.held()[0].amount).toBe(4n * 10n ** 17n);
+    await liq.convertHeld(btcProtocol, BTC_PRICES); // still pending: the keeper's own BTC is not sold as this lot
+    expect(swaps()).toBe(1);
+    sender.settled = { status: 'mined', receipt: { status: 'success', transactionHash: `0x${'02'.repeat(32)}`, logs: [] } as never };
+    await liq.convertHeld(btcProtocol, BTC_PRICES);
+    expect(liq.held()).toEqual([]);
+    expect(swaps()).toBe(1);
+    expect(liq.pendingTransactions()).toEqual([]);
+  });
+
+  it('drops a record once another transaction has held its nonce for a minute, then converts the lot again', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    let fail = true;
+    const { sender, sent } = fakeSender((r) => (r.functionName === 'swapExactTokensForTokens' && fail ? stuck() : {}));
+    const liq = new Liquidator(keeperCtx(btcClient(80_000), sender) as never, {} as never);
+    liq.store.update((s) => {
+      s.held['0:0'] = { collateralId: 0, marketId: 0, amount: 4n * 10n ** 17n, cost: 31_500n * E18, minProceeds: 0n, since: 0, lastTx: '0x01' };
+    });
+    const swaps = () => sent.filter((w) => w.functionName === 'swapExactTokensForTokens').length;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      await liq.convertHeld(btcProtocol, BTC_PRICES);
+      sender.settled = { status: 'dropped' };
+      await liq.convertHeld(btcProtocol, BTC_PRICES); // first seen dropped: a lagging receipt endpoint is not trusted yet
+      expect([swaps(), liq.pendingTransactions().length]).toEqual([1, 1]);
+      vi.setSystemTime(Date.now() + 61_000);
+      fail = false;
+      await liq.convertHeld(btcProtocol, BTC_PRICES); // it never happened: the lot is sold for real now
+      expect(swaps()).toBe(2);
+      expect(liq.held()).toEqual([]);
+      expect(liq.pendingTransactions()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a send the node refused leaves no record', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const { sender } = fakeSender((r) => (r.functionName === 'triggerLiquidation' ? new Error('insufficient funds for gas * price + value') : {}));
+    const liq = new Liquidator(keeperCtx(client, sender) as never, {} as never);
+    await expect(liq.execute(pMusdProtocol, pMusdLiquidation(), [])).rejects.toThrow(/insufficient funds/);
+    expect(liq.pendingTransactions()).toEqual([]);
+  });
+});
+
+describe('a process that follows the agent state read-only (final review A3)', () => {
+  it('never sends keeper transactions, but still dry-runs them', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const { sender, sent } = fakeSender();
+    const client = {
+      readContract: async ({ functionName }: Call) => (functionName === 'allowance' ? 0n : 0n),
+      simulateContract: async () => ({ result: 42n, request: { functionName: 'triggerLiquidation', address: GATEWAY, args: [] } }),
+    };
+    const liq = new Liquidator(keeperCtx(client, sender, { stateReadOnly: true }) as never, {} as never);
+    const e = evaluateAccount(pMusdProtocol, position(0n, 3_900n * E18, 4_000n * 10n ** 24n), { MUSD: 1, MEZO: 0.004764, ETH: 3_000 });
+    await expect(liq.execute(pMusdProtocol, e, [])).rejects.toThrow(READ_ONLY_SENDS);
+    expect(sent).toEqual([]); // not even the approve
+    expect(await liq.execute(pMusdProtocol, e, [], true)).toMatchObject({ simulated: 42n, txHash: null });
+  });
+});
+
+describe('pTokens of another asset than the debt (final review A4)', () => {
+  it('values seized pMEZO for MUSD debt at what its MEZO sells for, not at par', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const e = pMezoForMusd();
+    expect(e.plan!.collateralId).toBe(0);
+    // Tigris pays 0.0040 MUSD per MEZO, 16% below the oracle: 450,251 MEZO return ~1,801 MUSD for 1,950 repaid.
+    const hold = await new Liquidator(keeperCtx(mezoClient(0.004), fakeSender().sender) as never, {} as never).assess(crossProtocol, e, MEZO_PRICES, []);
+    expect(hold).toMatchObject({ action: 'liquidate', sale: 'hold' });
+    expect(hold.reason).toMatch(/Tigris pays .* MUSD for the MEZO redeemed from the seized pMEZO/);
+    expect(Number(hold.saleQuote)).toBeCloseTo(450_251 * 0.004, -1);
+    const skip = new Liquidator(keeperCtx(mezoClient(0.004), fakeSender().sender, { unsellablePolicy: 'skip' }) as never, {} as never);
+    expect(await skip.assess(crossProtocol, e, MEZO_PRICES, [])).toMatchObject({ action: 'skip', sale: null });
+    // At the oracle price the sale pays back the repayment with profit: liquidate and sell.
+    const sell = await new Liquidator(keeperCtx(mezoClient(0.004764), fakeSender().sender) as never, {} as never).assess(crossProtocol, e, MEZO_PRICES, []);
+    expect(sell).toMatchObject({ action: 'liquidate', sale: 'sell' });
+    expect(sell.netProfitUsd).toBeCloseTo(2_145 * 0.98 - 1_950, 0);
+  });
+
+  it('redeems seized pMEZO and sells the MEZO for MUSD with an oracle-bounded minimum', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const shares = 450_000n * 10n ** 24n;
+    const mezo = 450_000n * E18;
+    const { sender, sent } = fakeSender((r) =>
+      r.functionName === 'redeem'
+        ? { logs: [withdrawLog(POOL_MEZO, mezo, shares)] }
+        : r.functionName === 'swapExactTokensForTokens'
+          ? { logs: [proceedsLog(MUSD_TOKEN, 2_100n * E18)] }
+          : {},
+    );
+    const client = mezoClient(0.004764, { [POOL_MEZO]: shares, [MEZO_TOKEN]: mezo });
+    const liq = new Liquidator(keeperCtx(client, sender) as never, {} as never);
+    liq.store.update((s) => {
+      s.held['0:0'] = { collateralId: 0, marketId: 0, amount: shares, cost: 1_950n * E18, minProceeds: 0n, since: 0, lastTx: '0x01' };
+    });
+    await liq.convertHeld(crossProtocol, MEZO_PRICES);
+    expect(sent.map((w) => w.functionName)).toEqual(['redeem', 'approve', 'swapExactTokensForTokens']);
+    expect(sent[0]).toMatchObject({ address: POOL_MEZO, args: [shares, KEEPER, KEEPER] });
+    const [amountIn, minOut, routes] = sent[2].args as [bigint, bigint, { from: string; to: string }[]];
+    expect(amountIn).toBe(mezo);
+    expect(routes[0]).toMatchObject({ from: MEZO_TOKEN, to: MUSD_TOKEN });
+    // 450,000 MEZO are worth 2,143.8 MUSD at the oracle; the sale must return at least 95% of that.
+    expect(minOut).toBeGreaterThanOrEqual((2_143_800n * E18 * 95n) / 100_000n);
+    expect(liq.held()).toEqual([]);
+  });
+
+  it('keeps redeemed MEZO while Tigris pays too little, and never counts it as MEZO repay inventory', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const shares = 450_000n * 10n ** 24n;
+    const mezo = 450_000n * E18;
+    const { sender, sent } = fakeSender((r) => (r.functionName === 'redeem' ? { logs: [withdrawLog(POOL_MEZO, mezo, shares)] } : {}));
+    // The keeper holds 1,000 MEZO of its own on top of what the lot redeemed.
+    const client = mezoClient(0.004, { [POOL_MEZO]: shares, [MEZO_TOKEN]: mezo + 1_000n * E18, [MUSD_TOKEN]: 0n });
+    const liq = new Liquidator(keeperCtx(client, sender) as never, {} as never);
+    liq.store.update((s) => {
+      s.held['0:0'] = { collateralId: 0, marketId: 0, amount: shares, cost: 1_950n * E18, minProceeds: 0n, since: 0, lastTx: '0x01' };
+    });
+    await liq.convertHeld(crossProtocol, MEZO_PRICES);
+    expect(sent.map((w) => w.functionName)).toEqual(['redeem']);
+    expect(liq.held()).toMatchObject([{ amount: 0n, redeemed: { amount: mezo, cost: 1_950n * E18 } }]);
+    const inventory = await (liq as unknown as { inventory: (p: ProtocolState) => Promise<Record<number, bigint>> }).inventory(crossProtocol);
+    expect(inventory[1]).toBe(1_000n * E18); // only the keeper's own MEZO repays MEZO debt
+  });
+});
+
+describe('pair choice at realisable value (final review A9)', () => {
+  /** MUSD debt against BTC (8% bonus: best at oracle prices) and pMUSD (3%), which redeems at par. */
+  const mixed: ProtocolState = {
+    ...btcProtocol,
+    collaterals: [
+      { ...btcProtocol.collaterals[0], bonusBps: 800 },
+      { ...protocol.collaterals[0], id: 1, token: POOL_MUSD, priceKey: PRICE_KEYS.MUSD, symbol: 'pMUSD', ltBps: 8_000, bonusBps: 300 },
+    ],
+    liquidationFeeBps: 0,
+  };
+  const account: PositionState = {
+    ...btcPosition(E18 / 2n, 52_000n * E18),
+    collateral: [
+      { id: 0, balance: E18 / 2n, valueUsd: 0n },
+      { id: 1, balance: 20_000n * 10n ** 24n, valueUsd: 0n },
+    ],
+  };
+  // Tigris pays 70,000 MUSD per BTC (12.5% below the oracle): the BTC plan would sell at a loss.
+  const client = (simulated: unknown[]) => ({
+    ...btcClient(70_000),
+    simulateContract: async ({ args }: { args: readonly unknown[] }) => (
+      simulated.push(args),
+      { result: 1n, request: { functionName: 'triggerLiquidation', address: GATEWAY, args } }
+    ),
+  });
+
+  it('falls back to the next pair when the best one at oracle prices does not pay (LIQUIDATE_UNSELLABLE=skip)', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const e = evaluateAccount(mixed, account, BTC_PRICES);
+    expect(e.candidates.map((c) => c.collateralId)).toEqual([0, 1]); // BTC first at oracle prices
+    const simulated: unknown[] = [];
+    const liq = new Liquidator(keeperCtx(client(simulated), fakeSender().sender, { unsellablePolicy: 'skip' }) as never, {} as never);
+    const { plan, assessment } = await liq.choose(mixed, e, BTC_PRICES, []);
+    expect(plan.collateralId).toBe(1);
+    expect(assessment).toMatchObject({ action: 'liquidate', sale: null, collateralId: 1 });
+    await liq.execute(mixed, e, [], true, { plan, assessment });
+    expect((simulated[0] as unknown[])[3]).toBe(1n); // the pMUSD pair is the one sent
+  });
+
+  it('prefers collateral it can realise now over BTC it would have to hold (LIQUIDATE_UNSELLABLE=hold)', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const e = evaluateAccount(mixed, account, BTC_PRICES);
+    const liq = new Liquidator(keeperCtx(client([]), fakeSender().sender) as never, {} as never);
+    expect(await liq.assess(mixed, e, BTC_PRICES, [])).toMatchObject({ action: 'liquidate', sale: 'hold', collateralId: 0 });
+    expect((await liq.choose(mixed, e, BTC_PRICES, [])).plan.collateralId).toBe(1);
+  });
+});
+
+describe('one pair that cannot be priced does not block the others (final review V1)', () => {
+  const mixed: ProtocolState = {
+    ...btcProtocol,
+    collaterals: [
+      { ...btcProtocol.collaterals[0], bonusBps: 800 },
+      { ...protocol.collaterals[0], id: 1, token: POOL_MUSD, priceKey: PRICE_KEYS.MUSD, symbol: 'pMUSD', ltBps: 8_000, bonusBps: 300 },
+    ],
+    liquidationFeeBps: 0,
+  };
+  const account: PositionState = {
+    ...btcPosition(E18 / 2n, 52_000n * E18),
+    collateral: [
+      { id: 0, balance: E18 / 2n, valueUsd: 0n },
+      { id: 1, balance: 20_000n * 10n ** 24n, valueUsd: 0n },
+    ],
+  };
+  // Pricing a pair can fail on an RPC read (a spoke gas price, a quote): the first candidate's assessment throws.
+  const rpcDown = () => Promise.reject(new Error('HTTP 429 from the RPC'));
+
+  it('picks another pair when one cannot be priced', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const e = evaluateAccount(mixed, account, BTC_PRICES);
+    expect(e.candidates.map((c) => c.collateralId)).toEqual([0, 1]);
+    const liq = new Liquidator(keeperCtx(btcClient(80_000), fakeSender().sender) as never, {} as never);
+    vi.spyOn(liq as unknown as { assessPlan: () => Promise<unknown> }, 'assessPlan').mockImplementationOnce(rpcDown);
+    const { plan, assessment } = await liq.choose(mixed, e, BTC_PRICES, []);
+    expect(plan.collateralId).toBe(1);
+    expect(assessment.collateralId).toBe(1);
+  });
+
+  it('still fails when no pair can be priced', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const e = evaluateAccount(mixed, account, BTC_PRICES);
+    const liq = new Liquidator(keeperCtx(btcClient(80_000), fakeSender().sender) as never, {} as never);
+    vi.spyOn(liq as unknown as { assessPlan: () => Promise<unknown> }, 'assessPlan').mockImplementation(rpcDown);
+    await expect(liq.choose(mixed, e, BTC_PRICES, [])).rejects.toThrow(/429/);
+  });
+});
+
+describe('spoke collateral pays for its own release (final review A10)', () => {
+  // 0.1 WETH ($280) against 235 MUSD: repay 117.5, seize $125.7, oracle profit $8.2, $7.0 after the 1% haircut.
+  const small = () => evaluateAccount(protocol, position(E18 / 10n, 235n * E18), { ETH: 2_800, MUSD: 1 });
+
+  it('counts the spoke gas the keeper pays to relay the release to itself', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const client = { getGasPrice: async () => 0n, readContract: async () => 0n };
+    // Ethereum Sepolia at 10 gwei: a 250k-gas receiveMessage costs 0.0025 ETH, $7.
+    const liq = new Liquidator(keeperCtx(client, fakeSender().sender, {}, [wethSpoke(10n ** 10n)]) as never, {} as never);
+    const a = await liq.assess(protocol, small(), { ETH: 2_800, MUSD: 1 }, []);
+    expect(a.costsUsd).toBeCloseTo(0.0025 * 2_800, 6);
+    expect(a.action).toBe('skip'); // $7.0 − $7.0 is below MIN_PROFIT_USD
+  });
+
+  it('skips spoke collateral released on a chain this agent has no spoke for', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const liq = new Liquidator(keeperCtx({ getGasPrice: async () => 0n, readContract: async () => 0n }, fakeSender().sender, {}, []) as never, {} as never);
+    const a = await liq.assess(protocol, evaluateAccount(protocol, position(E18, 2_350n * E18), { ETH: 2_800, MUSD: 1 }), { ETH: 2_800, MUSD: 1 }, []);
+    expect(a).toMatchObject({ action: 'skip', reason: expect.stringMatching(/no spoke for/) });
   });
 });
