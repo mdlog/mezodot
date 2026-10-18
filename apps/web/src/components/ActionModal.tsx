@@ -80,14 +80,25 @@ function ActionBody({ modal }: { modal: AmountModal }) {
       post: walletShareAssets,
       unpost: min(unpostMax, assetsFor(market, postedShares)),
     };
-    return { price, walletAsset, walletShares, debt, postedShares, canRedeemAll, unpostAll, max: max[modal.type] };
+    // What sets that max, for the message shown when an amount goes over it.
+    const limit: Record<AmountModal['type'], string> = {
+      supply: `your ${market.symbol} wallet balance`,
+      withdraw: canRedeemAll || walletShareAssets <= market.cash ? `your ${market.receiptSymbol} balance` : "the pool's available liquidity",
+      borrow: borrowMax <= market.cash ? 'your borrow limit' : "the pool's available liquidity",
+      repay: debt <= walletAsset ? 'your outstanding debt' : `your ${market.symbol} wallet balance`,
+      post: `your ${market.receiptSymbol} balance`,
+      unpost: unpostAll ? `your posted ${market.receiptSymbol}` : 'what can be removed while your position stays healthy',
+    };
+    // Until the wallet and position are read the max is unknown, not zero.
+    const known = balances !== undefined && position !== undefined;
+    return { price, walletAsset, walletShares, debt, postedShares, canRedeemAll, unpostAll, max: max[modal.type], limit: limit[modal.type], known };
   }, [market, protocol, prices, balances, position, collateral, valued, modal.type]);
 
   if (!protocol || !market || !info) return <p className="muted-note">Loading on-chain data…</p>;
 
   const parsed = parseInput(amount, market.decimals);
   const value = parsed ?? 0n;
-  const invalid = parsed === null || parsed > info.max;
+  const invalid = parsed === null || !info.known || parsed > info.max;
   const usd = units(value, market.decimals) * info.price;
 
   // Health factor preview with fresh prices.
@@ -154,7 +165,7 @@ function ActionBody({ modal }: { modal: AmountModal }) {
       <label className="field-label" htmlFor="modal-amount">
         AMOUNT{' '}
         <span>
-          Max {fmt(units(info.max, market.decimals), 4)} {market.symbol}
+          Max {info.known ? fmt(units(info.max, market.decimals), 4) : '…'} {market.symbol}
         </span>
       </label>
       <AmountInput
@@ -168,6 +179,7 @@ function ActionBody({ modal }: { modal: AmountModal }) {
         }}
         unit={market.symbol}
         onMax={() => {
+          if (!info.known) return;
           setAmount(toInput(info.max, market.decimals));
           setUseMax(true);
         }}
@@ -197,9 +209,9 @@ function ActionBody({ modal }: { modal: AmountModal }) {
           </span>
         )}
       </div>
-      {parsed !== null && parsed > info.max && (
+      {info.known && parsed !== null && parsed > info.max && (
         <p className="inline-error" role="alert">
-          Amount exceeds the maximum available.
+          Amount exceeds {info.limit}: at most {fmt(units(info.max, market.decimals), 4)} {market.symbol}. Use MAX to fill it in.
         </p>
       )}
       <div className="message-warning">

@@ -5,6 +5,7 @@ import { TokenLogo } from '../components/Logos';
 import { AddressLink, NotDeployed, PageTitle, SummaryStrip } from '../components/ui';
 import { HUB, HUB_DEPLOYED } from '../chain/env';
 import { usePrices, useProtocol, useValuedPosition, useWalletBalances } from '../data/hooks';
+import { toInput } from '../lib/amount';
 import { compactUsd, fmt, fmtApy, money, pct, units } from '../lib/format';
 import { useUi } from '../state/UiContext';
 
@@ -16,6 +17,10 @@ export function Markets() {
   const balances = useWalletBalances().data;
   const { position } = useValuedPosition();
   const musd = protocol?.markets.find((m) => m.symbol === 'MUSD');
+  // PRD flow A supplies 10,000 MUSD; a wallet holding less is offered what it has instead of an amount it cannot send.
+  const flowA = musd ? 10_000n * 10n ** BigInt(musd.decimals) : 0n;
+  const walletMusd = musd ? (balances?.hub.tokens[musd.symbol] ?? 0n) : 0n;
+  const flowASupply = walletMusd > 0n && walletMusd < flowA ? walletMusd : flowA;
 
   return (
     <>
@@ -191,8 +196,11 @@ export function Markets() {
               </span>
             </div>
             <p>At the live exchange rate of {fmt(units(musd.exchangeRate, musd.decimals), 6)} MUSD per pMUSD.</p>
-            <button className="button button--outline" onClick={() => openModal({ type: 'supply', marketId: musd.id, preset: '10000' })}>
-              Supply 10,000 MUSD <ArrowRight size={13} />
+            <button
+              className="button button--outline"
+              onClick={() => openModal({ type: 'supply', marketId: musd.id, preset: toInput(flowASupply, musd.decimals) })}
+            >
+              Supply {fmt(units(flowASupply, musd.decimals), 2)} MUSD <ArrowRight size={13} />
             </button>
           </div>
         </div>
