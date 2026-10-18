@@ -13,6 +13,7 @@ import { useHubClient, usePrices, useValuedPosition, useWalletBalances } from '.
 import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { spendableWeth, wrapNeeded } from '../lib/wrap';
 import { finalityEta, formatWait } from '../lib/eta';
+import { ChainLogo } from '../components/ChainLogo';
 import { fmt, money, timeAgo, units } from '../lib/format';
 import { useUi, type Flight } from '../state/UiContext';
 
@@ -126,9 +127,7 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
             const selected = s.name === spoke.name;
             return (
               <button key={s.name} className={`chain-option ${selected ? 'is-selected' : ''}`} onClick={() => setSpokeName(s.name)} aria-pressed={selected}>
-                <span className="chain-disc" style={{ background: s.name.startsWith('base') ? '#3d66ad' : '#6b77bc' }}>
-                  {s.label[0]}
-                </span>
+                <ChainLogo network={s.name} label={s.label} />
                 <span>
                   <b>{s.label}</b>
                   <small>Wormhole chain {s.wormholeChainId}</small>

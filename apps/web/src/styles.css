@@ -930,6 +930,10 @@ button:disabled {
   background: #486cad;
   flex: none;
 }
+.chain-logo {
+  flex: none;
+  display: block;
+}
 .chain-disc--arb {
   background: #476ca9;
 }
