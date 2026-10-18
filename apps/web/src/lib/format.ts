@@ -1,9 +1,18 @@
 export const fmt = (n: number, digits = 0): string =>
   new Intl.NumberFormat('en-US', { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(n);
 
-export const money = (n: number, digits = 0): string => `${n < 0 ? '−' : ''}$${fmt(Math.abs(n), digits)}`;
+/**
+ * US dollars. Without `digits` the precision follows the size: cents below $1,000 (positions on testnet are
+ * often worth cents: 50 MEZO ≈ $0.15), whole dollars above, and <$0.01 for a non-zero amount under a cent.
+ */
+export const money = (n: number, digits?: number): string => {
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '−' : '';
+  if (digits === undefined && abs > 0 && abs < 0.005) return `${sign}<$0.01`;
+  return `${sign}$${fmt(abs, digits ?? (abs >= 1_000 ? 0 : 2))}`;
+};
 
-/** Compact USD: $46.10M, $9.6K, $840. */
+/** Compact USD: $46.10M, $9.6K, $840.00, $0.15. */
 export const compactUsd = (n: number): string => (n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(2)}M` : n >= 1_000 ? `$${(n / 1_000).toFixed(1)}K` : money(n));
 
 export const pct = (ratio: number, digits = 1): string => `${fmt(ratio * 100, digits)}%`;
