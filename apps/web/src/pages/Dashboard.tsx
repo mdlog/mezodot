@@ -1,8 +1,9 @@
 import { ArrowRight, ArrowUpRight, Clock3, GitBranch, Layers3, Radio, RefreshCw, Waves, Zap } from 'lucide-react';
 import { useAccount } from 'wagmi';
 import { healthStatus, perSecondToAnnual } from '@mezodot/sdk';
+import { ChainLogo, ChainLogoStack, TokenLogo } from '../components/Logos';
 import { EventIcon, InfoBar, NotDeployed, PageTitle, PanelTitle, StatCard, SummaryStrip, TxLink } from '../components/ui';
-import { HUB, HUB_DEPLOYED, SPOKES } from '../chain/env';
+import { HUB, HUB_DEPLOYED, SPOKES, spokeByWormholeChain } from '../chain/env';
 import { useActivity } from '../data/activity';
 import { computeTvl, useAgent, useLoopStats, usePrices, useProtocol, useValuedPosition } from '../data/hooks';
 import { compactUsd, fmt, fmtApy, fmtHealth, money, pct, timeAgo, units } from '../lib/format';
@@ -129,7 +130,7 @@ export function Dashboard() {
           <p>Lock WETH or USDC on a spoke chain, borrow MUSD on Mezo. Only a guardian-signed Wormhole message crosses — never your principal.</p>
           <div className="bridge-map">
             <div className="map-chain">
-              <span className="chain-disc chain-disc--arb">{SPOKES[0]?.label[0] ?? 'S'}</span>
+              <ChainLogoStack networks={SPOKES.map((s) => s.name)} />
               <span>
                 <b>{SPOKES.map((s) => s.label.split(' ')[0]).join(' / ')}</b>
                 <small>External collateral</small>
@@ -143,7 +144,7 @@ export function Dashboard() {
               <div className="route-dash" />
             </div>
             <div className="map-chain">
-              <span className="chain-disc chain-disc--mezo">M</span>
+              <ChainLogo network={HUB.name} />
               <span>
                 <b>Mezo Hub</b>
                 <small>MUSD borrowing</small>
@@ -192,9 +193,7 @@ export function Dashboard() {
                     <tr key={m.id} onClick={() => go('markets')} className="clickable-row">
                       <td>
                         <div className="asset-cell">
-                          <span className="asset-icon" style={{ background: m.symbol === 'MUSD' ? '#5b52ce' : '#b97b48' }}>
-                            M
-                          </span>
+                          <TokenLogo symbol={m.symbol} />
                           <span>
                             <b>{m.symbol}</b>
                             <small>{m.receiptSymbol}</small>
@@ -238,7 +237,7 @@ export function Dashboard() {
                   .filter((c) => c.balance > 0n)
                   .map((c) => (
                     <div key={c.collateral.id}>
-                      <span className={`position-token ${c.collateral.isRemote ? 'token-blue' : 'token-purple'}`}>{c.collateral.isRemote ? '↗' : 'p'}</span>
+                      <TokenLogo symbol={c.collateral.symbol} network={spokeByWormholeChain(c.collateral.chainId)?.name} size={23} />
                       <span>
                         <b>{c.collateral.symbol} collateral</b>
                         <small>
@@ -252,7 +251,7 @@ export function Dashboard() {
                   .filter((d) => d.amount > 0n)
                   .map((d) => (
                     <div key={d.market.id}>
-                      <span className="position-token token-amber">↓</span>
+                      <TokenLogo symbol={d.market.symbol} size={23} />
                       <span>
                         <b>{d.market.symbol} borrowed</b>
                         <small>{fmtApy(perSecondToAnnual(d.market.borrowRatePerSecond))} borrow APY</small>

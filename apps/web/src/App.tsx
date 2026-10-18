@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { ActionModal } from './components/ActionModal';
+import { ChainLogo } from './components/Logos';
 import { Brand } from './components/ui';
 import { ENV_NAME, HUB, HUB_DEPLOYED, SPOKES } from './chain/env';
 import type { View } from './hooks/useHashRoute';
@@ -96,7 +97,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
         </a>
         <div className="sidebar-network">
           <div>
-            <span className="network-icon">M</span>
+            <ChainLogo network={HUB.name} size={23} />
             <span>
               <b>{HUB.label}</b>
               <small>

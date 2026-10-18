@@ -1,6 +1,7 @@
 import { ArrowRight, Coins, LockKeyhole, Plus, TrendingUp } from 'lucide-react';
 import { useAccount } from 'wagmi';
 import { perSecondToAnnual, pTokenUnits } from '@mezodot/sdk';
+import { TokenLogo } from '../components/Logos';
 import { AddressLink, NotDeployed, PageTitle, SummaryStrip } from '../components/ui';
 import { HUB, HUB_DEPLOYED } from '../chain/env';
 import { usePrices, useProtocol, useValuedPosition, useWalletBalances } from '../data/hooks';
@@ -75,9 +76,7 @@ export function Markets() {
             <article className="market-detail-card" key={m.id}>
               <div className="market-detail-top">
                 <div className="asset-cell">
-                  <span className="asset-icon asset-icon--large" style={{ background: m.symbol === 'MUSD' ? '#5b52ce' : '#b97b48' }}>
-                    M
-                  </span>
+                  <TokenLogo symbol={m.symbol} size={31} />
                   <span>
                     <b>{m.symbol}</b>
                     <small>
@@ -102,7 +101,7 @@ export function Markets() {
               </div>
               <div className="rate-box">
                 <span>
-                  <span className="receipt-glyph">p</span> {m.receiptSymbol} exchange rate
+                  <TokenLogo symbol={m.receiptSymbol} size={16} /> {m.receiptSymbol} exchange rate
                 </span>
                 <b>
                   1 {m.receiptSymbol} <i>=</i> {fmt(units(m.exchangeRate, m.decimals), 6)} {m.symbol}

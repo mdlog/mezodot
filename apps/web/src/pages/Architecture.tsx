@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ArrowRight, ArrowUpRight, Blocks, Check, Code2, Coins, GitBranch, Layers3, Network, Radio, Shield, Waves } from 'lucide-react';
+import { ChainLogoStack } from '../components/Logos';
 import { AddressLink, InfoBar, PageTitle, SummaryStrip } from '../components/ui';
 import { HUB, SPOKES } from '../chain/env';
 import { useUi } from '../state/UiContext';
@@ -134,7 +135,7 @@ export function Architecture() {
             <div className="topology-spoke">
               <div className="topology-label">EXTERNAL SPOKES</div>
               <div className="spoke-chain">
-                <span className="chain-disc chain-disc--arb">B</span>
+                <ChainLogoStack networks={SPOKES.map((s) => s.name)} />
                 <div>
                   <b>{SPOKES.map((s) => s.label).join(' · ')}</b>
                   <small>Collateral source</small>

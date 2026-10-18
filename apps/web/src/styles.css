@@ -284,17 +284,6 @@ button:disabled {
   margin-right: 4px;
   vertical-align: 1px;
 }
-.network-icon {
-  width: 23px;
-  height: 23px;
-  border-radius: 7px;
-  background: var(--indigo);
-  color: white;
-  display: grid;
-  place-items: center;
-  font-size: 13px;
-  font-weight: 700;
-}
 .sidebar-footer {
   display: flex;
   justify-content: space-between;
@@ -361,15 +350,6 @@ button:disabled {
 }
 .network-selector--button:hover {
   color: var(--indigo);
-}
-.network-selector--button:hover .network-icon {
-  background: #554bd0;
-}
-.network-selector .network-icon {
-  width: 19px;
-  height: 19px;
-  font-size: 12px;
-  border-radius: 6px;
 }
 .network-selector small {
   color: #a3a3a9;
@@ -918,27 +898,44 @@ button:disabled {
   color: #9697a0;
   margin-top: 3px;
 }
-.chain-disc {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
-  background: #486cad;
-  flex: none;
-}
-.chain-logo {
+.logo-mark {
   flex: none;
   display: block;
 }
-.chain-disc--arb {
-  background: #476ca9;
+.logo-unknown {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #ebe9e3;
+  color: var(--muted);
 }
-.chain-disc--mezo {
-  background: var(--indigo);
+/* A token logo with a small chain or Mezodot badge on its lower-right edge. */
+.token-logo {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+}
+.logo-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--white);
+}
+.logo-badge--square {
+  border-radius: 23%;
+}
+/* Overlapping chain logos, e.g. every spoke at once. */
+.logo-stack {
+  flex: none;
+  display: flex;
+}
+.logo-stack > .logo-mark {
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--white);
+}
+.logo-stack > .logo-mark + .logo-mark {
+  margin-left: -7px;
 }
 .map-route {
   display: flex;
@@ -1062,17 +1059,6 @@ tbody tr:last-child td {
   align-items: center;
   gap: 8px;
 }
-.asset-icon {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  color: white;
-  font-size: 13px;
-  font-weight: 600;
-  flex: none;
-}
 .asset-cell b,
 .asset-cell small {
   display: block;
@@ -1164,27 +1150,6 @@ tbody tr:last-child td {
   gap: 8px;
   padding: 8px 0;
   border-top: 1px solid #eeede7;
-}
-.position-token {
-  width: 23px;
-  height: 23px;
-  border-radius: 7px;
-  display: grid;
-  place-items: center;
-  font-size: 13.5px;
-  font-weight: 600;
-}
-.token-purple {
-  background: #eeedfb;
-  color: #594fca;
-}
-.token-blue {
-  background: #edf1fa;
-  color: #5d76a7;
-}
-.token-amber {
-  background: #f8f0e5;
-  color: #b17b44;
 }
 .position-list b,
 .position-list small {
@@ -1572,11 +1537,6 @@ tbody tr:last-child td {
   justify-content: space-between;
   align-items: center;
 }
-.asset-icon--large {
-  width: 31px;
-  height: 31px;
-  font-size: 14px;
-}
 .market-detail-top .asset-cell b {
   font-size: 13.5px;
 }
@@ -1625,16 +1585,6 @@ tbody tr:last-child td {
   gap: 6px;
   font-size: 11.5px;
   color: #8e909a;
-}
-.receipt-glyph {
-  width: 15px;
-  height: 15px;
-  border-radius: 5px;
-  background: #e8e6fb;
-  color: var(--indigo);
-  display: grid;
-  place-items: center;
-  font-weight: 600;
 }
 .rate-box > b {
   display: block;
@@ -1843,26 +1793,6 @@ tbody tr:last-child td {
   margin-left: auto;
   color: #9697a0;
   font: 11.5px var(--mono);
-}
-.coin-mini,
-.coin-large {
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: 13.5px;
-  font-weight: 600;
-}
-.coin-mini {
-  width: 19px;
-  height: 19px;
-}
-.coin-eth {
-  background: #edf0fa;
-  color: #5f71ad;
-}
-.coin-usdc {
-  background: #eef5f7;
-  color: #4c8ba2;
 }
 .amount-input {
   height: 42px;
@@ -2169,11 +2099,6 @@ tbody tr:last-child td {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.coin-large {
-  width: 29px;
-  height: 29px;
-  font-size: 15px;
 }
 .collateral-detail b,
 .collateral-detail small {
@@ -4050,10 +3975,9 @@ tbody tr:last-child td {
   .map-chain small {
     font-size: 11px;
   }
-  .chain-disc {
+  .map-chain .logo-mark {
     width: 23px;
     height: 23px;
-    font-size: 12px;
   }
   .map-route {
     margin: 0 4px;
@@ -4093,10 +4017,9 @@ tbody tr:last-child td {
   .asset-cell {
     gap: 6px;
   }
-  .asset-icon {
+  .asset-cell .logo-mark {
     width: 21px;
     height: 21px;
-    font-size: 12px;
   }
   .asset-cell b {
     font-size: 12px;

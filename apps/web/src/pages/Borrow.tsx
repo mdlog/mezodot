@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ArrowRight, ArrowUpRight, LockKeyhole, Network, Shield, ShieldAlert } from 'lucide-react';
 import { useAccount } from 'wagmi';
 import { healthStatus, perSecondToAnnual, symbolForPriceKey } from '@mezodot/sdk';
+import { TokenLogo } from '../components/Logos';
 import { AmountInput, ConnectGate, NotDeployed, PageTitle, PanelTitle, PriceNotice, SummaryStrip } from '../components/ui';
 import { HUB_DEPLOYED, spokeByWormholeChain } from '../chain/env';
 import { borrowSteps } from '../chain/actions';
@@ -84,9 +85,7 @@ export function Borrow() {
               <span className="field-label">COLLATERAL POSITION</span>
               {(valued?.collateral.filter((c) => c.balance > 0n) ?? []).map((c) => (
                 <div className="collateral-detail" key={c.collateral.id}>
-                  <span className="coin-large" style={{ background: c.collateral.isRemote ? '#edf0fa' : '#efeefb' }}>
-                    {c.collateral.isRemote ? 'Ξ' : 'p'}
-                  </span>
+                  <TokenLogo symbol={c.collateral.symbol} network={spokeByWormholeChain(c.collateral.chainId)?.name} size={29} />
                   <span>
                     <b>
                       {fmt(c.units, 4)} {c.collateral.symbol}

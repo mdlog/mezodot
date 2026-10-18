@@ -13,7 +13,7 @@ import { useHubClient, usePrices, useValuedPosition, useWalletBalances } from '.
 import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { spendableWeth, wrapNeeded } from '../lib/wrap';
 import { finalityEta, formatWait } from '../lib/eta';
-import { ChainLogo } from '../components/ChainLogo';
+import { ChainLogo, TokenLogo } from '../components/Logos';
 import { fmt, money, timeAgo, units } from '../lib/format';
 import { useUi, type Flight } from '../state/UiContext';
 
@@ -127,7 +127,7 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
             const selected = s.name === spoke.name;
             return (
               <button key={s.name} className={`chain-option ${selected ? 'is-selected' : ''}`} onClick={() => setSpokeName(s.name)} aria-pressed={selected}>
-                <ChainLogo network={s.name} label={s.label} />
+                <ChainLogo network={s.name} />
                 <span>
                   <b>{s.label}</b>
                   <small>Wormhole chain {s.wormholeChainId}</small>
@@ -143,7 +143,7 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
         <div className="asset-select-row">
           {(['WETH', 'USDC'] as const).map((a) => (
             <button key={a} className={`asset-choice ${asset === a ? 'is-selected' : ''}`} onClick={() => setAsset(a)} aria-pressed={asset === a}>
-              <span className={`coin-mini ${a === 'WETH' ? 'coin-eth' : 'coin-usdc'}`}>{a === 'WETH' ? 'Ξ' : '$'}</span>
+              <TokenLogo symbol={a} size={19} />
               <b>{a}</b>
               <span>{money(prices?.[PRICE_SYMBOL[a]] ?? 0, 2)}</span>
             </button>
