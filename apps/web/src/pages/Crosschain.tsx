@@ -12,6 +12,7 @@ import { useFlightStatus } from '../data/flights';
 import { useHubClient, usePrices, useValuedPosition, useWalletBalances } from '../data/hooks';
 import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { spendableWeth, wrapNeeded } from '../lib/wrap';
+import { finalityEta, formatWait } from '../lib/eta';
 import { fmt, money, timeAgo, units } from '../lib/format';
 import { useUi, type Flight } from '../state/UiContext';
 
@@ -176,7 +177,8 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
         </button>
       </ConnectGate>
       <div className="small-disclosure">
-        <Shield size={14} /> Two transactions on {spoke.label} (approve + lock). Your hub account is the same address.
+        <Shield size={14} /> Wrap (if needed), approve and lock on {spoke.label}; your hub account is the same address. Credit arrives once {spoke.label}{' '}
+        finalizes the lock, ≈ {Math.round(spoke.finalitySec / 60)} min (Wormhole guardians wait for finality).
       </div>
     </section>
   );
@@ -199,6 +201,19 @@ function FlightRow({ flight }: { flight: Flight }) {
       : ['Debited on hub', 'Guardians signed VAA', 'Released on spoke', 'Tokens in wallet'];
   const ageMin = (Date.now() - flight.createdAt) / 60_000;
   const canSelfRelay = status?.vaa && !status.delivered && ageMin > 0.5;
+  // Guardians sign once the source block is final: the wait is set by the source chain (re-rendered on each poll).
+  const eta = finalityEta(flight.createdAt, source.finalitySec, Date.now());
+  const finalityMin = Math.max(1, Math.round(source.finalitySec / 60));
+  const hint = (i: number): string | null => {
+    if (status?.delivered || stage !== i) return null;
+    if (i === 1) {
+      return eta.overdue
+        ? `Taking longer than usual (${source.label} finality ≈ ${finalityMin} min). Funds stay locked safely until the guardians sign.`
+        : `${formatWait(eta.remainingSec)} · waiting for ${source.label} finality (≈ ${finalityMin} min)`;
+    }
+    if (i === 2) return 'Relaying · usually under a minute';
+    return null;
+  };
 
   const selfRelay = () => {
     if (!status?.vaa) return;
@@ -228,6 +243,7 @@ function FlightRow({ flight }: { flight: Flight }) {
               <span>{done ? <Check size={11} /> : current ? <Spinner /> : `0${i + 1}`}</span>
               <div>
                 <b>{label}</b>
+                {hint(i) && <small className="step-hint">{hint(i)}</small>}
               </div>
               {done && <BadgeCheck size={14} />}
             </li>
@@ -341,6 +357,7 @@ function WithdrawRemotePanel() {
           </button>
           <p className="muted-note">
             Up to {row ? fmt(units(maxOut, row.collateral.decimals), 6) : '0'} {row?.collateral.symbol} can leave while your debt stays within the borrow limit.
+            Tokens arrive on the spoke ≈ {Math.max(1, Math.round(HUB.finalitySec / 60))} min after the hub transaction (Mezo is final at once).
           </p>
         </>
       )}

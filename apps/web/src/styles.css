@@ -2127,6 +2127,11 @@ tbody tr:last-child td {
   color: #a0a1a8;
   margin-top: 4px;
 }
+.message-step small.step-hint {
+  max-width: 150px;
+  line-height: 1.35;
+  color: var(--indigo);
+}
 .message-step > svg {
   position: absolute;
   right: 7px;

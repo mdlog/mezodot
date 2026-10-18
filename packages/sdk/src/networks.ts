@@ -41,6 +41,11 @@ export type NetworkInfo = {
   supraProofUrl: string | null;
   /** Largest eth_getLogs block range the default public RPC accepts (Base Sepolia: 200; Mezo: 10,000). */
   maxLogRange: bigint;
+  /**
+   * Typical seconds until a block on this chain is final, which is when Wormhole guardians sign messages
+   * sent with consistency level "finalized" (Mezodot's setting). Measured on testnet 2026-10-18.
+   */
+  finalitySec: number;
 };
 
 const WORMHOLESCAN_TESTNET = 'https://api.testnet.wormholescan.io';
@@ -57,6 +62,8 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     wormholescanApi: WORMHOLESCAN_TESTNET,
     supraProofUrl: SUPRA_TESTNET_PROOF_URL,
     maxLogRange: 5_000n,
+    // CometBFT: final at inclusion; a release reached the spoke 24 s after the hub transaction
+    finalitySec: 60,
   },
   'base-sepolia': {
     name: 'base-sepolia',
@@ -68,6 +75,8 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     supraProofUrl: null,
     // sepolia.base.org: "eth_getLogs is limited to a 200 range" (measured 2026-10-18)
     maxLogRange: 200n,
+    // OP stack: final once its L1 batch is final; deposit → hub credit took 17.4 min
+    finalitySec: 20 * 60,
   },
   'eth-sepolia': {
     name: 'eth-sepolia',
@@ -78,6 +87,8 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     wormholescanApi: WORMHOLESCAN_TESTNET,
     supraProofUrl: null,
     maxLogRange: 5_000n,
+    // Ethereum: two epochs; deposit → hub credit took 14.4 min
+    finalitySec: 15 * 60,
   },
   'devnet-hub': {
     name: 'devnet-hub',
@@ -88,6 +99,7 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     wormholescanApi: null,
     supraProofUrl: null,
     maxLogRange: 5_000n,
+    finalitySec: 10, // the agent signs devnet VAAs itself
   },
   'devnet-spoke': {
     name: 'devnet-spoke',
@@ -98,6 +110,7 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     wormholescanApi: null,
     supraProofUrl: null,
     maxLogRange: 5_000n,
+    finalitySec: 10,
   },
 };
 
