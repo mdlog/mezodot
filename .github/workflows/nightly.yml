@@ -28,7 +28,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Loads the deploy inputs (addresses, feeds, max ages, caps, fee) so the deployment is compared with them too.
+      # Owner and treasury come from repository variables (docs/DEPLOY.md, step 10). Unset, they are empty, which
+      # the check treats as unset: the VaultManager's owner is expected everywhere, and a treasury other than it
+      # is a warning.
       - name: pnpm verify:deployment mezo-testnet
+        env:
+          EXPECTED_OWNER: ${{ vars.EXPECTED_OWNER }}
+          EXPECTED_TREASURY: ${{ vars.EXPECTED_TREASURY }}
         run: |
           set -a; source contracts/.env.example; set +a
           pnpm verify:deployment mezo-testnet --brief

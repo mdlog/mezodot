@@ -8,11 +8,12 @@
  *   pnpm revenue:report [mezo-testnet | devnet-hub] [--json] [--no-events] [--from-block <n>] [--to <address>]
  *
  * --to: recipient of the withdrawals (default: the treasury). The commands expect RPC and KEYSTORE shell variables;
- * reserves are withdrawn by the owner, custody balances by the treasury. RPC: RPC_MEZO_TESTNET / RPC_DEVNET_HUB, else
- * the SDK default. Exits 1 when the chain cannot be read, 2 on a usage or configuration error.
+ * reserves are withdrawn by the owner, custody balances by the treasury. RPC: RPC_MEZO_TESTNET / RPC_DEVNET_HUB (one URL
+ * or a comma-separated list tried in order, as for the agent), else the SDK default. Exits 1 when the chain cannot be
+ * read, 2 on a usage or configuration error.
  */
 import { formatUnits, isAddress, type Address } from 'viem';
-import { asHubDeployment, asSpokeDeployment, environmentOfHub, errorLine, isNetworkName, publicClient, readDeploymentFile, rpcUrl } from './lib/deployment';
+import { asHubDeployment, asSpokeDeployment, environmentOfHub, errorLine, isNetworkName, publicClient, readDeploymentFile, rpcHosts } from './lib/deployment';
 import { collectionPlan, readRevenue, type CollectionPlan, type RevenueReport } from './lib/revenue';
 
 const USAGE = 'usage: pnpm revenue:report [mezo-testnet | devnet-hub] [--json] [--no-events] [--from-block <n>] [--to <address>]';
@@ -44,14 +45,6 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
-/** Host only: an RPC URL can carry an API key in its path or query. */
-const rpcHost = (url: string): string => {
-  try {
-    return new URL(url).host;
-  } catch {
-    return 'custom RPC';
-  }
-};
 const usd = (v: number | null): string =>
   v === null ? 'no price' : v > 0 && v < 0.01 ? '<$0.01' : `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const pct = (wad: bigint): string => `${formatUnits(wad * 100n, 18)}%`;
@@ -125,7 +118,7 @@ async function main(argv: string[]): Promise<number> {
   }
   const plan = collectionPlan(report, args.to);
   if (args.json) console.log(JSON.stringify({ report, plan }, (_, v: unknown) => (typeof v === 'bigint' ? v.toString() : v), 2));
-  else print(report, plan, rpcHost(rpcUrl(args.network)));
+  else print(report, plan, rpcHosts(args.network));
   return 0;
 }
 

@@ -163,11 +163,35 @@ export const CAP_VARS = [
 ] as const;
 export type CapVar = (typeof CAP_VARS)[number];
 
+export type RiskParams = { ltvBps: number; ltBps: number; bonusBps: number };
+export type RiskKey = 'pMUSD' | 'pMEZO' | 'BTC' | 'WETH' | 'USDC';
+
+/**
+ * LTV, liquidation threshold and bonus the deploy scripts list each collateral with: DeployHub for pMUSD, pMEZO and
+ * BTC, ConfigureCrossChain for every spoke's WETH and USDC (scripts/test/verify.test.ts pins this table to them).
+ */
+export const DEPLOYED_RISK: Record<RiskKey, RiskParams> = {
+  pMUSD: { ltvBps: 8000, ltBps: 8500, bonusBps: 500 },
+  pMEZO: { ltvBps: 5000, ltBps: 6000, bonusBps: 1000 },
+  BTC: { ltvBps: 7000, ltBps: 7800, bonusBps: 500 },
+  WETH: { ltvBps: 7500, ltBps: 8000, bonusBps: 700 },
+  USDC: { ltvBps: 8000, ltBps: 8500, bonusBps: 500 },
+};
+/** Reserve factor DeployHub gives both pools (WAD): 10% of borrower interest. */
+export const DEPLOYED_RESERVE_FACTOR = 10n ** 17n;
+
 export type Expectations = {
   /** Owner of every Ownable contract (EXPECTED_OWNER); default: whoever owns the VaultManager. */
   owner?: Address;
-  /** VaultManager.treasury() (EXPECTED_TREASURY); default: the owner, as the deploy scripts set it. */
+  /** VaultManager.treasury() (EXPECTED_TREASURY). Unset: a treasury other than the owner is a warning, not a failure. */
   treasury?: Address;
+  /**
+   * Risk parameters per collateral and the pools' reserve factor as deployed (DEPLOYED_RISK, DEPLOYED_RESERVE_FACTOR),
+   * plus unlimited collateral caps where the scripts set no cap. Set with a loaded deploy environment; otherwise these
+   * values are only reported, so a bare run checks the wiring alone.
+   */
+  risk?: Record<RiskKey, RiskParams>;
+  reserveFactor?: bigint;
   liquidationFeeBps?: number;
   /** TIGRIS_STABLE: which Tigris MUSD/BTC curve the leverage desk must use (default volatile). */
   tigrisStable: boolean;
@@ -225,7 +249,8 @@ function addressVar(env: NodeJS.ProcessEnv, name: string): Address | undefined {
 /**
  * Expectations from the environment. Each value is compared only when its variable is set, so a bare run checks
  * the wiring and a run after `set -a; source contracts/.env.example; set +a` also checks the documented testnet
- * configuration. A set `PYTH` marks a loaded deploy environment: Supra legs it does not configure must be absent.
+ * configuration. A set `PYTH` marks a loaded deploy environment: Supra legs it does not configure must be absent,
+ * and the risk parameters and reserve factors the deploy scripts fix must be the deployed ones.
  */
 export function expectationsFromEnv(env: NodeJS.ProcessEnv = process.env): Expectations {
   const deployEnv = envValue(env, 'PYTH') !== undefined;
@@ -259,6 +284,8 @@ export function expectationsFromEnv(env: NodeJS.ProcessEnv = process.env): Expec
   return {
     owner: addressVar(env, 'EXPECTED_OWNER'),
     treasury: addressVar(env, 'EXPECTED_TREASURY'),
+    risk: deployEnv ? DEPLOYED_RISK : undefined,
+    reserveFactor: deployEnv ? DEPLOYED_RESERVE_FACTOR : undefined,
     liquidationFeeBps: intVar(env, 'LIQUIDATION_FEE_BPS'),
     tigrisStable: stable === 'true',
     seeded: envValue(env, 'SEED_AMOUNT') !== '0',
@@ -340,6 +367,8 @@ type CollateralConfig = {
 type ExpectedCollateral = {
   label: string;
   kind: 'share' | 'plain' | 'remote';
+  /** Entry of DEPLOYED_RISK the collateral was listed with. */
+  risk: RiskKey;
   priceKey: Hex;
   /** Hub token (pToken or plain token); the spoke token for remote collateral. */
   token: Address;
@@ -594,8 +623,18 @@ class Verifier {
     const read = <F extends Getter>(functionName: F) => client.readContract({ address: vm, abi: vaultManagerAbi, functionName });
     await this.expectRead('VaultManager.oracle()', () => read('oracle'), this.c.oracleRouter);
     await this.expectRead('VaultManager.adapter()', () => read('adapter'), this.c.wormholeAdapter);
-    const treasury = this.expect.treasury ?? this.owner;
-    if (treasury) await this.expectRead('VaultManager.treasury()', () => read('treasury'), treasury);
+    // The deploy scripts make the owner the treasury, but the two rotate separately (docs/DEPLOY.md, step 10): only
+    // EXPECTED_TREASURY makes a different treasury a failure.
+    const treasury = await this.probe('VaultManager.treasury()', () => read('treasury'));
+    if (treasury !== undefined) {
+      if (this.expect.treasury) r.equal('VaultManager.treasury()', treasury, this.expect.treasury);
+      else if (this.owner && same(treasury, this.owner)) r.pass('VaultManager.treasury()', `${treasury} (the owner)`);
+      else
+        r.warn(
+          'VaultManager.treasury()',
+          `${treasury}${this.owner ? ` is not the owner ${this.owner}` : ''}: it receives every liquidation fee; set EXPECTED_TREASURY to check it`,
+        );
+    }
     const fee = await this.probe('VaultManager.liquidationFeeBps()', () => read('liquidationFeeBps'));
     if (fee !== undefined) {
       if (this.expect.liquidationFeeBps !== undefined) r.equal('VaultManager.liquidationFeeBps()', fee, this.expect.liquidationFeeBps);
@@ -633,18 +672,31 @@ class Verifier {
   /** The collateral list is fully determined by the deployment: pMUSD, pMEZO, BTC, then WETH and USDC per spoke. */
   private expectedCollaterals(): ExpectedCollateral[] {
     const caps = this.expect.caps;
+    // pMUSD and remote collateral are listed without a cap (remote deposits are capped on the spoke).
+    const uncapped = this.expect.risk ? MAX_UINT : undefined;
     const out: ExpectedCollateral[] = [];
     if (this.c.pMUSD && this.t.MUSD)
-      out.push({ label: 'pMUSD', kind: 'share', priceKey: PRICE_KEYS.MUSD, token: this.c.pMUSD, target: this.hub, unitToken: this.t.MUSD });
+      out.push({
+        label: 'pMUSD',
+        kind: 'share',
+        risk: 'pMUSD',
+        priceKey: PRICE_KEYS.MUSD,
+        token: this.c.pMUSD,
+        target: this.hub,
+        unitToken: this.t.MUSD,
+        cap: uncapped,
+      });
     if (this.c.pMEZO && this.t.MEZO) {
-      // DeployHub sets the cap in MEZO and converts it to shares.
-      const cap = caps.MEZO_COLLATERAL_CAP === undefined ? undefined : caps.MEZO_COLLATERAL_CAP * SHARE_OFFSET;
-      out.push({ label: 'pMEZO', kind: 'share', priceKey: PRICE_KEYS.MEZO, token: this.c.pMEZO, target: this.hub, unitToken: this.t.MEZO, cap });
+      // DeployHub sets the cap in MEZO and converts it to shares, saturating at the uint256 maximum.
+      const mezo = caps.MEZO_COLLATERAL_CAP;
+      const cap = mezo === undefined ? undefined : mezo > MAX_UINT / SHARE_OFFSET ? MAX_UINT : mezo * SHARE_OFFSET;
+      out.push({ label: 'pMEZO', kind: 'share', risk: 'pMEZO', priceKey: PRICE_KEYS.MEZO, token: this.c.pMEZO, target: this.hub, unitToken: this.t.MEZO, cap });
     }
     if (this.t.BTC)
       out.push({
         label: 'BTC',
         kind: 'plain',
+        risk: 'BTC',
         priceKey: PRICE_KEYS.BTC,
         token: this.t.BTC,
         target: this.hub,
@@ -654,8 +706,9 @@ class Verifier {
     for (const s of this.spokes) {
       const { WETH, USDC } = s.deployment.tokens;
       const chainId = s.deployment.wormholeChainId;
-      out.push({ label: `${s.network} WETH`, kind: 'remote', priceKey: PRICE_KEYS.ETH, token: WETH, target: s, unitToken: WETH, chainId });
-      out.push({ label: `${s.network} USDC`, kind: 'remote', priceKey: PRICE_KEYS.USDC, token: USDC, target: s, unitToken: USDC, chainId });
+      const remote = { kind: 'remote', target: s, chainId, cap: uncapped } as const;
+      out.push({ ...remote, label: `${s.network} WETH`, risk: 'WETH', priceKey: PRICE_KEYS.ETH, token: WETH, unitToken: WETH });
+      out.push({ ...remote, label: `${s.network} USDC`, risk: 'USDC', priceKey: PRICE_KEYS.USDC, token: USDC, unitToken: USDC });
     }
     return out;
   }
@@ -705,7 +758,17 @@ class Verifier {
       }
       if (e.cap !== undefined) r.equal(`${check} cap`, c.cap, e.cap);
       if (!c.enabled) r.warn(`${check} enabled`, 'disabled: adds nothing to borrow limits (still counts for health)');
-      r.info(`${check} risk`, `LTV ${pct(c.ltvBps)}, LT ${pct(c.ltBps)}, bonus ${pct(c.bonusBps)}, cap ${c.cap === MAX_UINT ? 'unlimited' : c.cap.toString()}`);
+      // An owner key can lower LT or raise the bonus to liquidate healthy positions: compare with the deployed values.
+      const params = `LTV ${pct(c.ltvBps)}, LT ${pct(c.ltBps)}, bonus ${pct(c.bonusBps)}, cap ${c.cap === MAX_UINT ? 'unlimited' : c.cap.toString()}`;
+      const deployed = this.expect.risk?.[e.risk];
+      if (!deployed) r.info(`${check} risk`, params);
+      else
+        r.that(
+          `${check} risk`,
+          c.ltvBps === deployed.ltvBps && c.ltBps === deployed.ltBps && c.bonusBps === deployed.bonusBps,
+          params,
+          `${params}; deployed with LTV ${pct(deployed.ltvBps)}, LT ${pct(deployed.ltBps)}, bonus ${pct(deployed.bonusBps)}`,
+        );
     }
     this.collaterals.forEach((c, id) => {
       if (c && !matched.has(id))
@@ -743,7 +806,11 @@ class Verifier {
       const rf = await this.probe(`${label}.reserveFactor()`, () => read('reserveFactor'));
       if (rf !== undefined) {
         const max = await read('MAX_RESERVE_FACTOR').catch(() => 3n * 10n ** 17n);
-        r.that(`${label}.reserveFactor()`, rf <= max, `${formatUnits(rf * 100n, 18)}% of interest to reserves`, `${rf} exceeds MAX_RESERVE_FACTOR ${max}`);
+        const share = `${formatUnits(rf * 100n, 18)}% of interest to reserves`;
+        const deployed = this.expect.reserveFactor;
+        if (rf > max) r.fail(`${label}.reserveFactor()`, `${rf} exceeds MAX_RESERVE_FACTOR ${max}`);
+        else if (deployed !== undefined && rf !== deployed) r.fail(`${label}.reserveFactor()`, `${share}; deployed with ${formatUnits(deployed * 100n, 18)}%`);
+        else r.pass(`${label}.reserveFactor()`, share);
       }
       for (const [name, expected] of [
         ['supplyCap', supplyCap],
@@ -930,9 +997,10 @@ class Verifier {
         () => client.readContract({ address: keepers, abi: keeperGatewayAbi, functionName: 'adapter' }),
         this.c.wormholeAdapter,
       );
-      // It refunds all of its BTC to each liquidator; a balance here goes to whoever liquidates next.
+      // Unspent BTC always goes back to the liquidator; BTC sent here by mistake goes along with the next liquidation
+      // whose caller accepts BTC.
       const btc = await client.getBalance({ address: keepers }).catch(() => undefined);
-      if (btc) r.warn('KeeperGateway BTC balance', `holds ${formatUnits(btc, 18)} BTC; the next liquidation refunds it to that keeper`);
+      if (btc) r.warn('KeeperGateway BTC balance', `holds ${formatUnits(btc, 18)} BTC; the next liquidator that accepts BTC receives it`);
     }
   }
 

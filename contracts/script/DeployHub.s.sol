@@ -93,7 +93,8 @@ contract DeployHub is Script {
         VaultManager.CollateralConfig memory pMezoCollateral =
             _local(address(pMEZO), keccak256("MEZO"), 5000, 6000, 1000);
         // Collateral caps count pool shares; an empty pool mints 10^6 shares per unit (PToken's virtual offset).
-        // The share cap is fixed here: as the exchange rate rises it admits slightly less MEZO than the env value.
+        // The share cap is fixed here: as pMEZO's exchange rate rises it admits more MEZO than the env value (and less
+        // after a bad-debt write-off lowers the rate). Re-set it with setCollateralParams to keep it in MEZO terms.
         uint256 mezoCap = vm.envOr("MEZO_COLLATERAL_CAP", uint256(100_000_000e18));
         pMezoCollateral.cap = mezoCap > type(uint256).max / 1e6 ? type(uint256).max : mezoCap * 1e6;
         vaultManager.addCollateral(pMezoCollateral);

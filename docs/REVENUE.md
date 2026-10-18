@@ -36,7 +36,7 @@ Losses come out of reserves first: when a liquidation takes an account's last co
 
 - per pool: reserve factor, reserves stored and accrued to that block (exactly as the contract computes them), idle cash and what `withdrawReserves` can take now, and lifetime flash fees, reserve withdrawals and bad debt absorbed (events since the deployment's start block);
 - per collateral: what the treasury holds in custody (shares also in their asset) with a USD value at the last oracle price, and lifetime fees taken;
-- totals, and a **collection plan**: the exact `cast send` commands that would collect what is collectable now, marked with the key that signs each one. Nothing is sent.
+- totals, and a **collection plan**: the exact `cast send` commands that would collect what is collectable now, in order and marked with the key that signs each one. Nothing is sent. A pool's reserve withdrawal and the treasury's redemption of that pool's shares draw on the same idle cash, so the plan withdraws the reserves first and sizes the redemption from the cash left after them.
 
 Use `--json` for bookkeeping (amounts as integer strings in token units). Keep the JSON of each collection run with the transaction hashes.
 
@@ -64,11 +64,13 @@ TREASURY=$(cast call $VM "treasury()(address)" --rpc-url $RPC)
 
    ```bash
    cast send $VM "withdrawCollateral(uint256,uint256,address,bytes[])" <collateralId> <amount> $TREASURY "[]" --rpc-url $RPC --keystore $KEYSTORE
-   # pTokens: redeem for MUSD/MEZO, as far as the pool's idle cash allows (or keep the shares earning)
+   # pTokens (or keep the shares earning): redeem them all when idle cash covers their value with room to spare,
    cast send $PMUSD "redeem(uint256,address,address)" <shares> <to> $TREASURY --rpc-url $RPC --keystore $KEYSTORE
+   # otherwise withdraw the idle cash left after step 1, in MUSD/MEZO
+   cast send $PMUSD "withdraw(uint256,address,address)" <assets> <to> $TREASURY --rpc-url $RPC --keystore $KEYSTORE
    ```
 
-   BTC arrives as native BTC in the recipient's balance.
+   Redemptions are capped by the pool's idle cash, and step 1 spends the same cash. When the cash binds, withdraw it in assets: the share price rises with every second of interest, so a `redeem` of exactly the shares the cash covers when you look reverts by the time it lands (`ERC4626ExceededMaxRedeem`), while `withdraw` is capped by the cash itself. The plan does this, and redeems all shares only with 0.1% of cash to spare. BTC arrives as native BTC in the recipient's balance.
 
 3. **Treasury collateral on a spoke** (treasury): WETH and USDC leave through a RELEASE to the same address on the spoke. `msg.value` pays the hub's Wormhole fee (0 on Mezo testnet today); any excess is refunded.
 
@@ -85,4 +87,4 @@ Before a redeploy, collect from the old deployment while the deployment JSON sti
 
 ## Changing the parameters
 
-`setReserveFactor` (per pool, ≤ 30%), `setLiquidationFee` (≤ 50% of the bonus) and `setTreasury` are owner calls with immediate effect. A production deployment should put them behind a timelock and a multisig. Check the live values with `pnpm verify:deployment` (`LIQUIDATION_FEE_BPS` and `EXPECTED_TREASURY` are compared when set).
+`setReserveFactor` (per pool, ≤ 30%), `setLiquidationFee` (≤ 50% of the bonus) and `setTreasury` are owner calls with immediate effect. A production deployment should put them behind a timelock and a multisig. Check the live values with `pnpm verify:deployment`: with the deploy environment loaded it compares the liquidation fee with `LIQUIDATION_FEE_BPS` and both reserve factors with the 10% `DeployHub` sets (`DEPLOYED_RESERVE_FACTOR` in `scripts/lib/verify.ts`, so a deliberate change goes into both), and the treasury with `EXPECTED_TREASURY` when that is set; otherwise a treasury other than the owner is a warning.

@@ -12,8 +12,10 @@
 #       [--supply <MUSD>] [--gas-reserve 0.001] [--dry-run]
 #
 # --supply deposits that much MUSD into pMUSD first (an open borrows from pMUSD's idle cash) and redeems it at
-# the end. --dry-run stops after the preflight checks and quotes. Exits 0 when every check passed, 1 on the first
-# failed check (the step it names says what is left open), 2 on a usage error. Needs cast, jq, bc and curl.
+# the end. --dry-run stops after the preflight checks and quotes. Without --rpc, RPC_<NETWORK> is read as the agent
+# reads it (one URL or a comma-separated list; the first URL that answers is used), else the public RPC. Exits 0
+# when every check passed, 1 on the first failed check (the step it names says what is left open), 2 on a usage
+# error. Needs cast, jq, bc and curl.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -100,6 +102,8 @@ now() { cast block latest --field timestamp --rpc-url "$RPC" 2>"$ERR" || die "ca
 wei() { cast to-wei "$1" 2>/dev/null || die "not an amount: $1"; }
 
 GAS_SPENT=0
+# Receipt polls per transaction, 2 s apart.
+RECEIPT_POLLS=90
 LAST_BLOCK=""
 LAST_FEE=0
 LAST_MAX_FEE=0
@@ -111,10 +115,19 @@ send() {
   estimate=$(cast estimate --rpc-url "$RPC" --from "$ACCOUNT" "$to" "$sig" "$@" 2>"$ERR") || die "$label: estimate failed: $(head -c 600 "$ERR")"
   [[ $estimate =~ ^[0-9]+$ ]] || die "$label: unexpected gas estimate"
   limit=$((estimate * 13 / 10 + 20000))
-  RECEIPT=$(cast send --rpc-url "$RPC" "${WALLET[@]}" --gas-limit "$limit" --json "$to" "$sig" "$@" 2>"$ERR") ||
+  hash=$(cast send --async --rpc-url "$RPC" "${WALLET[@]}" --gas-limit "$limit" "$to" "$sig" "$@" 2>"$ERR") ||
     die "$label: $(head -c 600 "$ERR")"
+  [[ $hash =~ ^0x[0-9a-fA-F]{64}$ ]] || die "$label: unexpected transaction hash"
+  # Mezo's RPC sometimes answers a receipt request with null for a transaction it has mined: poll until it answers.
+  RECEIPT=""
+  for _ in $(seq 1 "$RECEIPT_POLLS"); do
+    RECEIPT=$(cast receipt --async --json --rpc-url "$RPC" "$hash" 2>/dev/null) || RECEIPT=""
+    if [ -n "$RECEIPT" ] && [ "$(jq -r '.blockNumber // empty' <<<"$RECEIPT" 2>/dev/null)" != "" ]; then break; fi
+    RECEIPT=""
+    sleep 2
+  done
+  [ -n "$RECEIPT" ] || die "$label: no receipt for $hash after $((RECEIPT_POLLS * 2)) s (check it in the explorer before rerunning)"
   status=$(jq -r .status <<<"$RECEIPT")
-  hash=$(jq -r .transactionHash <<<"$RECEIPT")
   [ "$status" = 0x1 ] || [ "$status" = 1 ] || die "$label reverted: $hash"
   LAST_BLOCK=$(cast to-dec "$(jq -r .blockNumber <<<"$RECEIPT")")
   price=$(cast to-dec "$(jq -r '.effectiveGasPrice // "0x0"' <<<"$RECEIPT")")
@@ -148,7 +161,17 @@ MUSD=$(json .tokens.MUSD)
 CHAIN_ID=$(json .chainId)
 if [ -z "$RPC" ]; then
   RPC_VAR="RPC_$(tr '[:lower:]-' '[:upper:]_' <<<"$NETWORK")"  # the agent's override convention
-  RPC=${!RPC_VAR:-}
+  # One URL or the agent's comma-separated fallback list. cast takes a single URL: use the first one that answers.
+  if [ -n "${!RPC_VAR:-}" ]; then
+    IFS=, read -ra RPC_LIST <<<"$(tr -d '[:space:]' <<<"${!RPC_VAR}")"
+    for url in "${RPC_LIST[@]}"; do
+      if [ -n "$url" ] && cast chain-id --rpc-url "$url" >/dev/null 2>&1; then
+        RPC=$url
+        break
+      fi
+    done
+    [ -n "$RPC" ] || die "no URL in $RPC_VAR answers"   # never print the URLs: they can carry an API key
+  fi
   if [ -z "$RPC" ]; then
     case "$NETWORK" in
       mezo-testnet) RPC=https://rpc.test.mezo.org ;;
@@ -202,7 +225,8 @@ expect_manager_untouched() {
 }
 
 # Price updates for a call that prices the position (open, partial close): none while BTC's stored price stays
-# valid for 3 more minutes, else a fresh keyless Supra proof for BTC's secondary leg. MUSD has no keyless leg.
+# valid for 3 more minutes, else a fresh keyless Supra proof for BTC's secondary leg. BTC's legs have a 120 s max
+# age, so today every such call attaches a proof. MUSD has no keyless leg.
 price_update() {
   local info proof
   info=$(call "$ORACLE" "getPriceInfo(bytes32)(bool,uint256,uint256)" "$MUSD_KEY")
@@ -268,7 +292,7 @@ fi
 [ "$SUPPLY_WEI" = 0 ] || expect "MUSD balance $(show "$MUSD_START") covers --supply $SUPPLY" "$MUSD_START >= $SUPPLY_WEI"
 
 UPDATE=$(price_update)
-if [ "$UPDATE" = "[]" ]; then ok "MUSD and BTC prices are fresh: no pull update needed"; else ok "BTC price is stale: risk-checked calls attach a Supra proof"; fi
+if [ "$UPDATE" = "[]" ]; then ok "MUSD and BTC prices are fresh: no pull update needed"; else ok "stored BTC price expires within 3 minutes: risk-checked calls attach a Supra proof"; fi
 BTC_PRICE=$(call "$ORACLE" "getPriceUnsafe(bytes32)(uint256,uint256)" "$BTC_KEY" | sed -n 1p)
 MUSD_PRICE=$(call "$ORACLE" "getPriceInfo(bytes32)(bool,uint256,uint256)" "$MUSD_KEY" | sed -n 2p)
 ok "BTC \$$(show "$BTC_PRICE"), MUSD \$$(show "$MUSD_PRICE")"

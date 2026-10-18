@@ -8,25 +8,17 @@
  *   set -a; source contracts/.env.example; set +a; pnpm verify:deployment mezo-testnet   # plus the documented config
  *
  * --brief prints only failures and warnings; --json prints every finding as JSON.
- * RPCs: RPC_MEZO_TESTNET, RPC_BASE_SEPOLIA, RPC_ETH_SEPOLIA, RPC_DEVNET_HUB, RPC_DEVNET_SPOKE (else the SDK defaults).
+ * RPCs: RPC_MEZO_TESTNET, RPC_BASE_SEPOLIA, RPC_ETH_SEPOLIA, RPC_DEVNET_HUB, RPC_DEVNET_SPOKE, one URL or a
+ * comma-separated list tried in order, as for the agent (else the SDK defaults).
  * Optional expectations: EXPECTED_OWNER, EXPECTED_TREASURY, and the deploy variables (LIQUIDATION_FEE_BPS, caps,
  * feeds, max ages, Tigris, SEED_AMOUNT=0); see scripts/lib/verify.ts.
  */
-import { asHubDeployment, asSpokeDeployment, environmentOfHub, isNetworkName, publicClient, readDeploymentFile, rpcUrl } from './lib/deployment';
+import { asHubDeployment, asSpokeDeployment, environmentOfHub, isNetworkName, publicClient, readDeploymentFile, rpcHosts } from './lib/deployment';
 import { expectationsFromEnv, verifyEnvironment, type Finding, type SpokeTarget, type Status } from './lib/verify';
 
 const USAGE = 'usage: pnpm verify:deployment [mezo-testnet | devnet-hub] [--brief] [--json]';
 const FLAGS = new Set(['--brief', '--json']);
 const MARK: Record<Status, string> = { pass: '✓', fail: '✗', warn: '!', info: '·' };
-
-/** Host only: an RPC URL can carry an API key in its path or query. */
-const rpcHost = (url: string): string => {
-  try {
-    return new URL(url).host;
-  } catch {
-    return 'custom RPC';
-  }
-};
 
 function print(findings: Finding[], brief: boolean): void {
   let section = '';
@@ -62,7 +54,7 @@ async function main(argv: string[]): Promise<number> {
 
   if (!json) {
     console.log(`Mezodot deployment check: ${network}${spokes.length ? ` with ${spokes.map((s) => s.network).join(', ')}` : ''}`);
-    for (const n of [network, ...spokes.map((s) => s.network)]) console.log(`  ${n} via ${rpcHost(rpcUrl(n))}`);
+    for (const n of [network, ...spokes.map((s) => s.network)]) console.log(`  ${n} via ${rpcHosts(n)}`);
     for (const n of skipped) console.log(`  ${n}: not deployed (contracts: null), skipped`);
   }
   const report = await verifyEnvironment(hub, spokes, expect);

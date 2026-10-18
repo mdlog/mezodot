@@ -191,8 +191,8 @@ describe('readRevenue', () => {
   it("values the treasury's custody balances by kind and counts fees taken only from the VaultManager", async () => {
     const r = await report(world());
     const [shares, btc, weth, usdc] = r.holdings;
-    // 3 MUSD of idle cash covers all 2·10^24 shares.
-    expect(shares).toMatchObject({ label: 'pMUSD', kind: 'share', assets: 2n * E18, redeemable: 2n * 10n ** 24n, usd: 2 });
+    // pMUSD's withdrawable reserves take all 3 MUSD of its idle cash first: no share is redeemable now.
+    expect(shares).toMatchObject({ label: 'pMUSD', kind: 'share', assets: 2n * E18, redeemable: 0n, usd: 2 });
     expect(btc).toMatchObject({ label: 'BTC', kind: 'plain', balance: 10n ** 15n, usd: 80, feesTaken: 10n ** 15n });
     expect(weth).toMatchObject({ label: 'devnet-spoke WETH', kind: 'remote', chainId: 10004, remoteToken: WETH, usd: 1500 });
     expect(usdc).toMatchObject({ label: 'devnet-spoke USDC', balance: 0n, assetDecimals: 6, feesTaken: 0n });
@@ -200,8 +200,26 @@ describe('readRevenue', () => {
 
   it('caps redeemable shares by the pool cash', async () => {
     const w = world();
-    w.pools[PMUSD].cash = E18; // redeems 1 MUSD = 10^24 shares of the 2·10^24 held
+    Object.assign(w.pools[PMUSD], { totalReserves: 0n, cash: E18 }); // redeems 1 MUSD = 10^24 shares of the 2·10^24 held
     expect((await report(w)).holdings[0].redeemable).toBe(10n ** 24n);
+  });
+
+  it('leaves the idle cash the reserve withdrawal takes out of what the treasury can redeem', async () => {
+    const w = world();
+    // High utilisation: 1,000 MUSD idle, 800 MUSD of reserves, treasury shares worth 600 MUSD.
+    Object.assign(w.pools[PMUSD], { cash: 1_000n * E18, totalReserves: 800n * E18 });
+    w.treasuryBalances[0] = 600n * 10n ** 24n;
+    const r = await report(w);
+    expect(r.pools[0].withdrawable).toBe(800n * E18);
+    // PToken.maxRedeem after withdrawReserves(800): the 200 MUSD left, not the 1,000 there is before it.
+    expect(r.holdings[0]).toMatchObject({ redeemable: 200n * 10n ** 24n, cashLeft: 200n * E18 });
+    const plan = collectionPlan(r);
+    // The cash binds, so the treasury takes it out in assets (see the next test).
+    expect(plan.steps.map((s) => s.command).filter((c) => c.includes(PMUSD))).toEqual([
+      `cast send ${PMUSD} "withdrawReserves(uint256,address)" ${800n * E18} ${TREASURY} --rpc-url "$RPC" --keystore "$KEYSTORE"`,
+      `cast send ${PMUSD} "withdraw(uint256,address,address)" ${200n * E18} ${TREASURY} ${TREASURY} --rpc-url "$RPC" --keystore "$KEYSTORE"`,
+    ]);
+    expect(plan.notes).toContain('pMUSD: idle cash left after the reserve withdrawal redeems only part of the shares now; the rest stays redeemable later');
   });
 
   it('scans events in chunks of the network log range, from the deployment start block', async () => {
@@ -232,24 +250,56 @@ describe('collectionPlan', () => {
     w.pools[PMUSD].cash = E18;
     const plan = collectionPlan(await report(w));
     const steps = plan.steps.map((s) => `${s.signer}: ${s.command}`);
+    // The reserve withdrawal takes pMUSD's only MUSD of idle cash: no redeem would go through after it.
     expect(steps).toEqual([
       `owner: cast send ${PMUSD} "withdrawReserves(uint256,address)" ${E18} ${TREASURY} --rpc-url "$RPC" --keystore "$KEYSTORE"`,
       `owner: cast send ${PMEZO} "withdrawReserves(uint256,address)" ${E18 + 10n ** 14n} ${TREASURY} --rpc-url "$RPC" --keystore "$KEYSTORE"`,
       `treasury: cast send ${VM} "withdrawCollateral(uint256,uint256,address,bytes[])" 0 ${2n * 10n ** 24n} ${TREASURY} "[]" --rpc-url "$RPC" --keystore "$KEYSTORE"`,
-      `treasury: cast send ${PMUSD} "redeem(uint256,address,address)" ${10n ** 24n} ${TREASURY} ${TREASURY} --rpc-url "$RPC" --keystore "$KEYSTORE"`,
       `treasury: cast send ${VM} "withdrawCollateral(uint256,uint256,address,bytes[])" 1 ${10n ** 15n} ${TREASURY} "[]" --rpc-url "$RPC" --keystore "$KEYSTORE"`,
       `treasury: cast send ${VM} "withdrawRemote(uint256,uint256,bytes32,bytes[])" 2 ${5n * 10n ** 17n} ${pad(TREASURY, { size: 32 })} "[]" --value ${FEE} --rpc-url "$RPC" --keystore "$KEYSTORE"`,
     ]);
     expect(plan.notes).toEqual([
       'pMUSD: reserves exceed idle cash; the rest becomes withdrawable as borrowers repay or suppliers deposit',
-      'pMUSD: idle cash redeems only part of the shares now; the rest stays redeemable later',
+      'pMUSD: idle cash left after the reserve withdrawal redeems none of the shares now; they stay redeemable later',
       'collateral #2: the RELEASE pays out once relayed to the spoke (the agent does it; by hand: docs/RUNBOOK.md, section 3)',
     ]);
   });
 
+  it('redeems every share only when the idle cash covers them with room for interest that accrues before it lands', async () => {
+    // Idle cash left after the reserve step: 1,000 MUSD. The share price rises until the treasury's transaction lands,
+    // so redeem(shares) is planned only with 0.1% to spare; otherwise withdraw(assets), which PToken caps at the cash
+    // itself, in assets, so accrual cannot take it over the limit.
+    const plan = async (assets: bigint) => {
+      const w = world();
+      Object.assign(w.pools[PMUSD], { cash: 1_005n * E18, totalReserves: 5n * E18 });
+      w.treasuryBalances[0] = assets * 10n ** 6n; // shares at the empty-pool rate
+      const p = collectionPlan(await report(w));
+      return {
+        steps: p.steps.map((s) => s.command).filter((c) => c.startsWith(`cast send ${PMUSD} "`) && !c.includes('withdrawReserves')),
+        notes: p.notes.filter((n) => n.startsWith('pMUSD')),
+      };
+    };
+    const sign = `--rpc-url "$RPC" --keystore "$KEYSTORE"`;
+    expect((await plan(999n * E18)).steps).toEqual([
+      `cast send ${PMUSD} "redeem(uint256,address,address)" ${999n * 10n ** 24n} ${TREASURY} ${TREASURY} ${sign}`,
+    ]);
+    // Within 0.1% of the cash: a redeem sized now would revert after a few seconds of interest; the assets do not.
+    expect(await plan(9995n * 10n ** 17n)).toEqual({
+      steps: [`cast send ${PMUSD} "withdraw(uint256,address,address)" ${9995n * 10n ** 17n} ${TREASURY} ${TREASURY} ${sign}`],
+      notes: [],
+    });
+    // More than the cash: all of the cash, in assets.
+    expect(await plan(1_500n * E18)).toEqual({
+      steps: [`cast send ${PMUSD} "withdraw(uint256,address,address)" ${1_000n * E18} ${TREASURY} ${TREASURY} ${sign}`],
+      notes: ['pMUSD: idle cash left after the reserve withdrawal redeems only part of the shares now; the rest stays redeemable later'],
+    });
+  });
+
   it('pays out to another recipient while the treasury keeps signing', async () => {
-    const steps = commands(await report(world()), OTHER);
-    expect(steps[0]).toContain(`"withdrawReserves(uint256,address)" ${3n * E18} ${OTHER}`);
+    const w = world();
+    w.pools[PMUSD].cash = 8n * E18; // all 5 MUSD of reserves, then the treasury's 2 MUSD of shares with room to spare
+    const steps = commands(await report(w), OTHER);
+    expect(steps[0]).toContain(`"withdrawReserves(uint256,address)" ${5n * E18} ${OTHER}`);
     // Shares are withdrawn to the treasury (it must own them to redeem), then redeemed to the recipient.
     expect(steps[2]).toContain(`0 ${2n * 10n ** 24n} ${TREASURY} "[]"`);
     expect(steps[3]).toContain(`"redeem(uint256,address,address)" ${2n * 10n ** 24n} ${OTHER} ${TREASURY}`);

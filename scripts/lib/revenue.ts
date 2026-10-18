@@ -82,8 +82,13 @@ export type TreasuryHolding = {
   assets: bigint;
   assetDecimals: number;
   asset: string;
-  /** Shares the pool's idle cash could redeem now (share collateral only). */
+  /**
+   * Shares the pool's idle cash could redeem now (share collateral only), after the withdrawal of that pool's
+   * withdrawable reserves: both draw on the same cash, and the collection plan takes the reserves first.
+   */
   redeemable: bigint | null;
+  /** That idle cash in the pool's asset: the pool's cash less the plan's reserve withdrawal (share collateral only). */
+  cashLeft: bigint | null;
   usd: number | null;
   /** Lifetime units taken as the protocol fee (LiquidationFeeTaken), whoever was treasury then. */
   feesTaken: bigint | null;
@@ -229,6 +234,7 @@ export async function readRevenue(target: RevenueTarget, opts: ReadOptions): Pro
           assetDecimals: c.decimals,
           asset,
           redeemable: null,
+          cashLeft: null,
           usd: usdOf(balance, c.decimals, price),
           feesTaken: null,
         };
@@ -247,6 +253,7 @@ export async function readRevenue(target: RevenueTarget, opts: ReadOptions): Pro
           assetDecimals: c.decimals,
           asset,
           redeemable: null,
+          cashLeft: null,
           usd: usdOf(balance, c.decimals, price),
           feesTaken: null,
         };
@@ -254,9 +261,12 @@ export async function readRevenue(target: RevenueTarget, opts: ReadOptions): Pro
       const readShare = <F extends 'symbol' | 'decimals' | 'cash'>(functionName: F) =>
         client.readContract({ address: c.token, abi: pTokenAbi, functionName, ...at });
       const [label, shareDecimals, cash] = await Promise.all([readShare('symbol'), readShare('decimals'), readShare('cash')]);
+      // PToken.maxRedeem is bounded by idle cash, which withdrawReserves spends first (same block, same cash).
+      const reserveStep = pools.find((p) => isAddressEqual(p.pool, c.token))?.withdrawable ?? 0n;
+      const cashLeft = cash > reserveStep ? cash - reserveStep : 0n;
       const [assets, cashShares] = await Promise.all([
         client.readContract({ address: c.token, abi: pTokenAbi, functionName: 'convertToAssets', args: [balance], ...at }),
-        client.readContract({ address: c.token, abi: pTokenAbi, functionName: 'convertToShares', args: [cash], ...at }),
+        client.readContract({ address: c.token, abi: pTokenAbi, functionName: 'convertToShares', args: [cashLeft], ...at }),
       ]);
       return {
         id,
@@ -271,6 +281,7 @@ export async function readRevenue(target: RevenueTarget, opts: ReadOptions): Pro
         assetDecimals: c.decimals,
         asset,
         redeemable: balance < cashShares ? balance : cashShares,
+        cashLeft,
         usd: usdOf(assets, c.decimals, price),
         feesTaken: null,
       };
@@ -336,11 +347,17 @@ export type CollectionPlan = { steps: PlanStep[]; notes: string[] };
 
 /** Shell variables the printed commands expect: the hub RPC URL and the signer's keystore (never printed here). */
 const SIGN = '--rpc-url "$RPC" --keystore "$KEYSTORE"';
+const BPS = 10_000n;
+/**
+ * Room the idle cash must leave over the treasury's shares for the plan to redeem them all: interest raises the
+ * share price until the transaction lands (0.1% is hours of interest even at a full pool's rate).
+ */
+const REDEEM_ROOM_BPS = 10n;
 
 /**
- * The transactions that collect everything collectable now, to `to` (default: the treasury itself): reserves capped by
- * idle cash (owner), the treasury's local custody balances (BTC, and pTokens redeemed as far as idle cash allows) and
- * its spoke collateral through a RELEASE (treasury).
+ * The transactions that collect everything collectable now, to `to` (default: the treasury itself), in order: reserves
+ * capped by idle cash (owner), the treasury's local custody balances (BTC, and pTokens taken out as far as the idle
+ * cash left after those reserves allows) and its spoke collateral through a RELEASE (treasury).
  */
 export function collectionPlan(r: RevenueReport, to: Address = r.treasury): CollectionPlan {
   const steps: PlanStep[] = [];
@@ -374,20 +391,36 @@ export function collectionPlan(r: RevenueReport, to: Address = r.treasury): Coll
         command: `cast send ${r.vaultManager} "withdrawCollateral(uint256,uint256,address,bytes[])" ${h.id} ${h.balance} ${to} "[]" ${SIGN}`,
       });
     } else {
-      // The treasury withdraws the shares to itself, then redeems what idle cash covers; the rest keeps earning.
+      // The treasury withdraws the shares to itself, then takes out what the remaining idle cash covers; the rest keeps earning.
       steps.push({
         signer: 'treasury',
         what: `withdraw ${amount} shares (collateral #${h.id})`,
         command: `cast send ${r.vaultManager} "withdrawCollateral(uint256,uint256,address,bytes[])" ${h.id} ${h.balance} ${r.treasury} "[]" ${SIGN}`,
       });
-      if (h.redeemable && h.redeemable > 0n) {
+      const cash = h.cashLeft ?? 0n;
+      if (h.assets * (BPS + REDEEM_ROOM_BPS) <= cash * BPS) {
         steps.push({
           signer: 'treasury',
-          what: `redeem ${formatUnits(h.redeemable, h.balanceDecimals)} ${h.label} for ${h.asset} (or keep the shares earning)`,
-          command: `cast send ${h.token} "redeem(uint256,address,address)" ${h.redeemable} ${to} ${r.treasury} ${SIGN}`,
+          what: `redeem ${amount} for ${h.asset} (or keep the shares earning)`,
+          command: `cast send ${h.token} "redeem(uint256,address,address)" ${h.balance} ${to} ${r.treasury} ${SIGN}`,
+        });
+      } else if (cash > 0n) {
+        // Cash binds (or nearly): PToken caps redeem() at the shares the cash buys at the rate when it lands, which
+        // interest raises every second, so a redeem of the shares the cash covers at this block would revert. withdraw()
+        // is capped at the cash itself, in assets, which accrual leaves alone.
+        const assets = h.assets < cash ? h.assets : cash;
+        steps.push({
+          signer: 'treasury',
+          what: `withdraw ${formatUnits(assets, h.assetDecimals)} ${h.asset} from ${h.label} (or keep the shares earning)`,
+          command: `cast send ${h.token} "withdraw(uint256,address,address)" ${assets} ${to} ${r.treasury} ${SIGN}`,
         });
       }
-      if ((h.redeemable ?? 0n) < h.balance) notes.push(`${h.label}: idle cash redeems only part of the shares now; the rest stays redeemable later`);
+      if (h.assets > cash) {
+        const afterReserves = r.pools.some((p) => h.token !== null && isAddressEqual(p.pool, h.token) && p.withdrawable > 0n);
+        notes.push(
+          `${h.label}: idle cash${afterReserves ? ' left after the reserve withdrawal' : ''} redeems ${cash > 0n ? 'only part of the shares now; the rest stays' : 'none of the shares now; they stay'} redeemable later`,
+        );
+      }
     }
   }
   if (r.treasuryDebtValue > 0n) {

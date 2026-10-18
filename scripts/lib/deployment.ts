@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { createPublicClient, http, type PublicClient } from 'viem';
+import { createPublicClient, fallback, http, type PublicClient } from 'viem';
 import { ENVIRONMENTS, NETWORKS, type EnvironmentName, type HubDeployment, type NetworkName, type SpokeDeployment } from '../../packages/sdk/src/index';
 
 /** Where DeployHub / DeploySpoke write the deployment JSON that the SDK, agent and web read. */
@@ -42,13 +42,43 @@ export function asSpokeDeployment(network: NetworkName, raw: unknown): SpokeDepl
   return d as SpokeDeployment;
 }
 
-/** RPC override in the agent's convention (RPC_MEZO_TESTNET, RPC_BASE_SEPOLIA, ...), else the SDK default. */
-export function rpcUrl(network: NetworkName, env: NodeJS.ProcessEnv = process.env): string {
-  return env[`RPC_${network.toUpperCase().replace(/-/g, '_')}`] ?? NETWORKS[network].chain.rpcUrls.default.http[0];
+/**
+ * RPC URLs in the agent's convention (RPC_MEZO_TESTNET, RPC_BASE_SEPOLIA, ...): one URL or a comma-separated list
+ * tried in order, exactly as services/agent reads the same variable; else the SDK default.
+ */
+export function rpcUrls(network: NetworkName, env: NodeJS.ProcessEnv = process.env): string[] {
+  const urls = (env[`RPC_${network.toUpperCase().replace(/-/g, '_')}`] ?? '')
+    .split(',')
+    .map((url) => url.trim())
+    .filter(Boolean);
+  return urls.length > 0 ? urls : [NETWORKS[network].chain.rpcUrls.default.http[0]];
 }
 
+/** Hosts only, for display: an RPC URL can carry an API key in its path or query. */
+export function rpcHosts(network: NetworkName, env: NodeJS.ProcessEnv = process.env): string {
+  return rpcUrls(network, env)
+    .map((url) => {
+      try {
+        return new URL(url).host;
+      } catch {
+        return 'custom RPC';
+      }
+    })
+    .join(', ');
+}
+
+/** Read client over every configured URL: a fallback transport when there are several, as in the agent. */
 export function publicClient(network: NetworkName, env: NodeJS.ProcessEnv = process.env): PublicClient {
-  return createPublicClient({ chain: NETWORKS[network].chain, transport: http(rpcUrl(network, env), { retryCount: 3, timeout: 20_000 }) }) as PublicClient;
+  const urls = rpcUrls(network, env);
+  // A list is retried as a whole (each URL in order, then again), a single URL on its own.
+  const transport =
+    urls.length > 1
+      ? fallback(
+          urls.map((url) => http(url, { timeout: 20_000 })),
+          { retryCount: 3 },
+        )
+      : http(urls[0], { retryCount: 3, timeout: 20_000 });
+  return createPublicClient({ chain: NETWORKS[network].chain, transport }) as PublicClient;
 }
 
 /** First line of an error message (viem errors carry multi-line details). */

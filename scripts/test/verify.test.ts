@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { toFunctionSelector, type Abi, type AbiFunction, type Address, type Hex, type PublicClient } from 'viem';
+import { parseUnits, toFunctionSelector, zeroAddress, type Abi, type AbiFunction, type Address, type Hex, type PublicClient } from 'viem';
 import {
   PRICE_KEYS,
   PRICE_SYMBOLS,
@@ -16,7 +18,17 @@ import {
   type PriceSymbol,
   type SpokeDeployment,
 } from '../../packages/sdk/src/index';
-import { expectationsFromEnv, missingFunctions, selectorPush, verifyEnvironment, type Expectations, type Report } from '../lib/verify';
+import {
+  DEPLOYED_RESERVE_FACTOR,
+  DEPLOYED_RISK,
+  expectationsFromEnv,
+  missingFunctions,
+  selectorPush,
+  verifyEnvironment,
+  type Expectations,
+  type Report,
+  type RiskParams,
+} from '../lib/verify';
 
 const A = (n: number): Address => `0x${n.toString(16).padStart(40, '0')}`;
 const HUB = {
@@ -97,7 +109,7 @@ type Collateral = {
   bonusBps: number;
   cap: bigint;
 };
-const local = (token: Address, isShare: boolean, key: PriceSymbol): Collateral => ({
+const local = (token: Address, isShare: boolean, key: PriceSymbol, risk: RiskParams): Collateral => ({
   enabled: true,
   isRemote: false,
   isShare,
@@ -106,13 +118,11 @@ const local = (token: Address, isShare: boolean, key: PriceSymbol): Collateral =
   remoteToken: `0x${'0'.repeat(64)}`,
   decimals: 18,
   priceKey: PRICE_KEYS[key],
-  ltvBps: 7000,
-  ltBps: 7800,
-  bonusBps: 500,
+  ...risk,
   cap: MAX,
 });
-const remote = (token: Address, decimals: number, key: PriceSymbol): Collateral => ({
-  ...local('0x0000000000000000000000000000000000000000', false, key),
+const remote = (token: Address, decimals: number, key: PriceSymbol, risk: RiskParams): Collateral => ({
+  ...local(zeroAddress, false, key, risk),
   isRemote: true,
   chainId: 10004,
   remoteToken: toBytes32(token),
@@ -136,9 +146,17 @@ function world() {
       ),
     } as Record<string, Hex | undefined>,
     spokeCode: { [GATEWAY]: codeFor(spokeGatewayAbi), [SPOKE_WORMHOLE]: '0x6080', [WETH]: '0x6080', [USDC]: '0x6080' } as Record<string, Hex | undefined>,
+    owner: OWNER,
     treasury: OWNER,
     liquidationFeeBps: 1000,
-    collaterals: [local(HUB.pMUSD, true, 'MUSD'), local(HUB.pMEZO, true, 'MEZO'), local(BTC, false, 'BTC'), remote(WETH, 18, 'ETH'), remote(USDC, 6, 'USDC')],
+    collaterals: [
+      local(HUB.pMUSD, true, 'MUSD', DEPLOYED_RISK.pMUSD),
+      local(HUB.pMEZO, true, 'MEZO', DEPLOYED_RISK.pMEZO),
+      local(BTC, false, 'BTC', DEPLOYED_RISK.BTC),
+      remote(WETH, 18, 'ETH', DEPLOYED_RISK.WETH),
+      remote(USDC, 6, 'USDC', DEPLOYED_RISK.USDC),
+    ],
+    reserveFactor: { [HUB.pMUSD]: E18 / 10n, [HUB.pMEZO]: E18 / 10n } as Record<string, bigint>,
     feeds: Object.fromEntries(
       PRICE_SYMBOLS.map((s) => [
         s,
@@ -180,7 +198,7 @@ function fakeClient(chainId: number, code: Record<string, Hex | undefined>, read
 }
 
 function hubReads(w: World) {
-  const ownable: Record<string, unknown> = { owner: OWNER, pendingOwner: '0x0000000000000000000000000000000000000000' };
+  const ownable: Record<string, unknown> = { owner: w.owner, pendingOwner: '0x0000000000000000000000000000000000000000' };
   return ({ address, functionName: fn, args = [] }: Call): unknown => {
     const symbolOf = (key: unknown) => PRICE_SYMBOLS.find((s) => PRICE_KEYS[s] === key)!;
     switch (address) {
@@ -224,7 +242,7 @@ function hubReads(w: World) {
           ...ownable,
           vaultManager: HUB.vaultManager,
           asset: address === HUB.pMUSD ? MUSD : MEZO,
-          reserveFactor: E18 / 10n,
+          reserveFactor: w.reserveFactor[address],
           MAX_RESERVE_FACTOR: (3n * E18) / 10n,
           supplyCap: 5_000_000n * E18,
           borrowCap: 4_000_000n * E18,
@@ -262,7 +280,7 @@ function spokeReads(w: World) {
     switch (address) {
       case GATEWAY:
         return {
-          owner: OWNER,
+          owner: w.owner,
           pendingOwner: '0x0000000000000000000000000000000000000000',
           hubEmitter: w.hubEmitter,
           hubChainId: w.spokeHubChainId,
@@ -291,6 +309,10 @@ async function verify(w: World, expectations: Expectations = expectationsFromEnv
 
 const failures = (r: Report) => r.findings.filter((f) => f.status === 'fail');
 const failed = (r: Report, check: string) => failures(r).find((f) => f.check === check);
+const finding = (r: Report, check: string) => r.findings.find((f) => f.check === check);
+
+/** contracts/.env.example as far as the fake world implements it: a loaded deploy environment. */
+const DEPLOY_ENV = { PYTH: HUB.pyth, SUPRA_PULL: HUB.supraPull, ETH_SUPRA_PAIR: '19', USDC_SUPRA_PAIR: '89', BTC_SUPRA_PAIR: '18' };
 
 describe('selectors in bytecode', () => {
   it('pushes selectors the way solc does, dropping leading zero bytes', () => {
@@ -372,7 +394,7 @@ describe('verifyEnvironment', () => {
 
   it('flags a collateral list that does not match the deployment', async () => {
     const w = world();
-    w.collaterals[2] = local(BTC, true, 'BTC');
+    w.collaterals[2] = local(BTC, true, 'BTC', DEPLOYED_RISK.BTC);
     w.collaterals.pop(); // the spoke's USDC was never registered
     const r = await verify(w);
     expect(failed(r, 'VaultManager.collateralCount()')?.detail).toBe('expected 5, got 4');
@@ -395,11 +417,68 @@ describe('verifyEnvironment', () => {
     expect(failed(r, 'TigrisRouter.getAmountsOut(1 MUSD) = pool quote')?.detail).toBe('expected 12000, got 11000');
   });
 
-  it('defaults the treasury to the owner and accepts EXPECTED_TREASURY', async () => {
+  it('compares the treasury only with EXPECTED_TREASURY and otherwise warns when it is not the owner', async () => {
     const w = world();
+    expect(finding(await verify(w), 'VaultManager.treasury()')).toMatchObject({ status: 'pass', detail: `${OWNER} (the owner)` });
     w.treasury = A(0xbb);
-    expect(failed(await verify(w), 'VaultManager.treasury()')?.detail).toBe(`expected ${OWNER}, got ${A(0xbb)}`);
-    expect(failed(await verify(w, expectationsFromEnv({ EXPECTED_TREASURY: A(0xbb) })), 'VaultManager.treasury()')).toBeUndefined();
+    const bare = await verify(w);
+    expect(failures(bare)).toEqual([]);
+    expect(finding(bare, 'VaultManager.treasury()')).toMatchObject({ status: 'warn', detail: expect.stringContaining(`${A(0xbb)} is not the owner ${OWNER}`) });
+    expect(finding(await verify(w, expectationsFromEnv({ EXPECTED_TREASURY: A(0xbb) })), 'VaultManager.treasury()')?.status).toBe('pass');
+    expect(failed(await verify(w, expectationsFromEnv({ EXPECTED_TREASURY: OWNER })), 'VaultManager.treasury()')?.detail).toBe(
+      `expected ${OWNER}, got ${A(0xbb)}`,
+    );
+  });
+
+  it('passes right after an ownership transfer that left the treasury with the old key (DEPLOY.md, step 10)', async () => {
+    const w = world();
+    w.owner = A(0xcc); // every contract accepted the new owner; setTreasury has not run yet
+    const r = await verify(w, expectationsFromEnv({ EXPECTED_OWNER: A(0xcc) }));
+    expect(failures(r)).toEqual([]);
+    expect(finding(r, 'VaultManager.treasury()')?.status).toBe('warn');
+    expect(failed(await verify(w, expectationsFromEnv({ EXPECTED_OWNER: OWNER })), 'VaultManager.owner()')).toBeDefined();
+  });
+
+  it('passes a consistent hub and spoke with the deploy environment loaded', async () => {
+    expect(failures(await verify(world(), expectationsFromEnv(DEPLOY_ENV)))).toEqual([]);
+  });
+
+  it('fails on risk parameters or reserve factors other than the deployed ones once the deploy environment is loaded', async () => {
+    const w = world();
+    // What a stolen owner key could do: liquidate healthy BTC positions (LT 50% × bonus 20% passes the contract's
+    // bounds), take more interest, and cap pMUSD collateral.
+    w.collaterals[2] = { ...w.collaterals[2], ltBps: 5000, bonusBps: 2000 };
+    w.collaterals[0] = { ...w.collaterals[0], cap: 1n };
+    w.reserveFactor[HUB.pMUSD] = (3n * E18) / 10n;
+    // A bare run (the wiring only) reports them.
+    const bare = await verify(w);
+    expect(failures(bare)).toEqual([]);
+    expect(finding(bare, 'collateral 2 (BTC) risk')).toMatchObject({ status: 'info', detail: 'LTV 70%, LT 50%, bonus 20%, cap unlimited' });
+
+    const r = await verify(w, expectationsFromEnv(DEPLOY_ENV));
+    expect(failures(r).map((f) => f.check)).toEqual(['collateral 0 (pMUSD) cap', 'collateral 2 (BTC) risk', 'pMUSD.reserveFactor()']);
+    expect(failed(r, 'collateral 2 (BTC) risk')?.detail).toBe('LTV 70%, LT 50%, bonus 20%, cap unlimited; deployed with LTV 70%, LT 78%, bonus 5%');
+    expect(failed(r, 'pMUSD.reserveFactor()')?.detail).toBe('30% of interest to reserves; deployed with 10%');
+  });
+
+  it("expects DeployHub's pMEZO share cap, saturating at the uint256 maximum", async () => {
+    const w = world(); // pMEZO collateral listed with an unlimited cap
+    expect(failed(await verify(w, expectationsFromEnv({ MEZO_COLLATERAL_CAP: MAX.toString() })), 'collateral 1 (pMEZO) cap')).toBeUndefined();
+    w.collaterals[1] = { ...w.collaterals[1], cap: 100n * E18 * 10n ** 6n };
+    expect(failed(await verify(w, expectationsFromEnv({ MEZO_COLLATERAL_CAP: (100n * E18).toString() })), 'collateral 1 (pMEZO) cap')).toBeUndefined();
+  });
+
+  it('names the next liquidator that accepts BTC as the receiver of stray KeeperGateway BTC', async () => {
+    const w = world();
+    const getBalance = async ({ address }: { address: Address }) => (address === HUB.keeperGateway ? 10n ** 15n : 0n);
+    const client = { ...fakeClient(31337, w.hubCode, hubReads(w)), getBalance } as unknown as PublicClient;
+    const hub = { network: 'devnet-hub' as const, deployment: hubDeployment, client };
+    const spoke = { network: 'devnet-spoke' as const, deployment: spokeDeployment, client: fakeClient(31338, w.spokeCode, spokeReads(w)) };
+    const r = await verifyEnvironment(hub, [spoke], expectationsFromEnv({}));
+    expect(finding(r, 'KeeperGateway BTC balance')).toMatchObject({
+      status: 'warn',
+      detail: 'holds 0.001 BTC; the next liquidator that accepts BTC receives it',
+    });
   });
 
   it('compares the deploy environment once it is loaded', async () => {
@@ -410,6 +489,29 @@ describe('verifyEnvironment', () => {
     // USDC has a Supra leg on-chain that the loaded environment does not configure.
     expect(failed(r, 'feed USDC Supra pair')).toBeDefined();
     expect(failed(r, 'devnet-hub.json contracts.pyth = deploy input')).toBeUndefined(); // inputs are per testnet name only
+  });
+});
+
+describe('deployed configuration', () => {
+  const script = (name: string): string => readFileSync(fileURLToPath(new URL(`../../contracts/script/${name}`, import.meta.url)), 'utf8');
+  const risk = (source: string, pattern: RegExp): RiskParams | null => {
+    const m = source.match(pattern);
+    return m ? { ltvBps: Number(m[1]), ltBps: Number(m[2]), bonusBps: Number(m[3]) } : null;
+  };
+
+  it('DEPLOYED_RISK is what DeployHub and ConfigureCrossChain list the collateral with', () => {
+    const hub = script('DeployHub.s.sol');
+    const cross = script('ConfigureCrossChain.s.sol');
+    expect(risk(hub, /_local\(address\(pMUSD\),\s*keccak256\("MUSD"\),\s*(\d+),\s*(\d+),\s*(\d+)\)/)).toEqual(DEPLOYED_RISK.pMUSD);
+    expect(risk(hub, /_local\(address\(pMEZO\),\s*keccak256\("MEZO"\),\s*(\d+),\s*(\d+),\s*(\d+)\)/)).toEqual(DEPLOYED_RISK.pMEZO);
+    expect(risk(hub, /_plain\(btc,\s*keccak256\("BTC"\),\s*(\d+),\s*(\d+),\s*(\d+)\)/)).toEqual(DEPLOYED_RISK.BTC);
+    expect(risk(cross, /"ETH",\s*(\d+),\s*(\d+),\s*(\d+)/)).toEqual(DEPLOYED_RISK.WETH);
+    expect(risk(cross, /"USDC",\s*(\d+),\s*(\d+),\s*(\d+)/)).toEqual(DEPLOYED_RISK.USDC);
+  });
+
+  it('DEPLOYED_RESERVE_FACTOR is the reserve factor DeployHub gives both pools', () => {
+    const factors = [...script('DeployHub.s.sol').matchAll(/new InterestRateModel\([^)]*\),\s*([\d.]+)e18,\s*owner/g)].map((m) => parseUnits(m[1], 18));
+    expect(factors).toEqual([DEPLOYED_RESERVE_FACTOR, DEPLOYED_RESERVE_FACTOR]);
   });
 });
 
@@ -425,6 +527,16 @@ describe('expectationsFromEnv', () => {
     expect(e.tigrisStable).toBe(true);
     expect(e.seeded).toBe(false);
     expect(e.feeds.MUSD).toEqual({ maxAge: undefined, maxConfBps: undefined, supraPair: undefined, supraMaxAge: undefined, divergenceBps: undefined });
+  });
+
+  it("treats the nightly's unset repository variables (empty strings) as unset owner and treasury", () => {
+    expect(expectationsFromEnv({ EXPECTED_OWNER: '', EXPECTED_TREASURY: '' })).toMatchObject({ owner: undefined, treasury: undefined });
+    expect(expectationsFromEnv({ EXPECTED_OWNER: OWNER, EXPECTED_TREASURY: A(0xbb) })).toMatchObject({ owner: OWNER, treasury: A(0xbb) });
+  });
+
+  it('expects the deployed risk parameters and reserve factors only with a loaded deploy environment', () => {
+    expect(expectationsFromEnv({})).toMatchObject({ risk: undefined, reserveFactor: undefined });
+    expect(expectationsFromEnv({ PYTH: HUB.pyth })).toMatchObject({ risk: DEPLOYED_RISK, reserveFactor: DEPLOYED_RESERVE_FACTOR });
   });
 
   it('maps contracts/.env.example names to deployment JSON paths per network', () => {
