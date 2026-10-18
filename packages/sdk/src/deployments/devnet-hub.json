@@ -20,7 +20,7 @@
     "USDC": "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a"
   },
   "role": "hub",
-  "startBlock": 18,
+  "startBlock": 17,
   "tokens": {
     "MEZO": "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",
     "MUSD": "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"
