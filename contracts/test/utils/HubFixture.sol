@@ -20,11 +20,13 @@ abstract contract HubFixture is Test {
     bytes32 internal constant MEZO_KEY = keccak256("MEZO");
     bytes32 internal constant ETH_KEY = keccak256("ETH");
     bytes32 internal constant USDC_KEY = keccak256("USDC");
+    bytes32 internal constant BTC_KEY = keccak256("BTC");
 
     bytes32 internal constant MUSD_ID = bytes32(uint256(1));
     bytes32 internal constant MEZO_ID = bytes32(uint256(2));
     bytes32 internal constant ETH_ID = bytes32(uint256(3));
     bytes32 internal constant USDC_ID = bytes32(uint256(4));
+    bytes32 internal constant BTC_ID = bytes32(uint256(5));
 
     /// OracleRouter source tag of the Pyth leg (update bytes are `tag ‖ payload`).
     uint8 internal constant PYTH_TAG = 1;
@@ -47,6 +49,9 @@ abstract contract HubFixture is Test {
     uint256 internal pMezoCollateral;
     uint256 internal wethBase;
     uint256 internal usdcBase;
+    /// Plain-token hub collateral (Mezo's BTC); only set up by tests that call setUpBtc().
+    MockERC20 internal btc;
+    uint256 internal btcCollateral;
 
     address internal lp = makeAddr("lp");
     address internal alice = makeAddr("alice");
@@ -56,6 +61,7 @@ abstract contract HubFixture is Test {
     int64 internal mezoPrice = 794_000; // $0.00794 at expo -8
     int64 internal musdPrice = 1e8;
     int64 internal usdcPrice = 1e8;
+    int64 internal btcPrice = 80_000e8;
 
     function setUpHub() internal {
         vm.warp(1_700_000_000);
@@ -102,6 +108,14 @@ abstract contract HubFixture is Test {
         supplyFor(lp, pMEZO, 500_000_000e18);
     }
 
+    /// BTC as plain hub collateral: LTV 70%, liquidation threshold 78%, bonus 5%.
+    function setUpBtc() internal {
+        btc = new MockERC20("Bitcoin", "BTC", 18);
+        oracle.setFeed(BTC_KEY, pythFeed(BTC_ID));
+        btcCollateral = vaultManager.addCollateral(_plain(address(btc), BTC_KEY, 7000, 7800, 500));
+        pushPrices();
+    }
+
     function _local(address token, bytes32 priceKey, uint16 ltv, uint16 lt, uint16 bonus)
         internal
         pure
@@ -110,6 +124,7 @@ abstract contract HubFixture is Test {
         return VaultManager.CollateralConfig({
             enabled: true,
             isRemote: false,
+            isShare: true,
             token: token,
             chainId: 0,
             remoteToken: bytes32(0),
@@ -134,10 +149,33 @@ abstract contract HubFixture is Test {
         return VaultManager.CollateralConfig({
             enabled: true,
             isRemote: true,
+            isShare: false,
             token: address(0),
             chainId: chainId,
             remoteToken: token,
             decimals: decimals,
+            priceKey: priceKey,
+            ltvBps: ltv,
+            ltBps: lt,
+            bonusBps: bonus,
+            cap: type(uint256).max
+        });
+    }
+
+    /// A token held on the hub and valued unit for unit (no exchange rate), such as BTC.
+    function _plain(address token, bytes32 priceKey, uint16 ltv, uint16 lt, uint16 bonus)
+        internal
+        pure
+        returns (VaultManager.CollateralConfig memory)
+    {
+        return VaultManager.CollateralConfig({
+            enabled: true,
+            isRemote: false,
+            isShare: false,
+            token: token,
+            chainId: 0,
+            remoteToken: bytes32(0),
+            decimals: 18,
             priceKey: priceKey,
             ltvBps: ltv,
             ltBps: lt,
@@ -164,14 +202,17 @@ abstract contract HubFixture is Test {
         pyth.updatePriceFeeds{value: pyth.getUpdateFee(updates)}(updates);
     }
 
-    /// MockPyth payloads for all four feeds, stamped now (what Pyth's own contract accepts).
+    /// MockPyth payloads for every feed (BTC once set up), stamped now (what Pyth's own contract accepts).
     function rawPythUpdates() internal view returns (bytes[] memory updates) {
         uint64 t = uint64(block.timestamp);
-        updates = new bytes[](4);
+        updates = new bytes[](address(btc) == address(0) ? 4 : 5);
         updates[0] = pyth.createPriceFeedUpdateData(MUSD_ID, musdPrice, 0, -8, musdPrice, 0, t);
         updates[1] = pyth.createPriceFeedUpdateData(MEZO_ID, mezoPrice, 0, -8, mezoPrice, 0, t);
         updates[2] = pyth.createPriceFeedUpdateData(ETH_ID, ethPrice, 0, -8, ethPrice, 0, t);
         updates[3] = pyth.createPriceFeedUpdateData(USDC_ID, usdcPrice, 0, -8, usdcPrice, 0, t);
+        if (address(btc) != address(0)) {
+            updates[4] = pyth.createPriceFeedUpdateData(BTC_ID, btcPrice, 0, -8, btcPrice, 0, t);
+        }
     }
 
     /// The same updates tagged for OracleRouter, as passed to risk-checked entrypoints.

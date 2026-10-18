@@ -21,8 +21,9 @@ interface IReleaseSender {
 
 /// @title VaultManager
 /// @notice Source of truth for Mezodot positions across chains: collateral held on the hub
-///         (escrowed pTokens) and on external spokes (credited via verified Wormhole messages),
-///         debt in every hub market, LTV limits, health factors and liquidations.
+///         (escrowed pTokens, or plain tokens such as BTC) and on external spokes (credited via
+///         verified Wormhole messages), debt in every hub market, LTV limits, health factors and
+///         liquidations. A share of each liquidation bonus is kept for the protocol.
 /// @dev Health factor = Σ(collateral value × liquidation threshold) / Σ debt value.
 ///      New debt and withdrawals require Σ(collateral value × LTV) ≥ debt afterwards.
 ///      All USD values are WAD. Risk-checked entrypoints accept Pyth price updates and refund unused BTC.
@@ -34,6 +35,8 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
     uint256 public constant CLOSE_FACTOR_BPS = 5_000;
     uint256 public constant MAX_COLLATERALS = 16;
     uint256 public constant MAX_MARKETS = 8;
+    /// @notice The protocol can keep at most half of a liquidation bonus.
+    uint16 public constant MAX_LIQUIDATION_FEE_BPS = 5_000;
 
     /// How prices are read when valuing a position.
     /// Strict: fresh and confident or revert (debt, liquidation).
@@ -48,19 +51,21 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
     struct CollateralConfig {
         bool enabled;
         bool isRemote;
-        /// Local pToken address (hub collateral) or zero for remote collateral.
+        /// Local token is a pToken share, valued through its exchange rate; false for plain tokens (BTC) and remote.
+        bool isShare;
+        /// Local collateral token (pToken or plain token) or zero for remote collateral.
         address token;
         /// Wormhole chain id of the spoke (remote only).
         uint16 chainId;
         /// Spoke token address in universal 32-byte form (remote only).
         bytes32 remoteToken;
-        /// Decimals of the priced unit: underlying decimals for local pTokens, token decimals for remote.
+        /// Decimals of the priced unit: underlying decimals for pTokens, token decimals otherwise.
         uint8 decimals;
         bytes32 priceKey;
         uint16 ltvBps;
         uint16 ltBps;
         uint16 bonusBps;
-        /// Maximum total balance in collateral units (shares for local, token units for remote).
+        /// Maximum total balance in collateral units (shares for pTokens, token units otherwise).
         uint256 cap;
     }
 
@@ -84,6 +89,10 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
 
     OracleRouter public immutable oracle;
     address public adapter;
+    /// @notice Account credited with the protocol's share of seized collateral (withdrawn like any collateral).
+    address public treasury;
+    /// @notice Protocol share of each liquidation bonus, in bps of the bonus (1_000 = 10%).
+    uint16 public liquidationFeeBps;
 
     CollateralConfig[] internal _collaterals;
     Market[] internal _markets;
@@ -119,6 +128,10 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
     );
     /// Debt left after the account's last collateral was seized, removed from the market (see MezodotPool.writeOff).
     event BadDebtWrittenOff(address indexed account, uint256 indexed marketId, uint256 amount);
+    event TreasurySet(address treasury);
+    event LiquidationFeeSet(uint16 bps);
+    /// Collateral units of a liquidation kept for the protocol and credited to `treasury`.
+    event LiquidationFeeTaken(address indexed account, uint256 indexed collateralId, uint256 amount, address treasury);
 
     error InvalidParams();
     error InvalidCollateral();
@@ -149,6 +162,7 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
 
     constructor(OracleRouter oracle_, address owner_) Ownable(owner_) {
         oracle = oracle_;
+        treasury = owner_;
     }
 
     // =========================================================================
@@ -159,7 +173,9 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         if (_collaterals.length >= MAX_COLLATERALS) revert InvalidParams();
         _validateParams(c.ltvBps, c.ltBps, c.bonusBps);
         if (c.isRemote) {
-            if (c.chainId == 0 || c.remoteToken == bytes32(0) || c.token != address(0)) revert InvalidCollateral();
+            if (c.chainId == 0 || c.remoteToken == bytes32(0) || c.token != address(0) || c.isShare) {
+                revert InvalidCollateral();
+            }
             if (remoteCollateralId[c.chainId][c.remoteToken] != 0) revert InvalidCollateral();
         } else {
             if (c.token == address(0) || _localListed[c.token]) revert InvalidCollateral();
@@ -214,6 +230,18 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         _unpause();
     }
 
+    function setTreasury(address treasury_) external onlyOwner {
+        if (treasury_ == address(0)) revert InvalidParams();
+        treasury = treasury_;
+        emit TreasurySet(treasury_);
+    }
+
+    function setLiquidationFee(uint16 bps) external onlyOwner {
+        if (bps > MAX_LIQUIDATION_FEE_BPS) revert InvalidParams();
+        liquidationFeeBps = bps;
+        emit LiquidationFeeSet(bps);
+    }
+
     function _validateParams(uint16 ltvBps, uint16 ltBps, uint16 bonusBps) internal pure {
         // Liquidation must stay profitable before the position becomes insolvent: lt × (1 + bonus) ≤ 100%.
         if (ltvBps > ltBps || ltBps > 9_500 || bonusBps > 2_000 || uint256(ltBps) * (BPS + bonusBps) > BPS * BPS) {
@@ -230,12 +258,12 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         emit OperatorSet(msg.sender, operator, approved);
     }
 
-    /// @notice Posts pToken shares held by the caller as collateral.
+    /// @notice Posts hub collateral held by the caller (pToken shares or plain token units).
     function depositCollateral(uint256 id, uint256 shares) external nonReentrant {
         _depositLocal(msg.sender, id, shares);
     }
 
-    /// @notice Posts the caller's pToken shares as collateral for `account` (e.g. LeverageManager).
+    /// @notice Posts the caller's collateral tokens for `account` (e.g. LeverageManager).
     /// @dev Operator-only: unsolicited collateral could add an oracle dependency to someone else's account.
     function depositCollateralFor(address account, uint256 id, uint256 shares)
         external
@@ -322,9 +350,10 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
 
     /// @notice Liquidates an account with health factor < 1.
     /// @param repayAmount Debt to repay, capped by the 50% close factor and by available collateral.
-    /// @param minSeize Minimum collateral units to receive (slippage guard).
-    /// @param localReceiver Receives seized pTokens (local collateral).
+    /// @param minSeize Minimum collateral units the liquidator receives, after the protocol fee (slippage guard).
+    /// @param localReceiver Receives seized hub collateral (pTokens or plain tokens).
     /// @param remoteReceiver Receives seized tokens on the spoke (remote collateral).
+    /// @return seized Collateral units the liquidator receives.
     function liquidate(
         address account,
         uint256 marketId,
@@ -350,24 +379,34 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 owed = m.pool.borrowBalanceStored(account);
         uint256 repaid = Math.min(repayAmount, owed * CLOSE_FACTOR_BPS / BPS);
         if (repaid == 0) revert ZeroAmount();
-        (seized, repaid) = _seizeAmount(account, m, c, collateralId, repaid);
+        uint256 taken;
+        (taken, repaid) = _seizeAmount(account, m, c, collateralId, repaid);
+        // `taken` is the repaid value plus the bonus; the protocol keeps liquidationFeeBps of the bonus.
+        uint256 protocolFee = taken * c.bonusBps / (BPS + c.bonusBps) * liquidationFeeBps / BPS;
+        seized = taken - protocolFee;
         if (seized < minSeize || seized == 0) revert SlippageExceeded();
 
-        _debit(account, collateralId, seized);
+        _debit(account, collateralId, taken);
+        if (protocolFee > 0) {
+            // Stays in custody as the treasury's collateral: no transfer or spoke message is needed.
+            collateralBalance[treasury][collateralId] += protocolFee;
+            totalCollateral[collateralId] += protocolFee;
+            emit LiquidationFeeTaken(account, collateralId, protocolFee, treasury);
+        }
         IERC20(m.pool.asset()).safeTransferFrom(msg.sender, address(m.pool), repaid);
         m.pool.notifyRepay(account, repaid);
 
-        uint256 fee;
+        uint256 messageFee;
         if (c.isRemote) {
-            fee = IReleaseSender(adapter).messageFee();
-            IReleaseSender(adapter).sendRelease{value: fee}(c.chainId, c.remoteToken, remoteReceiver, seized);
+            messageFee = IReleaseSender(adapter).messageFee();
+            IReleaseSender(adapter).sendRelease{value: messageFee}(c.chainId, c.remoteToken, remoteReceiver, seized);
         } else {
             IERC20(c.token).safeTransfer(localReceiver, seized);
         }
         emit Liquidated(account, msg.sender, marketId, collateralId, repaid, seized);
         // Nothing left to seize: whatever is still owed can never be repaid by liquidation.
         if (!_hasCollateral(account)) _writeOffDebt(account);
-        _refund(spent + fee);
+        _refund(spent + messageFee);
     }
 
     /// @notice Credits spoke collateral after the adapter verified a Wormhole DEPOSIT message.
@@ -559,7 +598,7 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
 
     function _valueOf(CollateralConfig storage c, uint256 balance, PriceMode mode) internal view returns (uint256) {
         if (balance == 0) return 0;
-        uint256 units = c.isRemote ? balance : PToken(c.token).convertToAssets(balance);
+        uint256 units = c.isShare ? PToken(c.token).convertToAssets(balance) : balance;
         return _usd(units, _priceFor(c.priceKey, mode), c.decimals);
     }
 
@@ -576,12 +615,12 @@ contract VaultManager is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 seizeUnits = seizeValue * 10 ** c.decimals / price;
 
         uint256 balance = collateralBalance[account][collateralId];
-        uint256 balanceUnits = c.isRemote ? balance : PToken(c.token).convertToAssets(balance);
+        uint256 balanceUnits = c.isShare ? PToken(c.token).convertToAssets(balance) : balance;
         if (seizeUnits >= balanceUnits) {
             // Not enough collateral: take all of it and scale the repayment down proportionally.
             return (balance, Math.mulDiv(repaid, balanceUnits, seizeUnits, Math.Rounding.Ceil));
         }
-        seized = c.isRemote ? seizeUnits : PToken(c.token).convertToShares(seizeUnits);
+        seized = c.isShare ? PToken(c.token).convertToShares(seizeUnits) : seizeUnits;
         actualRepaid = repaid;
     }
 

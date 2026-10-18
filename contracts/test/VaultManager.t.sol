@@ -151,6 +151,107 @@ contract VaultManagerTest is HubFixture {
         vaultManager.creditRemote(alice, wethBase, 1e18);
     }
 
+    // --- Plain-token collateral (BTC) ------------------------------------------------
+
+    function _postBtc(address who, uint256 amount) internal {
+        btc.mint(who, amount);
+        vm.startPrank(who);
+        btc.approve(address(vaultManager), amount);
+        vaultManager.depositCollateral(btcCollateral, amount);
+        vm.stopPrank();
+    }
+
+    function test_btcCollateralValuedUnitForUnit() public {
+        setUpBtc();
+        _postBtc(alice, 1e18);
+        // 1 BTC at $80,000 with no exchange rate in between.
+        assertEq(vaultManager.collateralValue(alice, btcCollateral), 80_000e18);
+        VaultManager.RiskSnapshot memory s = vaultManager.getRiskSnapshot(alice);
+        assertEq(s.borrowLimit, 56_000e18);
+        _borrow(alice, musdMarket, 50_000e18);
+        vm.expectRevert(VaultManager.InsufficientCollateral.selector);
+        _borrow(alice, musdMarket, 6_001e18);
+    }
+
+    function test_btcLiquidationSeizesTokensNotShares() public {
+        setUpBtc();
+        _postBtc(alice, 1e18);
+        _borrow(alice, musdMarket, 56_000e18);
+        btcPrice = 70_000e8; // HF = 70,000 × 0.78 / 56,000 = 0.975
+        pushPrices();
+        musd.mint(liquidator, 30_000e18);
+        vm.startPrank(liquidator);
+        musd.approve(address(vaultManager), type(uint256).max);
+        uint256 seized =
+            vaultManager.liquidate(alice, musdMarket, 28_000e18, btcCollateral, 0, liquidator, 0, noUpdates());
+        vm.stopPrank();
+        // 28,000 repaid × 1.05 bonus at $70,000 per BTC.
+        assertApproxEqRel(seized, uint256(28_000e18) * 10_500 / 10_000 * 1e18 / 70_000e18, 1e9);
+        assertEq(btc.balanceOf(liquidator), seized);
+        assertEq(vaultManager.collateralBalance(alice, btcCollateral), 1e18 - seized);
+    }
+
+    function test_remoteAndShareFlagsMustAgree() public {
+        VaultManager.CollateralConfig memory c = _remote(ETH_SEPOLIA, SPOKE_WETH, 18, ETH_KEY, 7500, 8000, 700);
+        c.isShare = true;
+        vm.expectRevert(VaultManager.InvalidCollateral.selector);
+        vaultManager.addCollateral(c);
+    }
+
+    // --- Liquidation protocol fee --------------------------------------------------
+
+    function test_liquidationFeeGoesToTreasury() public {
+        address treasury = makeAddr("treasury");
+        vaultManager.setTreasury(treasury);
+        vaultManager.setLiquidationFee(1_000); // 10% of the bonus
+        _underwaterMezoBorrower();
+        musd.mint(liquidator, 10_000e18);
+        vm.startPrank(liquidator);
+        musd.approve(address(vaultManager), type(uint256).max);
+        uint256 received =
+            vaultManager.liquidate(alice, musdMarket, 10_000e18, pMezoCollateral, 0, liquidator, 0, noUpdates());
+        vm.stopPrank();
+
+        // Seized at a 10% bonus: the bonus is 1/11 of it, and the protocol keeps a tenth of that.
+        uint256 fee = vaultManager.collateralBalance(treasury, pMezoCollateral);
+        uint256 seized = received + fee;
+        assertApproxEqAbs(fee, seized * 1_000 / 11_000 / 10, 1);
+        assertEq(pMEZO.balanceOf(liquidator), received);
+        // The fee stays in custody as the treasury's collateral; totals still match the tokens held.
+        assertEq(vaultManager.totalCollateral(pMezoCollateral), pMEZO.balanceOf(address(vaultManager)));
+        vm.prank(treasury);
+        vaultManager.withdrawCollateral(pMezoCollateral, fee, treasury, noUpdates());
+        assertEq(pMEZO.balanceOf(treasury), fee);
+    }
+
+    function test_liquidationFeeAppliesToMinSeizeOnWhatTheLiquidatorGets() public {
+        vaultManager.setLiquidationFee(1_000);
+        _underwaterMezoBorrower();
+        musd.mint(liquidator, 10_000e18);
+        vm.startPrank(liquidator);
+        musd.approve(address(vaultManager), type(uint256).max);
+        uint256 snap = vm.snapshotState();
+        uint256 received =
+            vaultManager.liquidate(alice, musdMarket, 1_000e18, pMezoCollateral, 0, liquidator, 0, noUpdates());
+        vm.revertToState(snap);
+        vm.expectRevert(VaultManager.SlippageExceeded.selector);
+        vaultManager.liquidate(alice, musdMarket, 1_000e18, pMezoCollateral, received + 1, liquidator, 0, noUpdates());
+        vm.stopPrank();
+    }
+
+    function test_liquidationFeeAdminBounds() public {
+        uint16 cap = vaultManager.MAX_LIQUIDATION_FEE_BPS();
+        vm.expectRevert(VaultManager.InvalidParams.selector);
+        vaultManager.setLiquidationFee(cap + 1);
+        vm.expectRevert(VaultManager.InvalidParams.selector);
+        vaultManager.setTreasury(address(0));
+        assertEq(vaultManager.treasury(), address(this));
+        assertEq(vaultManager.liquidationFeeBps(), 0);
+        vm.prank(alice);
+        vm.expectRevert();
+        vaultManager.setLiquidationFee(500);
+    }
+
     // --- Liquidation ---------------------------------------------------------------
 
     function _underwaterMezoBorrower() internal returns (uint256 shares) {

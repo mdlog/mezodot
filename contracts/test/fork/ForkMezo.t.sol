@@ -170,6 +170,7 @@ contract ForkMezoTest is Test {
             VaultManager.CollateralConfig({
                 enabled: true,
                 isRemote: false,
+                isShare: true,
                 token: address(pMUSD),
                 chainId: 0,
                 remoteToken: bytes32(0),
@@ -185,6 +186,7 @@ contract ForkMezoTest is Test {
             VaultManager.CollateralConfig({
                 enabled: true,
                 isRemote: true,
+                isShare: false,
                 token: address(0),
                 chainId: 10004,
                 remoteToken: bytes32(uint256(uint160(0x4200000000000000000000000000000000000006))),

@@ -54,6 +54,7 @@ contract ConfigureCrossChain is Script {
             VaultManager.CollateralConfig({
                 enabled: true,
                 isRemote: true,
+                isShare: false,
                 token: address(0),
                 chainId: chainId,
                 remoteToken: remote,

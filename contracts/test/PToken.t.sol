@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC3156FlashBorrower} from "@openzeppelin/contracts/interfaces/IERC3156FlashBorrower.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {InterestRateModel} from "../src/hub/InterestRateModel.sol";
 import {MezodotPool} from "../src/hub/MezodotPool.sol";
 import {PToken} from "../src/hub/PToken.sol";
@@ -102,6 +103,35 @@ contract PTokenTest is Test {
         pool.accrueInterest();
         uint256 interest = pool.totalBorrows() - borrowsBefore;
         assertApproxEqAbs(pool.totalReserves(), interest / 10, 1);
+    }
+
+    function test_reserveFactorIsOwnerSettableUpToCap() public {
+        pool.borrow(borrower, 500_000e18, borrower);
+        skip(30 days);
+        // Changing the factor accrues first, so interest earned so far keeps the old 10% split.
+        pool.setReserveFactor(0.2e18);
+        uint256 reservesAtSwitch = pool.totalReserves();
+        assertGt(reservesAtSwitch, 0);
+        assertEq(pool.reserveFactor(), 0.2e18);
+
+        uint256 borrowsBefore = pool.totalBorrows();
+        skip(30 days);
+        pool.accrueInterest();
+        uint256 interest = pool.totalBorrows() - borrowsBefore;
+        assertApproxEqAbs(pool.totalReserves() - reservesAtSwitch, interest / 5, 1);
+
+        uint256 cap = pool.MAX_RESERVE_FACTOR();
+        vm.expectRevert(MezodotPool.InvalidParams.selector);
+        pool.setReserveFactor(cap + 1);
+        vm.prank(borrower);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, borrower));
+        pool.setReserveFactor(0.1e18);
+    }
+
+    function test_constructorRejectsReserveFactorAboveCap() public {
+        InterestRateModel irm = new InterestRateModel(0, 0.06e18, 0.8e18, 0.8e18);
+        vm.expectRevert(MezodotPool.InvalidParams.selector);
+        new PToken(IERC20(address(musd)), "x", "x", irm, 0.3e18 + 1, address(this));
     }
 
     function test_debtRoundsUpAndAccrues() public {

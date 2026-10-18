@@ -164,6 +164,7 @@ contract DeployHub is Script {
         return VaultManager.CollateralConfig({
             enabled: true,
             isRemote: false,
+            isShare: true,
             token: token,
             chainId: 0,
             remoteToken: bytes32(0),

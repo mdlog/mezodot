@@ -23,6 +23,8 @@ abstract contract MezodotPool is Ownable2Step, Pausable, ReentrancyGuard, IERC31
 
     uint256 internal constant WAD = 1e18;
     uint256 public constant FLASH_FEE_BPS = 9;
+    /// @notice Highest share of borrower interest the owner can route to reserves (30%).
+    uint256 public constant MAX_RESERVE_FACTOR = 0.3e18;
     bytes32 internal constant CALLBACK_SUCCESS = keccak256("ERC3156FlashBorrower.onFlashLoan");
 
     struct BorrowSnapshot {
@@ -31,8 +33,8 @@ abstract contract MezodotPool is Ownable2Step, Pausable, ReentrancyGuard, IERC31
     }
 
     InterestRateModel public immutable interestRateModel;
-    /// @notice Share of borrower interest kept as reserves (WAD).
-    uint256 public immutable reserveFactor;
+    /// @notice Share of borrower interest kept as reserves (WAD), owner-set up to MAX_RESERVE_FACTOR.
+    uint256 public reserveFactor;
 
     address public vaultManager;
     uint256 public totalBorrows;
@@ -53,6 +55,7 @@ abstract contract MezodotPool is Ownable2Step, Pausable, ReentrancyGuard, IERC31
     event ReservesWithdrawn(address indexed to, uint256 amount);
     event BadDebtWrittenOff(address indexed account, uint256 amount, uint256 fromReserves);
     event VaultManagerSet(address vaultManager);
+    event ReserveFactorSet(uint256 reserveFactor);
 
     error NotVaultManager();
     error VaultManagerAlreadySet();
@@ -70,7 +73,7 @@ abstract contract MezodotPool is Ownable2Step, Pausable, ReentrancyGuard, IERC31
     }
 
     constructor(InterestRateModel irm, uint256 reserveFactor_, address owner_) Ownable(owner_) {
-        if (address(irm) == address(0) || reserveFactor_ > WAD) revert InvalidParams();
+        if (address(irm) == address(0) || reserveFactor_ > MAX_RESERVE_FACTOR) revert InvalidParams();
         interestRateModel = irm;
         reserveFactor = reserveFactor_;
         accrualTimestamp = block.timestamp;
@@ -91,6 +94,14 @@ abstract contract MezodotPool is Ownable2Step, Pausable, ReentrancyGuard, IERC31
         supplyCap = supplyCap_;
         borrowCap = borrowCap_;
         emit CapsSet(supplyCap_, borrowCap_);
+    }
+
+    /// @notice Sets the reserve share of future interest; interest accrued so far keeps the old split.
+    function setReserveFactor(uint256 reserveFactor_) external onlyOwner {
+        if (reserveFactor_ > MAX_RESERVE_FACTOR) revert InvalidParams();
+        accrueInterest();
+        reserveFactor = reserveFactor_;
+        emit ReserveFactorSet(reserveFactor_);
     }
 
     function withdrawReserves(uint256 amount, address to) external onlyOwner nonReentrant {
