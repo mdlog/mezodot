@@ -22,7 +22,13 @@ forge script script/DeployHub.s.sol --rpc-url $MEZO_RPC --account deployer --bro
 
 - `--skip-simulation` is required on Mezo: MEZO (`0x7B7c…0001`) is a precompile that forge's own EVM cannot execute. The script's local run mocks the few MEZO calls it makes; with the flag, transactions are estimated and executed by the node against the real precompile.
 - Writes `packages/sdk/src/deployments/mezo-testnet.json`. A run without `--broadcast` writes it too: restore it with `git checkout packages/sdk/src/deployments/mezo-testnet.json` after a dry run.
-- The deployer needs 1 MUSD and 1 MEZO for the seed deposits (`SEED_AMOUNT=0` to skip).
+- The deployer needs 1 MUSD and 1 MEZO for the seed deposits (`SEED_AMOUNT=0` to skip). The script seeds pMUSD itself; seed pMEZO with `cast`, because forge cannot send the precompile's `approve`:
+
+```bash
+PMEZO=$(jq -r .contracts.pMEZO ../packages/sdk/src/deployments/mezo-testnet.json)
+cast send $MEZO "approve(address,uint256)" $PMEZO 1000000000000000000 --rpc-url $MEZO_RPC --account deployer
+cast send $PMEZO "deposit(uint256,address)" 1000000000000000000 0x000000000000000000000000000000000000dEaD --rpc-url $MEZO_RPC --account deployer
+```
 
 ## 2. Spokes
 

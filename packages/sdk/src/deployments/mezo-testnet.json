@@ -1,7 +1,29 @@
 {
-  "network": "mezo-testnet",
-  "role": "hub",
   "chainId": 31611,
-  "wormholeChainId": 50,
-  "contracts": null
+  "contracts": {
+    "keeperGateway": "0xB3d25c63eb6a04f04deF989dc9476ec28Ee9062e",
+    "leverageManager": "0xda80C2e0A3915dda6940ebFACa7Be94E07be4794",
+    "oracleRouter": "0x34B74fC6537363d5934b705A806aC66bD828CDfb",
+    "pMEZO": "0x75E52c9471DC55C2a24b946bC6baDe125AfB7170",
+    "pMUSD": "0x795de6c590238865CF7e0d74bE08DC5798269EE5",
+    "pyth": "0x933aDeC2C7624b11E4B2b80ACE15BF9a71a31315",
+    "supraPull": "0x443A0f4Da5d2fdC47de3eeD45Af41d399F0E5702",
+    "vaultManager": "0x43dF1D09321d0c51970693B297c9c6dF10605128",
+    "wormhole": "0x268557122Ffd64c85750d630b716471118F323c8",
+    "wormholeAdapter": "0x125B0dBD6e759eA258B215212ECe4b4203Cd4b64"
+  },
+  "network": "mezo-testnet",
+  "priceFeeds": {
+    "ETH": "0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
+    "MEZO": "0x80beaaedbdd228e77c5d62dfcd74b0305674b7e27a5cc6a46e71bd3a696826df",
+    "MUSD": "0x0617a9b725011a126a2b9fd53563f4236501f32cf76d877644b943394606c6de",
+    "USDC": "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a"
+  },
+  "role": "hub",
+  "startBlock": 16217816,
+  "tokens": {
+    "MEZO": "0x7B7c000000000000000000000000000000000001",
+    "MUSD": "0x118917a40FAF1CD7a13dB0Ef56C86De7973Ac503"
+  },
+  "wormholeChainId": 50
 }

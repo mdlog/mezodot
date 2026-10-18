@@ -82,7 +82,16 @@ contract DeployHub is Script {
         uint256 seed = vm.envOr("SEED_AMOUNT", uint256(1e18));
         if (seed > 0) {
             _seed(pMUSD, musd, seed);
-            _seed(pMEZO, mezo, seed);
+            // forge does not record mocked calls as transactions, so the precompile's approve would never be sent.
+            if (_isMezoPrecompile(mezo)) {
+                console2.log("Seed pMEZO with cast after this script (MEZO is a precompile):");
+                console2.log("  cast send <MEZO> 'approve(address,uint256)' <pMEZO> <SEED_AMOUNT>");
+                console2.log(
+                    "  cast send <pMEZO> 'deposit(uint256,address)' <SEED_AMOUNT> 0x000000000000000000000000000000000000dEaD"
+                );
+            } else {
+                _seed(pMEZO, mezo, seed);
+            }
         }
         vm.stopBroadcast();
 
@@ -99,17 +108,19 @@ contract DeployHub is Script {
     }
 
     /// @dev MEZO on Mezo is a precompile: forge's local EVM only sees a stub that cannot execute it, so the
-    ///      local run mocks the ERC-20 calls this script makes (decimals in PToken/addMarket, the seed's
-    ///      approve/transferFrom/balanceOf). Broadcast with --skip-simulation (docs/DEPLOY.md): transactions
-    ///      then execute on the node against the real precompile. MEZO has 18 decimals (cast call decimals()).
+    ///      local run mocks `decimals()` (read by the PToken constructor and addMarket). Broadcast with
+    ///      --skip-simulation (docs/DEPLOY.md): transactions then execute on the node against the real
+    ///      precompile. Calls the script itself would send to MEZO cannot be mocked (forge would not record
+    ///      them), so the pMEZO seed deposit is done with cast. MEZO has 18 decimals (cast call decimals()).
     function _mockPrecompileToken(address token) internal {
-        if (uint160(token) >> 32 != MEZO_PRECOMPILE_PREFIX) return;
+        if (!_isMezoPrecompile(token)) return;
         uint8 decimals = uint8(vm.envOr("MEZO_DECIMALS", uint256(18)));
         vm.mockCall(token, abi.encodeWithSelector(IERC20Metadata.decimals.selector), abi.encode(decimals));
-        vm.mockCall(token, abi.encodeWithSelector(IERC20.approve.selector), abi.encode(true));
-        vm.mockCall(token, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
-        vm.mockCall(token, abi.encodeWithSelector(IERC20.balanceOf.selector), abi.encode(uint256(0)));
-        console2.log("MEZO is a Mezo precompile: simulation mocks its ERC-20 calls; broadcast with --skip-simulation");
+        console2.log("MEZO is a Mezo precompile: simulation mocks decimals(); broadcast with --skip-simulation");
+    }
+
+    function _isMezoPrecompile(address token) internal pure returns (bool) {
+        return uint160(token) >> 32 == MEZO_PRECOMPILE_PREFIX;
     }
 
     function _deployOracle(address owner) internal returns (OracleRouter oracle) {
