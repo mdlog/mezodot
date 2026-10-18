@@ -767,6 +767,45 @@ export const vaultManagerAbi = [
   },
   {
     type: 'function',
+    name: 'repayWithCollateral',
+    inputs: [
+      {
+        name: 'account',
+        type: 'address',
+        internalType: 'address',
+      },
+      {
+        name: 'marketId',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+      {
+        name: 'collateralId',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+      {
+        name: 'amount',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+    outputs: [
+      {
+        name: 'repaid',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+      {
+        name: 'sharesBurned',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
     name: 'setAdapter',
     inputs: [
       {
@@ -1539,6 +1578,43 @@ export const vaultManagerAbi = [
   },
   {
     type: 'event',
+    name: 'RepaidWithCollateral',
+    inputs: [
+      {
+        name: 'account',
+        type: 'address',
+        indexed: true,
+        internalType: 'address',
+      },
+      {
+        name: 'marketId',
+        type: 'uint256',
+        indexed: true,
+        internalType: 'uint256',
+      },
+      {
+        name: 'collateralId',
+        type: 'uint256',
+        indexed: true,
+        internalType: 'uint256',
+      },
+      {
+        name: 'repaid',
+        type: 'uint256',
+        indexed: false,
+        internalType: 'uint256',
+      },
+      {
+        name: 'shares',
+        type: 'uint256',
+        indexed: false,
+        internalType: 'uint256',
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: 'event',
     name: 'TreasurySet',
     inputs: [
       {
@@ -1684,6 +1760,11 @@ export const vaultManagerAbi = [
   {
     type: 'error',
     name: 'SlippageExceeded',
+    inputs: [],
+  },
+  {
+    type: 'error',
+    name: 'WouldLeaveBadDebt',
     inputs: [],
   },
   {

@@ -24,19 +24,9 @@ export const swapLeverageManagerAbi = [
         internalType: 'uint256',
       },
       {
-        name: 'router_',
+        name: 'pair_',
         type: 'address',
-        internalType: 'contract ITigrisRouter',
-      },
-      {
-        name: 'factory_',
-        type: 'address',
-        internalType: 'address',
-      },
-      {
-        name: 'stable_',
-        type: 'bool',
-        internalType: 'bool',
+        internalType: 'contract ITigrisPool',
       },
     ],
     stateMutability: 'nonpayable',
@@ -131,16 +121,31 @@ export const swapLeverageManagerAbi = [
   },
   {
     type: 'function',
-    name: 'factory',
-    inputs: [],
-    outputs: [
+    name: 'hook',
+    inputs: [
       {
-        name: '',
+        name: 'sender',
         type: 'address',
         internalType: 'address',
       },
+      {
+        name: 'amount0',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+      {
+        name: 'amount1',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+      {
+        name: 'data',
+        type: 'bytes',
+        internalType: 'bytes',
+      },
     ],
-    stateMutability: 'view',
+    outputs: [],
+    stateMutability: 'nonpayable',
   },
   {
     type: 'function',
@@ -154,45 +159,6 @@ export const swapLeverageManagerAbi = [
       },
     ],
     stateMutability: 'view',
-  },
-  {
-    type: 'function',
-    name: 'onFlashLoan',
-    inputs: [
-      {
-        name: 'initiator',
-        type: 'address',
-        internalType: 'address',
-      },
-      {
-        name: 'token',
-        type: 'address',
-        internalType: 'address',
-      },
-      {
-        name: 'amount',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-      {
-        name: 'fee',
-        type: 'uint256',
-        internalType: 'uint256',
-      },
-      {
-        name: 'data',
-        type: 'bytes',
-        internalType: 'bytes',
-      },
-    ],
-    outputs: [
-      {
-        name: '',
-        type: 'bytes32',
-        internalType: 'bytes32',
-      },
-    ],
-    stateMutability: 'nonpayable',
   },
   {
     type: 'function',
@@ -240,6 +206,19 @@ export const swapLeverageManagerAbi = [
   },
   {
     type: 'function',
+    name: 'pair',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'address',
+        internalType: 'contract ITigrisPool',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
     name: 'pool',
     inputs: [],
     outputs: [
@@ -247,32 +226,6 @@ export const swapLeverageManagerAbi = [
         name: '',
         type: 'address',
         internalType: 'contract PToken',
-      },
-    ],
-    stateMutability: 'view',
-  },
-  {
-    type: 'function',
-    name: 'router',
-    inputs: [],
-    outputs: [
-      {
-        name: '',
-        type: 'address',
-        internalType: 'contract ITigrisRouter',
-      },
-    ],
-    stateMutability: 'view',
-  },
-  {
-    type: 'function',
-    name: 'stable',
-    inputs: [],
-    outputs: [
-      {
-        name: '',
-        type: 'bool',
-        internalType: 'bool',
       },
     ],
     stateMutability: 'view',
@@ -373,6 +326,16 @@ export const swapLeverageManagerAbi = [
   {
     type: 'error',
     name: 'Expired',
+    inputs: [],
+  },
+  {
+    type: 'error',
+    name: 'InvalidConfig',
+    inputs: [],
+  },
+  {
+    type: 'error',
+    name: 'InvalidPair',
     inputs: [],
   },
   {

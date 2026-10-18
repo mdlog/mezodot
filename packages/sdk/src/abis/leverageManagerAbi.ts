@@ -297,7 +297,7 @@ export const leverageManagerAbi = [
   },
   {
     type: 'error',
-    name: 'InsufficientLiquidity',
+    name: 'InvalidConfig',
     inputs: [],
   },
   {

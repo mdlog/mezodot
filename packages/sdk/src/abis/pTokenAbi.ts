@@ -789,6 +789,40 @@ export const pTokenAbi = [
   },
   {
     type: 'function',
+    name: 'repayWithShares',
+    inputs: [
+      {
+        name: 'account',
+        type: 'address',
+        internalType: 'address',
+      },
+      {
+        name: 'maxShares',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+      {
+        name: 'maxAssets',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+    outputs: [
+      {
+        name: 'assets',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+      {
+        name: 'shares',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
     name: 'reserveFactor',
     inputs: [],
     outputs: [

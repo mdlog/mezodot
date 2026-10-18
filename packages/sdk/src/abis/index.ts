@@ -6,6 +6,8 @@ export { spokeGatewayAbi } from './spokeGatewayAbi';
 export { leverageManagerAbi } from './leverageManagerAbi';
 export { swapLeverageManagerAbi } from './swapLeverageManagerAbi';
 export { tigrisRouterAbi } from './tigrisRouterAbi';
+export { tigrisPoolAbi } from './tigrisPoolAbi';
+export { tigrisPoolFactoryAbi } from './tigrisPoolFactoryAbi';
 export { keeperGatewayAbi } from './keeperGatewayAbi';
 export { wormholeAbi } from './wormholeAbi';
 export { interestRateModelAbi } from './interestRateModelAbi';

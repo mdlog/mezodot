@@ -18,6 +18,8 @@ const CONTRACTS = {
   LeverageManager: 'leverageManagerAbi',
   SwapLeverageManager: 'swapLeverageManagerAbi',
   ITigrisRouter: 'tigrisRouterAbi',
+  'ITigrisPool:ITigrisPool': 'tigrisPoolAbi',
+  'ITigrisPool:ITigrisPoolFactory': 'tigrisPoolFactoryAbi',
   KeeperGateway: 'keeperGatewayAbi',
   IWormhole: 'wormholeAbi',
   InterestRateModel: 'interestRateModelAbi',
