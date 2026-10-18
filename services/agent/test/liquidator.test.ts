@@ -278,3 +278,63 @@ describe('liquidator against RPC limits and fees (final review I4 / M3 / M8)', (
     expect(simulatedValue).toBe(4n);
   });
 });
+
+describe('keeper liveness (audit r2-keeper-liveness)', () => {
+  it('drops borrowers that no longer owe anything (a new Borrowed event re-adds them)', async () => {
+    const { activeBorrowers } = await import('../src/liquidator');
+    const owing = position(E18, 1n);
+    const repaid = { ...position(E18, 0n), account: '0x00000000000000000000000000000000000000b0' as const };
+    expect(activeBorrowers([owing, repaid])).toEqual([ALICE]);
+  });
+
+  it('redeems seized pTokens back into the debt-asset inventory and refuses reverted liquidations', async () => {
+    const { Liquidator } = await import('../src/liquidator');
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const writes: { address: string; functionName: string; args: unknown[] }[] = [];
+    let receiptStatus = 'success';
+    const client = {
+      readContract: async ({ functionName }: { functionName: string }) => (functionName === 'allowance' ? 10n ** 30n : 0n),
+      simulateContract: async () => ({ result: 123n, request: { functionName: 'triggerLiquidation', address: '0x02', args: [] } }),
+      waitForTransactionReceipt: async () => ({ status: receiptStatus }),
+    };
+    const wallet = {
+      account: { address: '0x00000000000000000000000000000000000000ee' },
+      writeContract: async (req: { address: string; functionName: string; args: unknown[] }) => (writes.push(req), `0x${'0'.repeat(63)}${writes.length}`),
+    };
+    const ctx = {
+      config: { stateDir: mkdtempSync(join(tmpdir(), 'mezodot-liq-')), env: 'devnet' },
+      hub: {
+        network: 'devnet-hub',
+        client,
+        wallet,
+        deployment: {
+          startBlock: 0,
+          contracts: {
+            keeperGateway: '0x0000000000000000000000000000000000000002',
+            oracleRouter: '0x0000000000000000000000000000000000000003',
+            wormholeAdapter: '0x0000000000000000000000000000000000000004',
+          },
+        },
+      },
+      spokes: [],
+      log: () => {},
+    };
+    const liq = new Liquidator(ctx as never, {} as never);
+    // Local pMEZO seizure: the 123 seized shares are redeemed for MEZO right after.
+    const local = evaluateAccount(protocol, position(0n, 3_900n * E18, 1_000_000n * 10n ** 24n), { MEZO: 0.004764, MUSD: 1, ETH: 3_000 });
+    await liq.execute(protocol, local, []);
+    expect(writes.map((w) => w.functionName)).toEqual(['triggerLiquidation', 'redeem']);
+    expect(writes[1].address).toBe(POOL_MEZO);
+    expect(writes[1].args).toEqual([123n, wallet.account.address, wallet.account.address]);
+    // Remote seizures are released on the spoke: nothing to redeem on the hub.
+    writes.length = 0;
+    const remote = evaluateAccount(protocol, position(E18, 2_350n * E18), { ETH: 2_800, MUSD: 1 });
+    await liq.execute(protocol, remote, []);
+    expect(writes.map((w) => w.functionName)).toEqual(['triggerLiquidation']);
+    // A reverted liquidation is an error, not a success to log.
+    receiptStatus = 'reverted';
+    await expect(liq.execute(protocol, remote, [])).rejects.toThrow(/reverted/);
+  });
+});

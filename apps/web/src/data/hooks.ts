@@ -200,8 +200,12 @@ export function useLoopStats() {
     refetchInterval: 30_000,
     queryFn: async () => {
       const latest = await client!.getBlockNumber();
-      const logs = await scanIncremental('loops', BigInt(HUB.deployment!.startBlock), latest, (range) =>
-        client!.getContractEvents({ address: HUB.deployment!.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Looped', ...range }),
+      const logs = await scanIncremental(
+        'loops',
+        BigInt(HUB.deployment!.startBlock),
+        latest,
+        (range) => client!.getContractEvents({ address: HUB.deployment!.contracts.leverageManager, abi: leverageManagerAbi, eventName: 'Looped', ...range }),
+        HUB.maxLogRange,
       );
       const volume = logs.reduce((s, l) => s + (l.args.principal! * l.args.leverage!) / 10n ** 18n, 0n);
       return { loops: logs.length, volume };

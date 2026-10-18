@@ -4,7 +4,7 @@ import type { Address, Hex, PublicClient } from 'viem';
 import { leverageManagerAbi, pTokenAbi, spokeGatewayAbi, vaultManagerAbi, type BlockRange, type NetworkName, type ProtocolState } from '@mezodot/sdk';
 import { HUB, SPOKES } from '../chain/env';
 import { QK, useHubClient, useProtocol, useSpokeClients } from './hooks';
-import { scanIncremental } from './incremental';
+import { scanIncremental, spokeHistoryStart } from './incremental';
 
 export type ActivityKind =
   'Supply' | 'Withdraw' | 'Collateral in' | 'Collateral out' | 'Cross-chain' | 'Release' | 'Borrow' | 'Repay' | 'Loop' | 'Unwind' | 'Liquidation';
@@ -222,8 +222,6 @@ async function spokeActivity(client: PublicClient, spoke: (typeof SPOKES)[number
 }
 
 /** Spoke history is scanned for this many recent blocks (~2 days on Base); hub history is complete. */
-export const SPOKE_HISTORY_BLOCKS = 100_000n;
-
 export type ActivityResult = { items: ActivityItem[]; spokeErrors: string[] };
 
 export function useActivity() {
@@ -238,8 +236,12 @@ export function useActivity() {
     queryFn: async (): Promise<ActivityResult> => {
       const hubLatest = await hub!.getBlockNumber();
       // Chunked + incremental: public RPCs cap eth_getLogs ranges (Mezo: 10,000 blocks).
-      const hubItems = await scanIncremental(`hub:${address}`, BigInt(HUB.deployment!.startBlock), hubLatest, (r) =>
-        hubActivity(hub!, protocol.data!, address!, r),
+      const hubItems = await scanIncremental(
+        `hub:${address}`,
+        BigInt(HUB.deployment!.startBlock),
+        hubLatest,
+        (r) => hubActivity(hub!, protocol.data!, address!, r),
+        HUB.maxLogRange,
       );
       await withTimestamps(hub!, HUB.name, hubItems);
       const spokeErrors: string[] = [];
@@ -250,9 +252,8 @@ export function useActivity() {
             if (!client || !s.deployment) return [];
             try {
               const latest = await client.getBlockNumber();
-              const floor = latest > SPOKE_HISTORY_BLOCKS ? latest - SPOKE_HISTORY_BLOCKS : 0n;
-              const start = BigInt(s.deployment.startBlock) > floor ? BigInt(s.deployment.startBlock) : floor;
-              const items = await scanIncremental(`spoke:${s.name}:${address}`, start, latest, (r) => spokeActivity(client, s, address!, r));
+              const start = spokeHistoryStart(latest, BigInt(s.deployment.startBlock), s.maxLogRange);
+              const items = await scanIncremental(`spoke:${s.name}:${address}`, start, latest, (r) => spokeActivity(client, s, address!, r), s.maxLogRange);
               await withTimestamps(client, s.name, items);
               return items;
             } catch (err) {

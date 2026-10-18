@@ -1,11 +1,13 @@
 import { join } from 'node:path';
-import { erc20Abi, maxUint256, type Address, type Hex } from 'viem';
+import { erc20Abi, formatUnits, maxUint256, type Address, type Hex } from 'viem';
 import {
   CLOSE_FACTOR_BPS,
   BPS,
   PRICE_SYMBOLS,
   keeperGatewayAbi,
+  NETWORKS,
   oracleRouterAbi,
+  pTokenAbi,
   pricesAfterUpdate,
   readPosition,
   readProtocol,
@@ -145,6 +147,9 @@ function planPair(debt: DebtRow, coll: CollateralRow, available: bigint | undefi
 
 type LiquidatorState = { cursor: bigint | null; accounts: Address[] };
 
+/** Accounts that still owe something. Repaid ones leave the index; a new Borrowed event brings them back. */
+export const activeBorrowers = (positions: PositionState[]): Address[] => positions.filter((p) => p.debts.some((d) => d.amount > 0n)).map((p) => p.account);
+
 /** Appends unseen accounts (case-insensitive), preserving first-seen order. */
 export function mergeAccounts(existing: Address[], incoming: Address[]): Address[] {
   const seen = new Set(existing.map((a) => a.toLowerCase()));
@@ -162,6 +167,10 @@ export class Liquidator {
   readonly store: JsonStore<LiquidatorState>;
   lastEvaluations: AccountEvaluation[] = [];
   lastRun: number | null = null;
+  /** Keeper wallet balances of each market's asset at the last tick (formatted), for /health. */
+  lastInventory: Record<string, string> = {};
+  /** Liquidatable accounts already reported as blocked by missing inventory (logged once each). */
+  private readonly blocked = new Set<string>();
 
   constructor(
     private readonly ctx: Context,
@@ -178,7 +187,7 @@ export class Liquidator {
     const { client, deployment } = this.ctx.hub;
     const latest = await client.getBlockNumber();
     const from = this.store.get().cursor ?? BigInt(deployment.startBlock);
-    for (const range of blockRanges(from, latest)) {
+    for (const range of blockRanges(from, latest, NETWORKS[this.ctx.hub.network].maxLogRange)) {
       const logs = await client.getContractEvents({
         address: deployment.contracts.vaultManager,
         abi: vaultManagerAbi,
@@ -220,6 +229,10 @@ export class Liquidator {
       return { oracle, prices: usablePrices(oracle), updates: [] as Hex[] };
     });
     const evaluations = positions.map((p) => evaluateAccount(protocol, p, prices, inventory));
+    const active = new Set(activeBorrowers(positions).map((a) => a.toLowerCase()));
+    const repaid = new Set(positions.map((p) => p.account.toLowerCase()).filter((a) => !active.has(a)));
+    if (repaid.size > 0) this.store.update((s) => void (s.accounts = s.accounts.filter((a) => !repaid.has(a.toLowerCase()))));
+    this.lastInventory = Object.fromEntries(protocol.markets.map((m) => [m.symbol, formatUnits(inventory[m.id] ?? 0n, m.decimals)]));
     this.lastEvaluations = evaluations;
     this.lastRun = Date.now();
     return { protocol, evaluations, oracle };
@@ -241,6 +254,23 @@ export class Liquidator {
     return (await this.keeperPricing(e.symbols)).updates;
   }
 
+  private async redeemSeized(pToken: Address, shares: bigint): Promise<void> {
+    const { client, wallet } = this.ctx.hub;
+    if (!wallet || shares === 0n) return;
+    try {
+      const hash = await wallet.writeContract({
+        address: pToken,
+        abi: pTokenAbi,
+        functionName: 'redeem',
+        args: [shares, wallet.account.address, wallet.account.address],
+      });
+      const receipt = await client.waitForTransactionReceipt({ hash });
+      if (receipt.status !== 'success') throw new Error(`redeem ${hash} reverted`);
+    } catch (err) {
+      this.ctx.log('liquidator', 'redeeming seized collateral failed (kept as pTokens)', { pToken, shares: String(shares), error: errorLine(err) });
+    }
+  }
+
   private async inventory(protocol: ProtocolState): Promise<Record<number, bigint>> {
     const wallet = this.ctx.hub.wallet;
     if (!wallet) return {};
@@ -259,6 +289,12 @@ export class Liquidator {
   async tick(): Promise<void> {
     const { protocol, evaluations } = await this.evaluateAll();
     for (const e of evaluations) {
+      // HF < 1 with every price available but no plan: the keeper holds none of the debt assets.
+      const stuck = e.healthFactor < 1 && e.unpriced.length === 0 && !e.plan && this.ctx.hub.wallet !== null;
+      if (stuck && !this.blocked.has(e.account)) {
+        this.blocked.add(e.account);
+        this.ctx.log('liquidator', 'liquidatable account skipped: no repay inventory', { account: e.account, inventory: this.lastInventory });
+      } else if (!stuck) this.blocked.delete(e.account);
       if (!e.plan || e.plan.profitUsd < this.ctx.config.minProfitUsd) continue;
       await this.updatesFor(e)
         .then((updates) => this.execute(protocol, e, updates))
@@ -309,8 +345,12 @@ export class Liquidator {
     });
     if (dryRun) return { simulated: result, txHash: null };
     const txHash = await wallet.writeContract(request);
-    await client.waitForTransactionReceipt({ hash: txHash });
+    const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+    if (receipt.status !== 'success') throw new Error(`liquidation transaction ${txHash} reverted`);
     this.ctx.log('liquidator', 'liquidated', { account: e.account, txHash, profitUsd: plan.profitUsd.toFixed(2), remote: plan.isRemote });
+    // Seized pTokens go back into the underlying, which is the repay inventory for the next liquidation
+    // (pMUSD → MUSD, pMEZO → MEZO). Best effort: at full utilisation the pool may not have the cash yet.
+    if (!plan.isRemote) await this.redeemSeized(protocol.collaterals[plan.collateralId].token, result);
     return { simulated: result, txHash };
   }
 }

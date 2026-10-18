@@ -39,6 +39,8 @@ export type NetworkInfo = {
   wormholescanApi: string | null;
   /** Supra DORA `get_proof` endpoint for pull prices on the hub; null where the agent mocks it (devnet) or on spokes. */
   supraProofUrl: string | null;
+  /** Largest eth_getLogs block range the default public RPC accepts (Base Sepolia: 200; Mezo: 10,000). */
+  maxLogRange: bigint;
 };
 
 const WORMHOLESCAN_TESTNET = 'https://api.testnet.wormholescan.io';
@@ -54,6 +56,7 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     wormholeChainId: 50,
     wormholescanApi: WORMHOLESCAN_TESTNET,
     supraProofUrl: SUPRA_TESTNET_PROOF_URL,
+    maxLogRange: 5_000n,
   },
   'base-sepolia': {
     name: 'base-sepolia',
@@ -63,6 +66,8 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     wormholeChainId: 10004,
     wormholescanApi: WORMHOLESCAN_TESTNET,
     supraProofUrl: null,
+    // sepolia.base.org: "eth_getLogs is limited to a 200 range" (measured 2026-10-18)
+    maxLogRange: 200n,
   },
   'eth-sepolia': {
     name: 'eth-sepolia',
@@ -72,6 +77,7 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     wormholeChainId: 10002,
     wormholescanApi: WORMHOLESCAN_TESTNET,
     supraProofUrl: null,
+    maxLogRange: 5_000n,
   },
   'devnet-hub': {
     name: 'devnet-hub',
@@ -81,6 +87,7 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     wormholeChainId: 50,
     wormholescanApi: null,
     supraProofUrl: null,
+    maxLogRange: 5_000n,
   },
   'devnet-spoke': {
     name: 'devnet-spoke',
@@ -90,6 +97,7 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     wormholeChainId: 10004,
     wormholescanApi: null,
     supraProofUrl: null,
+    maxLogRange: 5_000n,
   },
 };
 

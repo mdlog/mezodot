@@ -41,7 +41,12 @@ export type RelayMessage = {
 
 type RelayState = { cursors: Partial<Record<NetworkName, bigint>>; messages: Record<string, RelayMessage> };
 
-const MAX_BLOCK_RANGE = 2_000n;
+/** eth_getLogs windows per source per tick, so a backlog drains without starving other sources. */
+const WINDOWS_PER_TICK = 25;
+/** Smallest window the scanner shrinks to when an RPC refuses a range. */
+const MIN_LOG_WINDOW = 16n;
+/** Errors that mean "range too large" (wording varies by RPC provider). */
+const RANGE_ERROR = /range|limit|exceed|too (many|large|big)|blocks distance|block span|response size/i;
 export const RETRY_BASE_MS = 5_000;
 export const RETRY_MAX_MS = 10 * 60_000;
 /** Pause between Wormholescan polls for a VAA that guardians have not signed yet. */
@@ -63,6 +68,8 @@ export const vaaHash = vaaDigest;
  */
 export class Relayer {
   readonly store: JsonStore<RelayState>;
+  /** Learned eth_getLogs window per source, starting at the network's known public-RPC cap. */
+  private readonly windows = new Map<NetworkName, bigint>();
 
   constructor(
     private readonly ctx: Context,
@@ -95,69 +102,97 @@ export class Relayer {
 
   // --- discovery -------------------------------------------------------------
 
-  private async range(network: NetworkName, client: PublicClient, startBlock: number): Promise<[bigint, bigint] | null> {
+  /**
+   * Scans [cursor, latest] of one source in windows the RPC accepts, persisting the cursor after each window.
+   * The window starts at the network's known cap (Base Sepolia's public RPC allows 200 blocks) and halves
+   * when an RPC refuses the range, so custom RPCs with lower caps cannot stall relaying.
+   */
+  private async scan<T>(
+    network: NetworkName,
+    client: PublicClient,
+    startBlock: number,
+    query: (fromBlock: bigint, toBlock: bigint) => Promise<T[]>,
+    record: (s: RelayState, logs: T[]) => void,
+  ): Promise<void> {
     const latest = await client.getBlockNumber();
-    const from = this.store.get().cursors[network] ?? BigInt(startBlock);
-    if (from > latest) return null;
-    const to = from + MAX_BLOCK_RANGE < latest ? from + MAX_BLOCK_RANGE : latest;
-    return [from, to];
+    for (let i = 0; i < WINDOWS_PER_TICK; i++) {
+      const from = this.store.get().cursors[network] ?? BigInt(startBlock);
+      if (from > latest) return;
+      for (;;) {
+        const window = this.windows.get(network) ?? NETWORKS[network].maxLogRange;
+        const to = from + window - 1n < latest ? from + window - 1n : latest;
+        try {
+          const logs = await query(from, to);
+          this.store.update((s) => {
+            record(s, logs);
+            s.cursors[network] = to + 1n;
+          });
+          break;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (!RANGE_ERROR.test(message) || window <= MIN_LOG_WINDOW) throw err;
+          this.windows.set(network, window / 2n);
+          this.ctx.log('relayer', 'log range refused, shrinking window', { network, window: String(window / 2n) });
+        }
+      }
+    }
   }
 
   private async scanSpoke(spoke: Context['spokes'][number]): Promise<void> {
-    const r = await this.range(spoke.network, spoke.client, spoke.deployment.startBlock);
-    if (!r) return;
-    const logs = await spoke.client.getContractEvents({
-      address: spoke.deployment.contracts.spokeGateway,
-      abi: spokeGatewayAbi,
-      eventName: 'Deposited',
-      fromBlock: r[0],
-      toBlock: r[1],
-    });
-    this.store.update((s) => {
-      for (const log of logs) {
-        this.observe(s, {
-          direction: 'deposit',
-          source: spoke.network,
-          target: this.ctx.hub.network,
-          emitterChain: spoke.deployment.wormholeChainId,
-          emitter: spoke.deployment.contracts.spokeGateway,
-          sequence: log.args.sequence!,
-          txHash: log.transactionHash,
-          blockNumber: log.blockNumber,
-        });
-      }
-      s.cursors[spoke.network] = r[1] + 1n;
-    });
+    await this.scan(
+      spoke.network,
+      spoke.client,
+      spoke.deployment.startBlock,
+      (fromBlock, toBlock) =>
+        spoke.client.getContractEvents({ address: spoke.deployment.contracts.spokeGateway, abi: spokeGatewayAbi, eventName: 'Deposited', fromBlock, toBlock }),
+      (s, logs) => {
+        for (const log of logs) {
+          this.observe(s, {
+            direction: 'deposit',
+            source: spoke.network,
+            target: this.ctx.hub.network,
+            emitterChain: spoke.deployment.wormholeChainId,
+            emitter: spoke.deployment.contracts.spokeGateway,
+            sequence: log.args.sequence!,
+            txHash: log.transactionHash,
+            blockNumber: log.blockNumber,
+          });
+        }
+      },
+    );
   }
 
   private async scanHub(): Promise<void> {
     const { hub } = this.ctx;
-    const r = await this.range(hub.network, hub.client, hub.deployment.startBlock);
-    if (!r) return;
-    const logs = await hub.client.getContractEvents({
-      address: hub.deployment.contracts.wormholeAdapter,
-      abi: wormholeAdapterAbi,
-      eventName: 'ReleaseSent',
-      fromBlock: r[0],
-      toBlock: r[1],
-    });
-    this.store.update((s) => {
-      for (const log of logs) {
-        const target = this.ctx.spokes.find((sp) => sp.deployment.wormholeChainId === Number(log.args.chainId));
-        if (!target) continue; // spoke not configured for this agent
-        this.observe(s, {
-          direction: 'release',
-          source: hub.network,
-          target: target.network,
-          emitterChain: hub.deployment.wormholeChainId,
-          emitter: hub.deployment.contracts.wormholeAdapter,
-          sequence: log.args.sequence!,
-          txHash: log.transactionHash,
-          blockNumber: log.blockNumber,
-        });
-      }
-      s.cursors[hub.network] = r[1] + 1n;
-    });
+    await this.scan(
+      hub.network,
+      hub.client,
+      hub.deployment.startBlock,
+      (fromBlock, toBlock) =>
+        hub.client.getContractEvents({
+          address: hub.deployment.contracts.wormholeAdapter,
+          abi: wormholeAdapterAbi,
+          eventName: 'ReleaseSent',
+          fromBlock,
+          toBlock,
+        }),
+      (s, logs) => {
+        for (const log of logs) {
+          const target = this.ctx.spokes.find((sp) => sp.deployment.wormholeChainId === Number(log.args.chainId));
+          if (!target) continue; // spoke not configured for this agent
+          this.observe(s, {
+            direction: 'release',
+            source: hub.network,
+            target: target.network,
+            emitterChain: hub.deployment.wormholeChainId,
+            emitter: hub.deployment.contracts.wormholeAdapter,
+            sequence: log.args.sequence!,
+            txHash: log.transactionHash,
+            blockNumber: log.blockNumber,
+          });
+        }
+      },
+    );
   }
 
   private observe(s: RelayState, m: Omit<RelayMessage, 'id' | 'status' | 'attempts' | 'observedAt'>): void {
@@ -187,7 +222,10 @@ export class Relayer {
     const wallet = this.walletFor(m.target);
     if (!wallet) return; // read-only agent: report as pending
     const txHash = await this.submit(m, vaa, wallet);
-    await this.clientFor(m.target).waitForTransactionReceipt({ hash: txHash });
+    const receipt = await this.clientFor(m.target).waitForTransactionReceipt({ hash: txHash });
+    // A reverted delivery (e.g. raced by another relayer, or out of gas) is retried; the next attempt's
+    // isConsumed check marks it delivered if someone else got there first.
+    if (receipt.status !== 'success') throw new Error(`delivery transaction ${txHash} reverted`);
     this.patch(m.id, { status: 'delivered', deliveredTx: txHash, attempts: 0, lastError: undefined, nextAttemptAt: undefined });
     this.ctx.log('relayer', 'delivered', { id: m.id, txHash });
   }
