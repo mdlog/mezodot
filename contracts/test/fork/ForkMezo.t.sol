@@ -91,9 +91,11 @@ contract ForkMezoTest is Test {
         assertGt(router.getPrice(K_MUSD), 0.9e18);
         assertGt(router.getPrice(K_MEZO), 0);
         assertGt(router.getPrice(K_USDC), 0.9e18);
-        // ETH is not pushed to Pyth on Mezo and no Supra proof was posted: unavailable (fail closed), views 0.
-        (bool ok,) = router.tryGetPrice(K_ETH);
-        assertFalse(ok);
+        // ETH is not pushed to Pyth on Mezo: it is available only while a recent Supra proof (or keyed Pyth push)
+        // is on chain, which depends on live traffic. Either way the read must never return a bogus value.
+        (bool ok, uint256 eth) = router.tryGetPrice(K_ETH);
+        if (ok) assertGt(eth, 100e18);
+        else assertEq(eth, 0);
     }
 
     // ------------------------------------------------------------------ ETH paths at the pinned block
