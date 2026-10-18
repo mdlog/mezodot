@@ -67,7 +67,7 @@ export class OracleRelay {
 
   constructor(
     private readonly ctx: Context,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = ctx.fetch ?? fetch,
     private readonly now: () => number = Date.now,
   ) {
     this.mockPrices = ctx.config.env === 'devnet' ? { ...DEVNET_PRICES } : null;
@@ -157,8 +157,8 @@ export class OracleRelay {
       const prices = this.mockPrices;
       proof = encodeMockSupraProof(pairs.map(([s, pair]) => ({ pair, price: toPythInt(prices[s]), timestampMs, decimals: 8 })));
     } else {
-      const url = NETWORKS[network].supraProofUrl;
-      if (!url) throw new Error(`No Supra proof service configured for ${network}`);
+      const url = this.ctx.config.supraProofUrl ?? NETWORKS[network].supraProofUrl;
+      if (!url) throw new Error(`No Supra proof service configured for ${network} (SUPRA_PROOF_URL)`);
       proof = await fetchSupraProof(
         url,
         pairs.map(([, p]) => p),

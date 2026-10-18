@@ -1,5 +1,6 @@
 import { PRICE_SYMBOLS, SOURCE_TAG, type FeedLeg, type OracleState, type PriceSymbol } from '@mezodot/sdk';
 import type { Context } from '../context';
+import { publicError } from '../errors';
 import { relayCanServe, type OracleRelay } from './relay';
 
 /** A feed is "expiring" once less than this share of its longest max age remains. */
@@ -23,6 +24,16 @@ export type FeedHealth = {
 };
 
 export type OracleHealth = { checkedAt: number; healthy: boolean; feeds: FeedHealth[] };
+
+/** The last report and whether it can still be trusted: a failing router read keeps serving the old one. */
+export type WatchdogStatus = {
+  report: OracleHealth | null;
+  /** The report is older than two watchdog intervals (or missing). */
+  stale: boolean;
+  ageSec: number | null;
+  /** Last check failure since the last success (sanitized). */
+  error: string | null;
+};
 
 const describeLeg = (leg: FeedLeg): string =>
   leg.source === SOURCE_TAG.SUPRA
@@ -72,6 +83,13 @@ export class OracleWatchdog {
     return this.lastError;
   }
 
+  status(): WatchdogStatus {
+    const report = this.last;
+    const ageSec = report ? Math.max(0, Math.floor(this.now() / 1000) - report.checkedAt) : null;
+    const maxAgeSec = (2 * (this.ctx.config.oracleWatchMs ?? 30_000)) / 1000;
+    return { report, stale: ageSec === null || ageSec > maxAgeSec, ageSec, error: this.lastError };
+  }
+
   async check(): Promise<OracleHealth> {
     try {
       const oracle = await this.relay.oracle();
@@ -86,7 +104,7 @@ export class OracleWatchdog {
       this.lastError = null;
       return health;
     } catch (err) {
-      this.lastError = err instanceof Error ? err.message.split('\n')[0] : String(err);
+      this.lastError = publicError(err);
       throw err;
     }
   }

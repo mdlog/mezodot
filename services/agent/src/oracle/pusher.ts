@@ -1,8 +1,8 @@
-import { PRICE_SYMBOLS, SOURCE_TAG, fetchPriceUpdate, oracleRouterAbi, tagUpdate, type OracleState, type PriceSymbol } from '@mezodot/sdk';
+import { GAS_FLOOR, PRICE_SYMBOLS, SOURCE_TAG, fetchPriceUpdate, oracleRouterAbi, tagUpdate, type OracleState, type PriceSymbol } from '@mezodot/sdk';
 import type { Hex } from 'viem';
 import type { Context } from '../context';
+import { publicError } from '../errors';
 import type { OracleRelay } from './relay';
-import { writeWithBuffer } from '../tx';
 
 /** Push feeds are refreshed once this little validity is left (≈ Mezo's hourly pusher running 50 min late). */
 const PUSH_FEED_LEAD_SEC = 900;
@@ -17,8 +17,6 @@ export type PusherStatus = {
   notEntitled: PriceSymbol[];
   lastPush: { symbols: PriceSymbol[]; txHash: Hex; at: number } | null;
 };
-
-const errorLine = (err: unknown): string => (err instanceof Error ? err.message.split('\n')[0] : String(err));
 
 /** Symbols whose Pyth primary leg should be pushed now. */
 export function pythPushPlan(oracle: OracleState, nowSec: number): PriceSymbol[] {
@@ -43,7 +41,7 @@ export class PythPusher {
   constructor(
     private readonly ctx: Context,
     private readonly relay: OracleRelay,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = ctx.fetch ?? fetch,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -54,9 +52,9 @@ export class PythPusher {
 
   async tick(): Promise<{ pushed: PriceSymbol[]; txHash: Hex | null }> {
     const { pythApiKey, hermesUrl } = this.ctx.config;
-    const { client, wallet, deployment } = this.ctx.hub;
+    const { client, wallet, sender, deployment } = this.ctx.hub;
     // The devnet's MockPyth only accepts its own encoding, not real Hermes payloads.
-    if (!pythApiKey || !wallet || this.ctx.config.env === 'devnet') return { pushed: [], txHash: null };
+    if (!pythApiKey || !wallet || !sender || this.ctx.config.env === 'devnet') return { pushed: [], txHash: null };
     const oracle = await this.relay.oracle();
     const now = this.now();
     const plan = pythPushPlan(oracle, Math.floor(now / 1000)).filter((s) => (this.notEntitled.get(s) ?? 0) <= now);
@@ -75,7 +73,7 @@ export class PythPusher {
         this.notEntitled.delete(s);
         return;
       }
-      const error = errorLine(r.reason);
+      const error = publicError(r.reason);
       if (/\b403\b/.test(error)) {
         if (!this.notEntitled.has(s)) this.ctx.log('oracle', `Pyth key is not entitled to ${s}; retrying hourly`, { error });
         this.notEntitled.set(s, now + NOT_ENTITLED_RETRY_MS);
@@ -94,8 +92,8 @@ export class PythPusher {
       args: [tagged],
       value: fee,
     });
-    const txHash = await writeWithBuffer(client, wallet, request);
-    const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+    // Each Hermes update carries its own accumulator proof (~130k gas on Mezo testnet), hence a floor per update.
+    const { hash: txHash, receipt } = await sender.send(request, { kind: 'pyth-push', floor: GAS_FLOOR.pythUpdate * BigInt(tagged.length) });
     if (receipt.status !== 'success') throw new Error(`Pyth push ${txHash} reverted`);
     this.lastPush = { symbols: pushed, txHash, at: now };
     this.ctx.log('oracle', 'pushed Pyth prices', { symbols: pushed, txHash });

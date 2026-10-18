@@ -257,18 +257,22 @@ describe('Pyth pusher entitlements (a real key: ETH/USDC entitled, MUSD/MEZO 403
       return new Response(JSON.stringify({ binary: { encoding: 'hex', data: ['ab'] }, parsed: [] }));
     }) as unknown as typeof fetch;
     const sent: unknown[][] = [];
+    const floors: (bigint | undefined)[] = [];
     const ctx = {
       config: { env: 'testnet', pythApiKey: 'test-key', hermesUrl: 'http://hermes.test' },
       hub: {
         client: {
           readContract: async () => 0n,
-          estimateContractGas: async () => 100_000n,
           simulateContract: async ({ args }: { args: unknown[] }) => ({ request: { args } }),
-          waitForTransactionReceipt: async () => ({ status: 'success' }),
         },
-        wallet: {
-          account: { address: '0x00000000000000000000000000000000000000ee' },
-          writeContract: async (req: { args: unknown[] }) => (sent.push(req.args), '0x' + 'cd'.repeat(32)),
+        wallet: { account: { address: '0x00000000000000000000000000000000000000ee' } },
+        // The keeper's serialized sender (tx.ts); here it only records what would be sent.
+        sender: {
+          send: async (req: { args: unknown[] }, opts: { floor?: bigint }) => {
+            sent.push(req.args);
+            floors.push(opts.floor);
+            return { hash: '0x' + 'cd'.repeat(32), receipt: { status: 'success', logs: [] } };
+          },
         },
         deployment: { contracts: { oracleRouter: ROUTER } },
       },
@@ -279,6 +283,7 @@ describe('Pyth pusher entitlements (a real key: ETH/USDC entitled, MUSD/MEZO 403
     const first = await pusher.tick();
     expect(first.pushed).toEqual(['ETH']);
     expect(sent).toEqual([[['0x01ab']]]); // one router tx with the tagged ETH update
+    expect(floors).toEqual([200_000n]); // GAS_FLOOR.pythUpdate per update: Mezo estimates pushes far too low
     expect(requested.sort()).toEqual([PYTH_ID.MEZO, PYTH_ID.ETH].sort());
     expect(pusher.status().notEntitled).toEqual(['MEZO']);
 
@@ -291,5 +296,43 @@ describe('Pyth pusher entitlements (a real key: ETH/USDC entitled, MUSD/MEZO 403
     now += 61 * 60_000;
     await pusher.tick();
     expect(requested.sort()).toEqual([PYTH_ID.MEZO, PYTH_ID.ETH].sort()); // retried: the plan may have changed
+  });
+});
+
+describe('oracle watchdog status (health-monitoring)', () => {
+  it('keeps the last report when checks start failing, but marks it stale and exposes a URL-free error', async () => {
+    const { OracleWatchdog } = await import('../src/oracle/watchdog');
+    const fresh = (symbol: PriceSymbol): OracleStatus => ({
+      symbol,
+      feed: { primary: { source: 1, maxAge: 3_900, id: PYTH_ID[symbol] }, secondary: null, maxConfBps: 500, maxDivergenceBps: 0 },
+      ok: true,
+      price: 10n ** 18n,
+      validUntil: 2_000_000_000,
+      lastPrice: 10n ** 18n,
+      publishTime: 1,
+      legs: [],
+    });
+    const state = Object.fromEntries(PRICE_SYMBOLS.map((s) => [s, fresh(s)])) as OracleState;
+    let now = 1_792_000_000_000;
+    let down = false;
+    const relay = {
+      oracle: async () => {
+        if (down) throw new Error('HTTP request failed.\n\nURL: https://rpc.example/v2/SECRET_API_KEY_123');
+        return state;
+      },
+    };
+    const watchdog = new OracleWatchdog({ config: { env: 'testnet', oracleWatchMs: 30_000 }, log: () => {} } as never, relay as never, () => now);
+    await watchdog.check();
+    expect(watchdog.status()).toMatchObject({ stale: false, ageSec: 0, error: null });
+    expect(watchdog.status().report!.healthy).toBe(true);
+
+    down = true;
+    now += 61_000; // past two watchdog intervals
+    await expect(watchdog.check()).rejects.toThrow();
+    const st = watchdog.status();
+    expect(st.report).not.toBeNull(); // still served, but flagged
+    expect(st.stale).toBe(true);
+    expect(st.ageSec).toBe(61);
+    expect(st.error).toBe('HTTP request failed.');
   });
 });

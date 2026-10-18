@@ -9,6 +9,7 @@
   "scripts": {
     "start": "tsx --env-file-if-exists=.env src/index.ts",
     "mcp": "tsx --env-file-if-exists=.env src/mcp/stdio.ts",
+    "bundle": "node scripts/bundle.mjs",
     "test": "vitest run",
     "check": "tsc --noEmit && vitest run",
     "devnet:e2e": "tsx scripts/devnet-e2e.ts"

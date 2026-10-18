@@ -1,11 +1,115 @@
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { keccak256, sliceHex, type Hex } from 'viem';
-import { signDevVaa, vaaBody } from '@mezodot/sdk';
-import { messageId, vaaHash } from '../src/relayer';
+import { describe, expect, it, vi } from 'vitest';
+import { encodeAbiParameters, encodeEventTopics, getAddress, keccak256, sliceHex, type Hex } from 'viem';
+import { MessageType, encodePayload, signDevVaa, spokeGatewayAbi, toBytes32, vaaBody } from '@mezodot/sdk';
+import { Relayer, markSeen, messageId, releaseDeferred, stuckAfterMs, vaaHash, vaaPollDelayMs, type RelayMessage } from '../src/relayer';
 import { JsonStore } from '../src/store';
+import { TxSender, type SendOptions } from '../src/tx';
+
+const GUARDIAN = '0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6';
+const GATEWAY = '0x00000000000000000000000000000000000000ab';
+const OLD_GATEWAY = '0x00000000000000000000000000000000000000a0';
+const ADAPTER = '0x00000000000000000000000000000000000000ad';
+const KEEPER_GATEWAY = '0x00000000000000000000000000000000000000ee';
+const KEEPER = '0x000000000000000000000000000000000000beef';
+const VAA_API = 'http://vaa.test';
+
+const stateDir = () => mkdtempSync(join(tmpdir(), 'mezodot-relayer-'));
+
+/** A delivery sender that records requests and answers with `receipt`. */
+function fakeSender(receipt: Record<string, unknown> = {}, fail?: Error) {
+  const sent: { request: Record<string, unknown>; options: SendOptions }[] = [];
+  const sender = {
+    address: KEEPER,
+    send: async (request: Record<string, unknown>, options: SendOptions) => {
+      sent.push({ request, options });
+      if (fail) throw fail;
+      return { hash: `0x${'22'.repeat(32)}`, receipt: { status: 'success', logs: [], ...receipt }, gas: 0n, nonce: 0 };
+    },
+  };
+  return { sender, sent };
+}
+
+type CtxOptions = {
+  dir?: string;
+  hubClient?: unknown;
+  spokeClient?: unknown;
+  hubSender?: unknown;
+  spokeSender?: unknown;
+  vaaApis?: Record<string, string[]>;
+  logs?: string[];
+  hubNetwork?: string;
+  spokeNetwork?: string;
+};
+
+/** Devnet-shaped context (agent-signed VAAs) unless `vaaApis` names guardian sources for a network. */
+const relayCtx = (o: CtxOptions = {}) => ({
+  config: { stateDir: o.dir ?? stateDir(), env: 'devnet', devGuardianKey: null, vaaApis: o.vaaApis ?? {} },
+  hub: {
+    network: o.hubNetwork ?? 'devnet-hub',
+    client: o.hubClient ?? { getBlockNumber: async () => 0n, getContractEvents: async () => [], readContract: async () => false },
+    wallet: null,
+    sender: o.hubSender ?? null,
+    deployment: { startBlock: 0, wormholeChainId: 50, contracts: { wormholeAdapter: ADAPTER, keeperGateway: KEEPER_GATEWAY } },
+  },
+  spokes: [
+    {
+      network: o.spokeNetwork ?? 'base-sepolia',
+      client: o.spokeClient ?? { getBlockNumber: async () => 0n, getContractEvents: async () => [], readContract: async () => false },
+      wallet: null,
+      sender: o.spokeSender ?? null,
+      deployment: { startBlock: 0, wormholeChainId: 10004, contracts: { spokeGateway: GATEWAY } },
+    },
+  ],
+  log: (_scope: string, message: string) => o.logs?.push(message),
+});
+
+const deposit = (over: Partial<RelayMessage> = {}): RelayMessage => ({
+  id: 'm',
+  direction: 'deposit',
+  source: 'base-sepolia',
+  target: 'devnet-hub',
+  emitterChain: 10004,
+  emitter: GATEWAY,
+  sequence: 1n,
+  txHash: '0x01',
+  blockNumber: 1n,
+  status: 'waiting_vaa',
+  attempts: 0,
+  observedAt: 0,
+  ...over,
+});
+
+const depositVaa = (sequence: bigint, emitter: Hex = GATEWAY) =>
+  signDevVaa(GUARDIAN, {
+    timestamp: 1,
+    nonce: 0,
+    emitterChain: 10004,
+    emitter,
+    sequence,
+    consistencyLevel: 1,
+    payload: encodePayload({
+      msgType: MessageType.DEPOSIT,
+      nonce: sequence,
+      targetChain: 50,
+      target: toBytes32(ADAPTER),
+      account: toBytes32(KEEPER),
+      token: toBytes32('0x4200000000000000000000000000000000000006'),
+      amount: 10n ** 15n,
+    }),
+  });
+
+/** Wormholescan-style /v1/signed_vaa responses from a map of sequence → VAA (404 for the rest). */
+const vaaSource = (vaas: Map<bigint, Hex>, asked: bigint[] = []) =>
+  (async (url: string) => {
+    const sequence = BigInt(url.split('/').pop()!);
+    asked.push(sequence);
+    const vaa = vaas.get(sequence);
+    if (!vaa) return new Response('{}', { status: 404 });
+    return new Response(JSON.stringify({ vaaBytes: Buffer.from(vaa.slice(2), 'hex').toString('base64') }));
+  }) as unknown as typeof fetch;
 
 describe('relayer primitives', () => {
   it('vaaHash equals keccak(keccak(body)) — the contracts replay key', async () => {
@@ -18,7 +122,7 @@ describe('relayer primitives', () => {
       consistencyLevel: 1,
       payload: '0xbeef' as Hex,
     } as const;
-    const vaa = await signDevVaa('0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6', m);
+    const vaa = await signDevVaa(GUARDIAN, m);
     expect(vaaHash(vaa)).toBe(keccak256(keccak256(vaaBody(m))));
     // Same body after the 72-byte header+signature.
     expect(sliceHex(vaa, 72)).toBe(vaaBody(m));
@@ -29,14 +133,47 @@ describe('relayer primitives', () => {
   });
 
   it('store persists bigints across reloads', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'mezodot-'));
-    const path = join(dir, 's.json');
+    const path = join(stateDir(), 's.json');
     const a = new JsonStore<{ cursor: bigint | null }>(path, { cursor: null });
     a.update((s) => {
       s.cursor = 123n;
     });
     const b = new JsonStore<{ cursor: bigint | null }>(path, { cursor: null });
     expect(b.get().cursor).toBe(123n);
+  });
+
+  it('a read-only store never writes and follows the file it shares', async () => {
+    const path = join(stateDir(), 's.json');
+    const writer = new JsonStore<{ n: number }>(path, { n: 0 });
+    writer.update((s) => void (s.n = 1));
+    const reader = new JsonStore<{ n: number }>(path, { n: 0 }, { readOnly: true });
+    reader.update((s) => void (s.n = 99)); // in memory only
+    expect(JSON.parse(readFileSync(path, 'utf8')).n).toBe(1);
+    writer.update((s) => void (s.n = 7));
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 2_000); // past the reload check interval
+      expect(reader.get().n).toBe(7);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('tracks per-emitter sequences and reports the gaps below the highest one seen', () => {
+    const tracks = {};
+    for (const s of [0n, 1n, 3n, 6n]) markSeen(tracks, 'e', s);
+    expect(tracks).toEqual({ e: { next: 2n, ahead: [3n, 6n] } });
+    markSeen(tracks, 'e', 2n);
+    expect(tracks).toEqual({ e: { next: 4n, ahead: [6n] } });
+    markSeen(tracks, 'e', 1n); // already seen: no change
+    expect(tracks).toEqual({ e: { next: 4n, ahead: [6n] } });
+  });
+
+  it('backs signed-VAA lookups off from 10 s to a minute, and calls a message stuck after 3× source finality', () => {
+    expect(vaaPollDelayMs(1)).toBe(10_000);
+    expect(vaaPollDelayMs(2)).toBe(15_000);
+    expect(vaaPollDelayMs(20)).toBe(60_000);
+    expect(stuckAfterMs('base-sepolia')).toBe(3 * 20 * 60_000);
   });
 });
 
@@ -50,38 +187,17 @@ describe('relayer retry policy (final review M1)', () => {
   });
 
   it('never gives up, skips messages still in backoff, and isolates failing sources', async () => {
-    const { Relayer } = await import('../src/relayer');
-    const dir = mkdtempSync(join(tmpdir(), 'mezodot-relayer-'));
     const logs: string[] = [];
     const failingClient = { getBlockNumber: async () => Promise.reject(new Error('rpc down')) };
-    const ctx = {
-      config: { stateDir: dir, env: 'devnet', devGuardianKey: null },
-      hub: { network: 'devnet-hub', client: failingClient, wallet: null, deployment: { startBlock: 0, wormholeChainId: 50, contracts: {} } },
-      spokes: [{ network: 'devnet-spoke', client: failingClient, wallet: null, deployment: { startBlock: 0, wormholeChainId: 10004, contracts: {} } }],
-      log: (_s: string, message: string) => logs.push(message),
-    };
     let now = 1_000_000;
-    const relayer = new Relayer(ctx as never, fetch, () => now);
+    const relayer = new Relayer(relayCtx({ hubClient: failingClient, spokeClient: failingClient, logs }) as never, fetch, () => now);
     const attempted: string[] = [];
     (relayer as unknown as { advance: (m: { id: string }) => Promise<void> }).advance = async (m) => {
       attempted.push(m.id);
       throw new Error('transient');
     };
     relayer.store.update((s) => {
-      s.messages['a'] = {
-        id: 'a',
-        direction: 'deposit',
-        source: 'devnet-spoke',
-        target: 'devnet-hub',
-        emitterChain: 10004,
-        emitter: '0x0000000000000000000000000000000000000001',
-        sequence: 1n,
-        txHash: '0x01',
-        blockNumber: 1n,
-        status: 'waiting_vaa',
-        attempts: 0,
-        observedAt: 0,
-      };
+      s.messages['a'] = deposit({ id: 'a' });
     });
 
     for (let i = 0; i < 20; i++) {
@@ -92,7 +208,12 @@ describe('relayer retry policy (final review M1)', () => {
     expect(m.status).not.toBe('failed');
     expect(m.attempts).toBe(20);
     expect(relayer.pending().map((x) => x.id)).toEqual(['a']);
-    expect(logs.filter((l) => l === 'scan failed').length).toBeGreaterThanOrEqual(40);
+    // Both sources failed on every tick; each failure is logged once and tracked for /health.
+    expect(logs.filter((l) => l === 'scan failed')).toHaveLength(2);
+    expect(relayer.failingScans().map((f) => [f.network, f.since, f.error])).toEqual([
+      ['base-sepolia', 1_000_000, 'rpc down'],
+      ['devnet-hub', 1_000_000, 'rpc down'],
+    ]);
 
     // Within the backoff window nothing is attempted.
     const before = attempted.length;
@@ -104,31 +225,7 @@ describe('relayer retry policy (final review M1)', () => {
 });
 
 describe('relayer scanning and delivery (audit: agent)', () => {
-  const ctxWith = (spokeClient: unknown, hubClient: unknown, dir: string, wallet: unknown = null) => ({
-    config: { stateDir: dir, env: 'devnet', devGuardianKey: null },
-    hub: {
-      network: 'devnet-hub',
-      client: hubClient,
-      wallet,
-      deployment: {
-        startBlock: 0,
-        wormholeChainId: 50,
-        contracts: { wormholeAdapter: '0x00000000000000000000000000000000000000ad', keeperGateway: '0x00000000000000000000000000000000000000ee' },
-      },
-    },
-    spokes: [
-      {
-        network: 'base-sepolia',
-        client: spokeClient,
-        wallet: null,
-        deployment: { startBlock: 0, wormholeChainId: 10004, contracts: { spokeGateway: '0x00000000000000000000000000000000000000ab' } },
-      },
-    ],
-    log: () => {},
-  });
-
   it('scans within the RPC block-range cap, shrinking on refusal and draining a backlog per tick', async () => {
-    const { Relayer } = await import('../src/relayer');
     const calls: [bigint, bigint][] = [];
     // A custom RPC with a 100-block cap, below the 200 known for Base Sepolia's public endpoint.
     const spokeClient = {
@@ -139,69 +236,37 @@ describe('relayer scanning and delivery (audit: agent)', () => {
         return fromBlock <= 1_234n && 1_234n <= toBlock ? [{ args: { sequence: 7n }, transactionHash: '0x' + '11'.repeat(32), blockNumber: 1_234n }] : [];
       },
     };
-    const hubClient = { getBlockNumber: async () => 0n, getContractEvents: async () => [] };
-    const relayer = new Relayer(ctxWith(spokeClient, hubClient, mkdtempSync(join(tmpdir(), 'mezodot-relayer-'))) as never, fetch, () => 0);
+    const relayer = new Relayer(relayCtx({ spokeClient }) as never, fetch, () => 0);
     (relayer as unknown as { advance: () => Promise<void> }).advance = async () => {};
     await relayer.tick();
     expect(calls.every(([f, t]) => t - f + 1n <= 100n)).toBe(true);
-    expect(relayer.store.get().cursors['base-sepolia']).toBe(2_401n); // caught up in one tick
+    // Caught up in one tick; the cursor names the contract it scanned.
+    expect(relayer.store.get().cursors['base-sepolia']).toEqual({ block: 2_401n, contract: GATEWAY });
     expect(relayer.messages().map((m) => m.sequence)).toEqual([7n]);
+    expect(relayer.messages()[0].targetContract).toBe(ADAPTER);
   });
 
-  it('does not shrink the window for errors unrelated to the block range', async () => {
-    const { Relayer } = await import('../src/relayer');
+  it('does not shrink the window for errors unrelated to the block range, rate limiting included', async () => {
     const sizes: bigint[] = [];
+    const errors = ['fetch failed: ECONNRESET', 'HTTP request failed. Status: 429 Too Many Requests', 'request limit reached'];
     const spokeClient = {
       getBlockNumber: async () => 10_000n,
       getContractEvents: async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) => {
         sizes.push(toBlock - fromBlock + 1n);
-        throw new Error('fetch failed: ECONNRESET');
+        throw new Error(errors[(sizes.length - 1) % errors.length]);
       },
     };
-    const hubClient = { getBlockNumber: async () => 0n, getContractEvents: async () => [] };
-    const relayer = new Relayer(ctxWith(spokeClient, hubClient, mkdtempSync(join(tmpdir(), 'mezodot-relayer-'))) as never, fetch, () => 0);
-    await relayer.tick();
-    await relayer.tick();
-    expect(sizes).toEqual([200n, 200n]); // one attempt per tick at the network's cap, no shrinking
+    const relayer = new Relayer(relayCtx({ spokeClient }) as never, fetch, () => 0);
+    for (let i = 0; i < 3; i++) await relayer.tick();
+    expect(sizes).toEqual([200n, 200n, 200n]); // one attempt per tick at the network's cap, no shrinking
   });
 
   it('a delivery whose transaction reverts is retried, not recorded as delivered', async () => {
-    const { Relayer } = await import('../src/relayer');
-    const hubClient = {
-      getBlockNumber: async () => 0n,
-      getContractEvents: async () => [],
-      readContract: async () => false, // not consumed yet
-      estimateContractGas: async () => 100_000n,
-      waitForTransactionReceipt: async () => ({ status: 'reverted' }),
-    };
-    const spokeClient = { getBlockNumber: async () => 0n, getContractEvents: async () => [] };
-    const wallet = { writeContract: async () => '0x' + '22'.repeat(32) };
-    const vaa = await signDevVaa('0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6', {
-      timestamp: 1,
-      nonce: 0,
-      emitterChain: 10004,
-      emitter: '0x00000000000000000000000000000000000000ab',
-      sequence: 1n,
-      consistencyLevel: 1,
-      payload: '0xbeef',
-    });
-    const relayer = new Relayer(ctxWith(spokeClient, hubClient, mkdtempSync(join(tmpdir(), 'mezodot-relayer-')), wallet) as never, fetch, () => 0);
+    const { sender } = fakeSender({ status: 'reverted' });
+    const relayer = new Relayer(relayCtx({ hubSender: sender }) as never, fetch, () => 0);
+    const vaa = await depositVaa(1n);
     relayer.store.update((s) => {
-      s.messages['m'] = {
-        id: 'm',
-        direction: 'deposit',
-        source: 'base-sepolia',
-        target: 'devnet-hub',
-        emitterChain: 10004,
-        emitter: '0x00000000000000000000000000000000000000ab',
-        sequence: 1n,
-        txHash: '0x01',
-        blockNumber: 1n,
-        status: 'ready',
-        attempts: 0,
-        observedAt: 0,
-        vaa,
-      };
+      s.messages['m'] = deposit({ status: 'ready', vaa });
     });
     await relayer.tick();
     const m = relayer.store.get().messages['m'];
@@ -209,75 +274,248 @@ describe('relayer scanning and delivery (audit: agent)', () => {
     expect(m.attempts).toBe(1);
     expect(m.lastError).toMatch(/reverted/);
   });
+
+  it('a failed delivery keeps a fetched VAA "ready" instead of flipping back to waiting_vaa (relayer-status-regression)', async () => {
+    const vaa = await depositVaa(1n);
+    const { sender } = fakeSender({}, new Error('insufficient funds for gas * price + value'));
+    const relayer = new Relayer(relayCtx({ hubSender: sender, vaaApis: { 'base-sepolia': [VAA_API] } }) as never, vaaSource(new Map([[1n, vaa]])), () => 0);
+    relayer.store.update((s) => {
+      s.messages['m'] = deposit();
+    });
+    await relayer.tick();
+    const m = relayer.store.get().messages['m'];
+    expect(m.vaa).toBe(vaa);
+    expect(m.status).toBe('ready');
+    expect(m.attempts).toBe(1);
+    expect(m.lastError).toMatch(/insufficient funds/);
+  });
+
+  it('polls for a VAA with backoff while guardians have not signed, without counting failures', async () => {
+    const asked: bigint[] = [];
+    let now = 0;
+    const relayer = new Relayer(relayCtx({ vaaApis: { 'base-sepolia': [VAA_API] } }) as never, vaaSource(new Map(), asked), () => now);
+    relayer.store.update((s) => {
+      s.messages['m'] = deposit();
+    });
+    await relayer.tick();
+    await relayer.tick(); // still in its 10 s wait
+    now += 10_001;
+    await relayer.tick();
+    expect(asked).toEqual([1n, 1n]);
+    const m = relayer.store.get().messages['m'];
+    expect(m).toMatchObject({ status: 'waiting_vaa', attempts: 0, vaaPolls: 2 });
+  });
+
+  it('marks a RELEASE whose token transfer failed on the spoke as deferred (claimable by the recipient)', async () => {
+    const recipient = getAddress('0x000000000000000000000000000000000000c1a1');
+    const token = '0x4200000000000000000000000000000000000006';
+    const log = {
+      address: GATEWAY,
+      topics: encodeEventTopics({ abi: spokeGatewayAbi, eventName: 'ReleaseDeferred', args: { vaaHash: `0x${'aa'.repeat(32)}`, recipient, token } }),
+      data: encodeAbiParameters([{ type: 'uint256' }], [5n * 10n ** 14n]),
+    };
+    expect(releaseDeferred({ logs: [log] as never }, GATEWAY)).toEqual({ recipient, token, amount: 5n * 10n ** 14n });
+    expect(releaseDeferred({ logs: [log] as never }, OLD_GATEWAY)).toBeNull();
+
+    const { sender } = fakeSender({ logs: [log] });
+    const relayer = new Relayer(relayCtx({ spokeSender: sender }) as never, fetch, () => 0);
+    const vaa = await signDevVaa(GUARDIAN, {
+      timestamp: 1,
+      nonce: 0,
+      emitterChain: 50,
+      emitter: ADAPTER,
+      sequence: 4n,
+      consistencyLevel: 1,
+      payload: '0xbeef',
+    });
+    relayer.store.update((s) => {
+      s.messages['r'] = {
+        ...deposit({ id: 'r', status: 'ready', vaa }),
+        direction: 'release',
+        source: 'devnet-hub',
+        target: 'base-sepolia',
+        emitterChain: 50,
+        emitter: ADAPTER,
+        sequence: 4n,
+      };
+    });
+    await relayer.tick();
+    expect(relayer.store.get().messages['r']).toMatchObject({ status: 'delivered', deferred: { recipient, token, amount: 5n * 10n ** 14n } });
+  });
+
+  it('keeps the newest 500 delivered messages and none older than a week, dropping their VAAs', async () => {
+    const now = 30 * 24 * 3_600_000;
+    const relayer = new Relayer(relayCtx() as never, fetch, () => now);
+    relayer.store.update((s) => {
+      for (let i = 0; i < 600; i++) s.messages[`d${i}`] = deposit({ id: `d${i}`, status: 'delivered', deliveredAt: now - i * 1_000, sequence: BigInt(i) });
+      s.messages['old'] = deposit({ id: 'old', status: 'delivered', deliveredAt: now - 8 * 24 * 3_600_000 });
+      s.messages['pending'] = deposit({ id: 'pending', status: 'waiting_vaa', observedAt: 0 });
+    });
+    (relayer as unknown as { advance: () => Promise<void> }).advance = async () => {};
+    await relayer.tick();
+    const ids = Object.keys(relayer.store.get().messages);
+    expect(ids).toHaveLength(501);
+    expect(ids).toContain('pending'); // undelivered messages are never pruned
+    expect(ids).not.toContain('old');
+    expect(ids).not.toContain('d599');
+  });
+
+  it('flags messages pending past 3× their source finality', () => {
+    const now = 4 * 20 * 60_000;
+    const relayer = new Relayer(relayCtx() as never, fetch, () => now);
+    relayer.store.update((s) => {
+      s.messages['late'] = deposit({ id: 'late', observedAt: 0, attempts: 3, lastError: 'execution reverted' });
+      s.messages['fresh'] = deposit({ id: 'fresh', observedAt: now - 60_000, sequence: 2n });
+    });
+    const sum = relayer.summary(now);
+    expect(sum).toMatchObject({ pending: 2, waitingVaa: 2, ready: 0, oldestPendingAgeSec: 4_800 });
+    expect(sum.stuck.map((m) => m.id)).toEqual(['late']);
+  });
 });
 
-describe('gas buffer on Mezo (testnet: a redeem estimated exactly ran out of gas)', () => {
-  it('relayer deliveries carry the node estimate plus the buffer', async () => {
-    const { Relayer } = await import('../src/relayer');
-    const sentGas: (bigint | undefined)[] = [];
+describe('relayer finality and sequences (relayer-finality-gaps)', () => {
+  it('scans guardian-signed sources only up to the finalized block', async () => {
+    const ranges: [bigint, bigint][] = [];
+    const spokeClient = {
+      getBlockNumber: async () => 1_000n,
+      getBlock: async ({ blockTag }: { blockTag: string }) => ({ number: blockTag === 'finalized' ? 900n : 1_000n }),
+      getContractEvents: async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) => (ranges.push([fromBlock, toBlock]), []),
+    };
+    const relayer = new Relayer(relayCtx({ spokeClient, vaaApis: { 'base-sepolia': [VAA_API] } }) as never, fetch, () => 0);
+    await relayer.tick();
+    expect(ranges.at(-1)![1]).toBe(900n);
+    expect(relayer.store.get().cursors['base-sepolia']?.block).toBe(901n);
+  });
+
+  it('without a finalized tag it scans to the latest block and waits out the finality window before the first VAA lookup', async () => {
+    const logs: string[] = [];
+    const spokeClient = {
+      getBlockNumber: async () => 50n,
+      getBlock: async () => Promise.reject(new Error('invalid block tag "finalized"')),
+      getContractEvents: async () => [{ args: { sequence: 0n }, transactionHash: '0x' + '11'.repeat(32), blockNumber: 10n }],
+    };
+    const asked: bigint[] = [];
+    const now = 1_000_000;
+    const relayer = new Relayer(relayCtx({ spokeClient, vaaApis: { 'base-sepolia': [VAA_API] }, logs }) as never, vaaSource(new Map(), asked), () => now);
+    await relayer.tick();
+    const [m] = relayer.messages();
+    expect(m.nextAttemptAt).toBe(now + 20 * 60_000); // Base Sepolia finality
+    expect(asked).toEqual([]);
+    expect(logs).toContain('RPC has no finalized block tag; scanning to the latest block');
+  });
+
+  it('recovers a message that never showed up in the logs from its sequence number', async () => {
+    const vaa1 = await depositVaa(1n);
+    const asked: bigint[] = [];
+    const spokeClient = {
+      getBlockNumber: async () => 100n,
+      getBlock: async () => ({ number: 100n }),
+      // A replica that served sequences 0 and 2 but missed 1 (or a reorg that moved it below the cursor).
+      getContractEvents: async () => [0n, 2n].map((sequence) => ({ args: { sequence }, transactionHash: '0x' + '11'.repeat(32), blockNumber: 5n })),
+    };
+    const relayer = new Relayer(relayCtx({ spokeClient, vaaApis: { 'base-sepolia': [VAA_API] } }) as never, vaaSource(new Map([[1n, vaa1]]), asked), () => 0);
+    (relayer as unknown as { advance: () => Promise<void> }).advance = async () => {};
+    await relayer.tick();
+    const recovered = relayer.messages().find((m) => m.sequence === 1n)!;
+    expect(recovered).toMatchObject({ backfilled: true, status: 'ready', vaa: vaa1, target: 'devnet-hub', txHash: '0x' });
+    expect(relayer.gaps()).toEqual([]);
+    expect(relayer.store.get().sequences[`10004/${GATEWAY}`]).toEqual({ next: 3n, ahead: [] });
+  });
+
+  it('reports a gap it cannot fill yet', async () => {
+    const spokeClient = {
+      getBlockNumber: async () => 100n,
+      getBlock: async () => ({ number: 100n }),
+      getContractEvents: async () => [0n, 3n].map((sequence) => ({ args: { sequence }, transactionHash: '0x' + '11'.repeat(32), blockNumber: 5n })),
+    };
+    const relayer = new Relayer(relayCtx({ spokeClient, vaaApis: { 'base-sepolia': [VAA_API] } }) as never, vaaSource(new Map()), () => 0);
+    (relayer as unknown as { advance: () => Promise<void> }).advance = async () => {};
+    await relayer.tick();
+    expect(relayer.gaps()).toEqual([{ emitter: `10004/${GATEWAY}`, missing: [1n, 2n] }]);
+  });
+});
+
+describe('relayer after a redeploy (redeploy-agent-cursor-skip, state-survives-redeploy)', () => {
+  /** State as an older agent left it: a bare cursor per network and messages of the replaced gateway. */
+  const writeOldState = (dir: string) =>
+    writeFileSync(
+      join(dir, 'relayer-devnet.json'),
+      JSON.stringify({
+        cursors: { 'base-sepolia': { block: { $bigint: '999' }, contract: OLD_GATEWAY }, 'devnet-hub': { $bigint: '555' } },
+        messages: {
+          stale: {
+            ...deposit({ id: 'stale', emitter: OLD_GATEWAY, status: 'ready', vaa: '0xdead' }),
+            sequence: { $bigint: '1' },
+            blockNumber: { $bigint: '1' },
+          },
+          done: { ...deposit({ id: 'done', emitter: OLD_GATEWAY, status: 'delivered' }), sequence: { $bigint: '2' }, blockNumber: { $bigint: '1' } },
+          current: { ...deposit({ id: 'current', emitter: GATEWAY }), sequence: { $bigint: '3' }, blockNumber: { $bigint: '1' } },
+        },
+        sequences: { [`10004/${OLD_GATEWAY}`]: { next: { $bigint: '3' }, ahead: [] } },
+      }),
+    );
+
+  it('rescans from the new start block and archives undelivered messages of the old contracts', async () => {
+    const dir = stateDir();
+    writeOldState(dir);
+    const logs: string[] = [];
+    const ranges: bigint[] = [];
+    const spokeClient = {
+      getBlockNumber: async () => 300n,
+      getContractEvents: async ({ fromBlock }: { fromBlock: bigint }) => (ranges.push(fromBlock), []),
+    };
+    const relayer = new Relayer(relayCtx({ dir, spokeClient, logs }) as never, fetch, () => 0);
+    expect(relayer.store.get().cursors).toEqual({});
+    expect(Object.keys(relayer.store.get().messages)).toEqual(['current']);
+    expect(relayer.store.get().messages['current'].targetContract).toBe(ADAPTER);
+    expect(relayer.store.get().sequences).toEqual({});
+    const archive = JSON.parse(readFileSync(join(dir, 'relayer-devnet.archived.json'), 'utf8'));
+    expect(archive).toHaveLength(1);
+    expect(archive[0].messages.map((m: { id: string }) => m.id)).toEqual(['stale']); // delivered ones need nothing
+    expect(logs).toContain('cursor belongs to another deployment: rescanning from the start block');
+
+    (relayer as unknown as { advance: () => Promise<void> }).advance = async () => {};
+    await relayer.tick();
+    expect(ranges[0]).toBe(0n); // the deployment's startBlock, not the old cursor 999
+  });
+
+  it('resumes its own cursor', async () => {
+    const dir = stateDir();
+    new JsonStore(join(dir, 'relayer-devnet.json'), {}).update((s: Record<string, unknown>) => {
+      s.cursors = { 'base-sepolia': { block: 250n, contract: GATEWAY } };
+      s.messages = {};
+    });
+    const relayer = new Relayer(relayCtx({ dir }) as never, fetch, () => 0);
+    expect(relayer.store.get().cursors['base-sepolia']).toEqual({ block: 250n, contract: GATEWAY });
+    expect(existsSync(join(dir, 'relayer-devnet.archived.json'))).toBe(false);
+  });
+});
+
+describe('gas floor on Mezo (testnet: estimates far below what a VAA delivery uses)', () => {
+  it('relayer deliveries never go below the VAA relay floor', async () => {
+    const sentGas: bigint[] = [];
     const hubClient = {
       getBlockNumber: async () => 0n,
       getContractEvents: async () => [],
       readContract: async () => false,
-      estimateContractGas: async () => 100_000n,
-      waitForTransactionReceipt: async () => ({ status: 'success' }),
+      estimateContractGas: async () => 24_000n, // what a misbehaving backend returned
+      estimateFeesPerGas: async () => ({ maxFeePerGas: 2n, maxPriorityFeePerGas: 1n }),
+      getTransactionCount: async () => 0,
+      waitForTransactionReceipt: async ({ hash }: { hash: Hex }) => ({ status: 'success', gasUsed: 163_000n, transactionHash: hash, logs: [] }),
     };
     const wallet = {
-      account: { address: '0x00000000000000000000000000000000000000ee' },
-      writeContract: async (req: { gas?: bigint }) => (sentGas.push(req.gas), '0x' + '33'.repeat(32)),
+      account: { address: KEEPER },
+      writeContract: async (req: { gas: bigint }) => (sentGas.push(req.gas), `0x${'33'.repeat(32)}`),
     };
-    const spokeClient = { getBlockNumber: async () => 0n, getContractEvents: async () => [] };
-    const ctx = {
-      config: { stateDir: mkdtempSync(join(tmpdir(), 'mezodot-relayer-')), env: 'devnet', devGuardianKey: null },
-      hub: {
-        network: 'devnet-hub',
-        client: hubClient,
-        wallet,
-        deployment: {
-          startBlock: 0,
-          wormholeChainId: 50,
-          contracts: { wormholeAdapter: '0x00000000000000000000000000000000000000ad', keeperGateway: '0x00000000000000000000000000000000000000ee' },
-        },
-      },
-      spokes: [
-        {
-          network: 'base-sepolia',
-          client: spokeClient,
-          wallet: null,
-          deployment: { startBlock: 0, wormholeChainId: 10004, contracts: { spokeGateway: '0x00000000000000000000000000000000000000ab' } },
-        },
-      ],
-      log: () => {},
-    };
-    const vaa = await signDevVaa('0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6', {
-      timestamp: 1,
-      nonce: 0,
-      emitterChain: 10004,
-      emitter: '0x00000000000000000000000000000000000000ab',
-      sequence: 2n,
-      consistencyLevel: 1,
-      payload: '0xbeef',
-    });
-    const relayer = new Relayer(ctx as never, fetch, () => 0);
+    const sender = new TxSender('devnet-hub', hubClient as never, wallet as never, { receiptTimeoutMs: 1_000, log: () => {} });
+    const relayer = new Relayer(relayCtx({ hubClient, hubSender: sender }) as never, fetch, () => 0);
+    const vaa = await depositVaa(2n);
     relayer.store.update((s) => {
-      s.messages['g'] = {
-        id: 'g',
-        direction: 'deposit',
-        source: 'base-sepolia',
-        target: 'devnet-hub',
-        emitterChain: 10004,
-        emitter: '0x00000000000000000000000000000000000000ab',
-        sequence: 2n,
-        txHash: '0x01',
-        blockNumber: 1n,
-        status: 'ready',
-        attempts: 0,
-        observedAt: 0,
-        vaa,
-      };
+      s.messages['g'] = deposit({ id: 'g', sequence: 2n, status: 'ready', vaa });
     });
     await relayer.tick();
-    expect(sentGas).toEqual([150_000n]); // 100,000 × 1.3 + 20,000
-    expect(relayer.store.get().messages['g'].status).toBe('delivered');
+    expect(sentGas).toEqual([250_000n]); // GAS_FLOOR.vaaRelay, not 24,000 × 1.3 + 20,000
+    expect(relayer.store.get().messages['g']).toMatchObject({ status: 'delivered', deliveredTx: `0x${'33'.repeat(32)}` });
+    expect(relayer.store.get().messages['g'].vaa).toBeUndefined();
   });
 });

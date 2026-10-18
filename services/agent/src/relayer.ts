@@ -1,19 +1,25 @@
 import { join } from 'node:path';
-import { type Address, type Hex, type PublicClient } from 'viem';
+import { hexToBigInt, hexToNumber, parseEventLogs, sliceHex, type Address, type Hex, type PublicClient, type TransactionReceipt } from 'viem';
 import {
+  GAS_FLOOR,
+  MessageType,
   NETWORKS,
+  decodePayload,
   fetchSignedVaa,
+  fromBytes32,
   keeperGatewayAbi,
   parseLogMessagePublished,
   signDevVaa,
-  vaaDigest,
   spokeGatewayAbi,
+  vaaDigest,
   wormholeAdapterAbi,
   type NetworkName,
 } from '@mezodot/sdk';
-import type { Context, Wallet } from './context';
-import { writeWithBuffer } from './tx';
-import { JsonStore } from './store';
+import type { Context } from './context';
+import { publicError } from './errors';
+import { LogWindow, isRateLimited } from './scan';
+import { JsonStore, appendArchive, sameAddress } from './store';
+import type { TxSender } from './tx';
 
 export type Direction = 'deposit' | 'release';
 /** 'failed' only appears in state files written by older versions; such messages are retried. */
@@ -27,6 +33,7 @@ export type RelayMessage = {
   emitterChain: number;
   emitter: Address;
   sequence: bigint;
+  /** Source transaction ('0x' for a message recovered from a sequence gap). */
   txHash: Hex;
   blockNumber: bigint;
   status: MessageStatus;
@@ -37,47 +44,148 @@ export type RelayMessage = {
   nextAttemptAt?: number;
   vaa?: Hex;
   deliveredTx?: Hex;
+  deliveredAt?: number;
   observedAt: number;
+  /** Contract that executes the message on the target (hub adapter or spoke gateway); absent in older records. */
+  targetContract?: Address;
+  /** Signed-VAA lookups that found nothing yet. */
+  vaaPolls?: number;
+  /** Recovered from a sequence gap instead of a scanned log. */
+  backfilled?: boolean;
+  /**
+   * The RELEASE was delivered but the token transfer to the recipient failed: SpokeGateway kept the amount as
+   * claimable[recipient][token], and the recipient calls claim(token, to) to collect it.
+   */
+  deferred?: { recipient: Address; token: Address; amount: bigint };
 };
 
-type RelayState = { cursors: Partial<Record<NetworkName, bigint>>; messages: Record<string, RelayMessage> };
+/** Scan progress of one source network, tied to the contract it scans: another deployment never resumes it. */
+export type Cursor = { block: bigint; contract: Address };
+
+/** Per emitter: the lowest sequence not seen yet and the sequences seen above it (non-empty means a gap). */
+export type SequenceTrack = { next: bigint; ahead: bigint[] };
+
+type RelayState = {
+  cursors: Partial<Record<NetworkName, Cursor>>;
+  messages: Record<string, RelayMessage>;
+  sequences: Record<string, SequenceTrack>;
+};
+
+type Source = {
+  network: NetworkName;
+  client: PublicClient;
+  /** Emitter whose messages this source carries: the SpokeGateway (deposits) or the hub WormholeAdapter (releases). */
+  contract: Address;
+  startBlock: number;
+  direction: Direction;
+  emitterChain: number;
+};
+
+type ScannedMessage = { sequence: bigint; txHash: Hex; blockNumber: bigint; target: NetworkName | null };
 
 /** eth_getLogs windows per source per tick, so a backlog drains without starving other sources. */
 const WINDOWS_PER_TICK = 25;
-/** Smallest window the scanner shrinks to when an RPC refuses a range. */
-const MIN_LOG_WINDOW = 16n;
-/** Errors that mean "range too large" (wording varies by RPC provider). */
-const RANGE_ERROR = /range|limit|exceed|too (many|large|big)|blocks distance|block span|response size/i;
 export const RETRY_BASE_MS = 5_000;
 export const RETRY_MAX_MS = 10 * 60_000;
-/** Pause between Wormholescan polls for a VAA that guardians have not signed yet. */
+/** Signed-VAA lookups back off from 10 s to 1 min while guardians have not signed yet. */
 const VAA_POLL_MS = 10_000;
+const VAA_POLL_MAX_MS = 60_000;
+/** Delivered messages kept for /messages: the newest ones, and none older than a week. */
+const KEEP_DELIVERED = 500;
+const KEEP_DELIVERED_MS = 7 * 24 * 3_600_000;
+/** A missing sequence is looked up at most this often. */
+const BACKFILL_RETRY_MS = 60_000;
+/** Errors meaning the RPC does not support the "finalized" block tag. */
+const NO_FINALIZED_TAG = /finali[sz]ed|block tag|unknown block|invalid (argument|param|block)|not supported/i;
 
 /** Exponential backoff for the n-th consecutive failure (n >= 1), capped. Messages are never abandoned. */
 export const retryDelayMs = (attempts: number): number => Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1));
 
+/** Wait before the next signed-VAA lookup after `polls` lookups found nothing. */
+export const vaaPollDelayMs = (polls: number): number => Math.min(VAA_POLL_MAX_MS, Math.round(VAA_POLL_MS * 1.5 ** Math.max(0, polls - 1)));
+
+/** A message still pending this long after it was observed is stuck: 3× the source chain's finality. */
+export const stuckAfterMs = (source: NetworkName): number => 3 * NETWORKS[source].finalitySec * 1_000;
+
 export const messageId = (emitterChain: number, emitter: Address, sequence: bigint) => `${emitterChain}/${emitter.toLowerCase()}/${sequence}`;
+const emitterKey = (emitterChain: number, emitter: Address) => `${emitterChain}/${emitter.toLowerCase()}`;
 
 /** Wormhole digest that contracts use as the replay key (re-exported from the SDK). */
 export const vaaHash = vaaDigest;
+
+/** Emitter, sequence and payload of a signed VAA (v1 layout: header, signatures, body). */
+export function parseVaa(vaa: Hex): { emitterChain: number; emitter: Address; sequence: bigint; payload: Hex } {
+  const body = 6 + hexToNumber(sliceHex(vaa, 5, 6)) * 66;
+  return {
+    emitterChain: hexToNumber(sliceHex(vaa, body + 8, body + 10)),
+    emitter: fromBytes32(sliceHex(vaa, body + 10, body + 42)),
+    sequence: hexToBigInt(sliceHex(vaa, body + 42, body + 50)),
+    payload: sliceHex(vaa, body + 51),
+  };
+}
+
+/** The ReleaseDeferred event a SpokeGateway delivery emitted (the token transfer to the recipient failed), if any. */
+export function releaseDeferred(receipt: Pick<TransactionReceipt, 'logs'>, gateway: Address | null): RelayMessage['deferred'] | null {
+  const logs = parseEventLogs({ abi: spokeGatewayAbi, eventName: 'ReleaseDeferred', logs: receipt.logs ?? [] });
+  const log = logs.find((l) => gateway === null || sameAddress(l.address, gateway));
+  return log ? { recipient: log.args.recipient, token: log.args.token, amount: log.args.amount } : null;
+}
+
+/** Records `sequence` as seen for an emitter, advancing past every contiguous sequence. */
+export function markSeen(tracks: Record<string, SequenceTrack>, key: string, sequence: bigint): void {
+  const t = (tracks[key] ??= { next: 0n, ahead: [] });
+  if (sequence < t.next || t.ahead.includes(sequence)) return;
+  if (sequence !== t.next) {
+    t.ahead.push(sequence);
+    t.ahead.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    return;
+  }
+  t.next += 1n;
+  while (t.ahead.length > 0 && t.ahead[0] === t.next) {
+    t.ahead.shift();
+    t.next += 1n;
+  }
+}
+
+export type RelayerSummary = {
+  pending: number;
+  waitingVaa: number;
+  ready: number;
+  stuck: { id: string; direction: Direction; status: MessageStatus; ageSec: number; attempts: number; lastError?: string }[];
+  oldestPendingAgeSec: number | null;
+  gaps: { emitter: string; missing: string[] }[];
+};
 
 /**
  * Permissionless relayer for both directions:
  *   spoke SpokeGateway.Deposited  → hub KeeperGateway.relayMessage
  *   hub WormholeAdapter.ReleaseSent → spoke SpokeGateway.receiveMessage
  * Safety does not depend on the relayer (contracts verify VAAs); it only provides liveness.
+ *
+ * Sources with guardian-signed VAAs are scanned up to their finalized block (guardians sign nothing earlier, so
+ * this costs no latency and no reorg can move a log below the cursor). Per-emitter sequences are tracked: a
+ * sequence that never showed up in the logs is fetched by number from the VAA sources.
  */
 export class Relayer {
   readonly store: JsonStore<RelayState>;
-  /** Learned eth_getLogs window per source, starting at the network's known public-RPC cap. */
-  private readonly windows = new Map<NetworkName, bigint>();
+  private readonly windows = new Map<NetworkName, LogWindow>();
+  /** Messages being delivered right now (loop or MCP tool): never two deliveries of the same message. */
+  private readonly inFlight = new Set<string>();
+  private readonly noFinalizedTag = new Set<NetworkName>();
+  private readonly backfillTried = new Map<string, number>();
+  private readonly archivePath: string;
+  /** Sources whose scan is failing: since when, and the latest error (logged once per change). */
+  private readonly scanErrors = new Map<NetworkName, { since: number; error: string }>();
 
   constructor(
     private readonly ctx: Context,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = ctx.fetch ?? fetch,
     private readonly now: () => number = Date.now,
   ) {
-    this.store = new JsonStore<RelayState>(join(ctx.config.stateDir, `relayer-${ctx.config.env}.json`), { cursors: {}, messages: {} });
+    const file = join(ctx.config.stateDir, `relayer-${ctx.config.env}.json`);
+    this.archivePath = join(ctx.config.stateDir, `relayer-${ctx.config.env}.archived.json`);
+    this.store = new JsonStore<RelayState>(file, { cursors: {}, messages: {}, sequences: {} }, { readOnly: ctx.config.stateReadOnly });
+    this.reconcileDeployment();
   }
 
   messages(): RelayMessage[] {
@@ -88,152 +196,370 @@ export class Relayer {
     return this.messages().filter((m) => m.status !== 'delivered');
   }
 
+  isStuck(m: RelayMessage, now = this.now()): boolean {
+    return m.status !== 'delivered' && now - m.observedAt > stuckAfterMs(m.source);
+  }
+
+  /** Sequences missing below the highest one seen, per emitter (first 20 of each). */
+  gaps(): { emitter: string; missing: bigint[] }[] {
+    const out: { emitter: string; missing: bigint[] }[] = [];
+    for (const [emitter, t] of Object.entries(this.store.get().sequences)) {
+      if (t.ahead.length === 0) continue;
+      const missing: bigint[] = [];
+      const seen = new Set(t.ahead);
+      for (let s = t.next; s < t.ahead[t.ahead.length - 1] && missing.length < 20; s++) if (!seen.has(s)) missing.push(s);
+      out.push({ emitter, missing });
+    }
+    return out;
+  }
+
+  summary(now = this.now()): RelayerSummary {
+    const pending = this.pending();
+    const oldest = pending.reduce<number | null>((min, m) => (min === null || m.observedAt < min ? m.observedAt : min), null);
+    return {
+      pending: pending.length,
+      waitingVaa: pending.filter((m) => !m.vaa).length,
+      ready: pending.filter((m) => m.vaa).length,
+      stuck: pending
+        .filter((m) => this.isStuck(m, now))
+        .map((m) => ({
+          id: m.id,
+          direction: m.direction,
+          status: m.status,
+          ageSec: Math.round((now - m.observedAt) / 1000),
+          attempts: m.attempts,
+          lastError: m.lastError,
+        })),
+      oldestPendingAgeSec: oldest === null ? null : Math.round((now - oldest) / 1000),
+      gaps: this.gaps().map((g) => ({ emitter: g.emitter, missing: g.missing.map(String) })),
+    };
+  }
+
+  /** Sources whose log scan keeps failing (their new messages go unseen), oldest failure first. */
+  failingScans(): { network: NetworkName; since: number; error: string }[] {
+    return [...this.scanErrors].map(([network, e]) => ({ network, ...e })).sort((a, b) => a.since - b.since);
+  }
+
+  /** Whether this agent can deliver to `target` (it has a keeper wallet there). */
+  canDeliver(target: NetworkName): boolean {
+    return this.senderFor(target) !== null;
+  }
+
   async tick(): Promise<void> {
     // Each source is scanned independently: one unreachable RPC must not stall the others.
-    for (const spoke of this.ctx.spokes) {
-      await this.scanSpoke(spoke).catch((err: unknown) => this.scanFailed(spoke.network, err));
+    for (const src of this.sources()) {
+      await this.scanSource(src).then(
+        () => this.scanRecovered(src.network),
+        (err: unknown) => this.scanFailed(src.network, err),
+      );
     }
-    await this.scanHub().catch((err: unknown) => this.scanFailed(this.ctx.hub.network, err));
+    await this.backfill().catch((err: unknown) => this.ctx.log('relayer', 'sequence backfill failed', { error: publicError(err) }));
     const now = this.now();
     for (const m of this.pending()) {
       if ((m.nextAttemptAt ?? 0) > now) continue;
       await this.advance(m).catch((err: unknown) => this.fail(m, err));
     }
+    this.prune();
+  }
+
+  /** Manually relay one message (MCP tool). A failure is recorded on the message like a loop attempt. */
+  async relay(id: string): Promise<RelayMessage> {
+    const m = this.store.get().messages[id];
+    if (!m) throw new Error(`Unknown message ${id}`);
+    if (this.inFlight.has(id)) throw new Error(`Message ${id} is already being relayed`);
+    try {
+      await this.advance(m, true);
+    } catch (err) {
+      this.fail(m, err);
+      throw err;
+    }
+    return this.store.get().messages[id];
+  }
+
+  // --- deployment identity ---------------------------------------------------------
+
+  private sources(): Source[] {
+    const { hub } = this.ctx;
+    return [
+      ...this.ctx.spokes.map((sp): Source => ({
+        network: sp.network,
+        client: sp.client,
+        contract: sp.deployment.contracts.spokeGateway,
+        startBlock: sp.deployment.startBlock,
+        direction: 'deposit',
+        emitterChain: sp.deployment.wormholeChainId,
+      })),
+      {
+        network: hub.network,
+        client: hub.client,
+        contract: hub.deployment.contracts.wormholeAdapter,
+        startBlock: hub.deployment.startBlock,
+        direction: 'release',
+        emitterChain: hub.deployment.wormholeChainId,
+      },
+    ];
+  }
+
+  /** Contract that executes a message on `target`: the hub adapter (through KeeperGateway) or the spoke gateway. */
+  private targetContract(target: NetworkName): Address | null {
+    if (target === this.ctx.hub.network) return this.ctx.hub.deployment.contracts.wormholeAdapter ?? null;
+    return this.ctx.spokes.find((s) => s.network === target)?.deployment.contracts.spokeGateway ?? null;
+  }
+
+  /**
+   * State written for other contracts (a redeploy, or a state file older than deployment identities) is not
+   * resumed: those cursors restart at the current deployment's start block, and undelivered messages of the old
+   * contracts move to the archive file instead of being retried forever against contracts that reject them.
+   */
+  private reconcileDeployment(): void {
+    const sources = this.sources();
+    const reset: NetworkName[] = [];
+    const archived: RelayMessage[] = [];
+    this.store.update((s) => {
+      s.sequences ??= {};
+      for (const src of sources) {
+        const c: unknown = s.cursors[src.network];
+        if (c === undefined) continue;
+        if (typeof c === 'object' && c !== null && sameAddress((c as Cursor).contract, src.contract)) continue;
+        delete s.cursors[src.network];
+        reset.push(src.network);
+      }
+      for (const [id, m] of Object.entries(s.messages)) {
+        const src = sources.find((x) => x.network === m.source);
+        const target = this.targetContract(m.target);
+        const current =
+          src !== undefined && sameAddress(src.contract, m.emitter) && target !== null && (!m.targetContract || sameAddress(m.targetContract, target));
+        if (current) {
+          m.targetContract ??= target;
+          if (m.status === 'delivered') delete m.vaa;
+          continue;
+        }
+        delete s.messages[id];
+        if (m.status !== 'delivered') archived.push(m);
+      }
+      const emitters = new Set(sources.map((x) => emitterKey(x.emitterChain, x.contract)));
+      for (const key of Object.keys(s.sequences)) if (!emitters.has(key)) delete s.sequences[key];
+    });
+    if (reset.length > 0) this.ctx.log('relayer', 'cursor belongs to another deployment: rescanning from the start block', { networks: reset });
+    if (archived.length > 0 && !this.store.readOnly) {
+      appendArchive(this.archivePath, { archivedAt: new Date(this.now()).toISOString(), reason: 'deployment replaced', messages: archived });
+      this.ctx.log('relayer', 'undelivered messages of a replaced deployment archived; relay them by hand', {
+        count: archived.length,
+        ids: archived.map((m) => m.id),
+        file: this.archivePath,
+      });
+    }
   }
 
   // --- discovery -------------------------------------------------------------
 
+  private usesGuardians(network: NetworkName): boolean {
+    return (this.ctx.config.vaaApis?.[network]?.length ?? 0) > 0;
+  }
+
+  private windowFor(network: NetworkName): LogWindow {
+    let w = this.windows.get(network);
+    if (!w) this.windows.set(network, (w = new LogWindow(NETWORKS[network].maxLogRange)));
+    return w;
+  }
+
+  /** Last block worth scanning: the finalized one where guardians sign, else the latest. */
+  private async head(src: Source): Promise<bigint> {
+    if (!this.usesGuardians(src.network) || this.noFinalizedTag.has(src.network)) return src.client.getBlockNumber();
+    try {
+      const block = await src.client.getBlock({ blockTag: 'finalized' });
+      if (block.number !== null) return block.number;
+    } catch (err) {
+      if (isRateLimited(err) || !NO_FINALIZED_TAG.test(err instanceof Error ? err.message : String(err))) throw err;
+    }
+    this.noFinalizedTag.add(src.network);
+    this.ctx.log('relayer', 'RPC has no finalized block tag; scanning to the latest block', { network: src.network });
+    return src.client.getBlockNumber();
+  }
+
   /**
-   * Scans [cursor, latest] of one source in windows the RPC accepts, persisting the cursor after each window.
-   * The window starts at the network's known cap (Base Sepolia's public RPC allows 200 blocks) and halves
-   * when an RPC refuses the range, so custom RPCs with lower caps cannot stall relaying.
+   * Scans [cursor, head] of one source in windows the RPC accepts, persisting the cursor after each window.
+   * The window starts at the network's known cap (Base Sepolia's public RPC allows 200 blocks), halves when an
+   * RPC refuses the range and grows back later; rate limiting fails the tick without shrinking it.
    */
-  private async scan<T>(
-    network: NetworkName,
-    client: PublicClient,
-    startBlock: number,
-    query: (fromBlock: bigint, toBlock: bigint) => Promise<T[]>,
-    record: (s: RelayState, logs: T[]) => void,
-  ): Promise<void> {
-    const latest = await client.getBlockNumber();
+  private async scanSource(src: Source): Promise<void> {
+    const head = await this.head(src);
+    const window = this.windowFor(src.network);
     for (let i = 0; i < WINDOWS_PER_TICK; i++) {
-      const from = this.store.get().cursors[network] ?? BigInt(startBlock);
-      if (from > latest) return;
+      const cursor = this.store.get().cursors[src.network];
+      const from = cursor ? cursor.block : BigInt(src.startBlock);
+      if (from > head) return;
+      let to = head;
+      let found: ScannedMessage[];
       for (;;) {
-        const window = this.windows.get(network) ?? NETWORKS[network].maxLogRange;
-        const to = from + window - 1n < latest ? from + window - 1n : latest;
+        to = from + window.size - 1n < head ? from + window.size - 1n : head;
         try {
-          const logs = await query(from, to);
-          this.store.update((s) => {
-            record(s, logs);
-            s.cursors[network] = to + 1n;
-          });
+          found = await this.query(src, from, to);
+          window.succeeded();
           break;
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          if (!RANGE_ERROR.test(message) || window <= MIN_LOG_WINDOW) throw err;
-          this.windows.set(network, window / 2n);
-          this.ctx.log('relayer', 'log range refused, shrinking window', { network, window: String(window / 2n) });
+          if (!window.shrink(err)) throw err;
+          this.ctx.log('relayer', 'log range refused, shrinking window', { network: src.network, window: String(window.size) });
         }
       }
+      this.store.update((s) => {
+        for (const f of found) {
+          markSeen(s.sequences, emitterKey(src.emitterChain, src.contract), f.sequence);
+          if (f.target) this.observe(s, src, f.target, { sequence: f.sequence, txHash: f.txHash, blockNumber: f.blockNumber });
+        }
+        s.cursors[src.network] = { block: to + 1n, contract: src.contract };
+      });
     }
   }
 
-  private async scanSpoke(spoke: Context['spokes'][number]): Promise<void> {
-    await this.scan(
-      spoke.network,
-      spoke.client,
-      spoke.deployment.startBlock,
-      (fromBlock, toBlock) =>
-        spoke.client.getContractEvents({ address: spoke.deployment.contracts.spokeGateway, abi: spokeGatewayAbi, eventName: 'Deposited', fromBlock, toBlock }),
-      (s, logs) => {
-        for (const log of logs) {
-          this.observe(s, {
-            direction: 'deposit',
-            source: spoke.network,
-            target: this.ctx.hub.network,
-            emitterChain: spoke.deployment.wormholeChainId,
-            emitter: spoke.deployment.contracts.spokeGateway,
-            sequence: log.args.sequence!,
-            txHash: log.transactionHash,
-            blockNumber: log.blockNumber,
-          });
-        }
-      },
-    );
+  private async query(src: Source, fromBlock: bigint, toBlock: bigint): Promise<ScannedMessage[]> {
+    if (src.direction === 'deposit') {
+      const logs = await src.client.getContractEvents({ address: src.contract, abi: spokeGatewayAbi, eventName: 'Deposited', fromBlock, toBlock });
+      return logs.map((log) => ({ sequence: log.args.sequence!, txHash: log.transactionHash, blockNumber: log.blockNumber, target: this.ctx.hub.network }));
+    }
+    const logs = await src.client.getContractEvents({ address: src.contract, abi: wormholeAdapterAbi, eventName: 'ReleaseSent', fromBlock, toBlock });
+    return logs.map((log) => ({
+      sequence: log.args.sequence!,
+      txHash: log.transactionHash,
+      blockNumber: log.blockNumber,
+      // A release to a spoke this agent does not serve still counts as seen for the sequence check.
+      target: this.ctx.spokes.find((sp) => sp.deployment.wormholeChainId === Number(log.args.chainId))?.network ?? null,
+    }));
   }
 
-  private async scanHub(): Promise<void> {
-    const { hub } = this.ctx;
-    await this.scan(
-      hub.network,
-      hub.client,
-      hub.deployment.startBlock,
-      (fromBlock, toBlock) =>
-        hub.client.getContractEvents({
-          address: hub.deployment.contracts.wormholeAdapter,
-          abi: wormholeAdapterAbi,
-          eventName: 'ReleaseSent',
-          fromBlock,
-          toBlock,
-        }),
-      (s, logs) => {
-        for (const log of logs) {
-          const target = this.ctx.spokes.find((sp) => sp.deployment.wormholeChainId === Number(log.args.chainId));
-          if (!target) continue; // spoke not configured for this agent
-          this.observe(s, {
-            direction: 'release',
-            source: hub.network,
-            target: target.network,
-            emitterChain: hub.deployment.wormholeChainId,
-            emitter: hub.deployment.contracts.wormholeAdapter,
-            sequence: log.args.sequence!,
-            txHash: log.transactionHash,
-            blockNumber: log.blockNumber,
-          });
-        }
-      },
-    );
-  }
-
-  private observe(s: RelayState, m: Omit<RelayMessage, 'id' | 'status' | 'attempts' | 'observedAt'>): void {
-    const id = messageId(m.emitterChain, m.emitter, m.sequence);
+  private observe(
+    s: RelayState,
+    src: Source,
+    target: NetworkName,
+    m: { sequence: bigint; txHash: Hex; blockNumber: bigint; vaa?: Hex; backfilled?: boolean },
+  ): void {
+    const id = messageId(src.emitterChain, src.contract, m.sequence);
     if (s.messages[id]) return;
-    s.messages[id] = { ...m, id, status: 'waiting_vaa', attempts: 0, observedAt: this.now() };
-    this.ctx.log('relayer', 'observed', { id, direction: m.direction });
+    // Scanned to the latest block (the RPC has no "finalized" tag): guardians sign once the block is final, so the
+    // first signed-VAA lookup waits for that instead of polling Wormholescan for the whole finality window.
+    const awaitFinality = !m.vaa && this.usesGuardians(src.network) && this.noFinalizedTag.has(src.network);
+    const now = this.now();
+    s.messages[id] = {
+      id,
+      direction: src.direction,
+      source: src.network,
+      target,
+      emitterChain: src.emitterChain,
+      emitter: src.contract,
+      sequence: m.sequence,
+      txHash: m.txHash,
+      blockNumber: m.blockNumber,
+      status: m.vaa ? 'ready' : 'waiting_vaa',
+      attempts: 0,
+      observedAt: now,
+      targetContract: this.targetContract(target) ?? undefined,
+      ...(m.vaa ? { vaa: m.vaa } : {}),
+      ...(m.backfilled ? { backfilled: true } : {}),
+      ...(awaitFinality ? { nextAttemptAt: now + NETWORKS[src.network].finalitySec * 1_000 } : {}),
+    };
+    this.ctx.log('relayer', 'observed', { id, direction: src.direction, ...(m.backfilled ? { backfilled: true } : {}) });
+  }
+
+  /** Looks up the lowest missing sequence of each emitter with a gap; found VAAs become ready messages. */
+  private async backfill(): Promise<void> {
+    const now = this.now();
+    for (const src of this.sources()) {
+      if (!this.usesGuardians(src.network)) continue;
+      const key = emitterKey(src.emitterChain, src.contract);
+      const t = this.store.get().sequences[key];
+      if (!t || t.ahead.length === 0) continue;
+      const sequence = t.next;
+      const tryKey = `${key}/${sequence}`;
+      const last = this.backfillTried.get(tryKey);
+      if (last !== undefined && now - last < BACKFILL_RETRY_MS) continue;
+      if (last === undefined)
+        this.ctx.log('relayer', 'sequence gap: a message never showed up in the logs; fetching its VAA', { emitter: key, sequence: String(sequence) });
+      this.backfillTried.set(tryKey, now);
+      const vaa = await this.fetchVaa(src.network, src.emitterChain, src.contract, sequence);
+      if (!vaa) continue;
+      const body = parseVaa(vaa);
+      if (body.sequence !== sequence || !sameAddress(body.emitter, src.contract)) throw new Error(`VAA source returned another message for ${tryKey}`);
+      const payload = decodePayload(body.payload);
+      const target =
+        payload.msgType === MessageType.DEPOSIT
+          ? this.ctx.hub.network
+          : (this.ctx.spokes.find((sp) => sp.deployment.wormholeChainId === payload.targetChain)?.network ?? null);
+      this.store.update((s) => {
+        markSeen(s.sequences, key, sequence);
+        if (target) this.observe(s, src, target, { sequence, txHash: '0x', blockNumber: 0n, vaa, backfilled: true });
+      });
+      this.backfillTried.delete(tryKey);
+    }
   }
 
   // --- delivery -----------------------------------------------------------------
 
-  private async advance(m: RelayMessage): Promise<void> {
-    const vaa = m.vaa ?? (await this.obtainVaa(m));
-    if (!vaa) {
-      // Guardians have not signed yet: poll again later without counting a failure.
-      this.patch(m.id, { nextAttemptAt: this.now() + VAA_POLL_MS });
+  private async advance(m: RelayMessage, manual = false): Promise<void> {
+    if (this.inFlight.has(m.id)) {
+      if (manual) throw new Error(`Message ${m.id} is already being relayed`);
       return;
     }
-    this.patch(m.id, { vaa, status: 'ready' });
+    this.inFlight.add(m.id);
+    try {
+      await this.deliver(this.store.get().messages[m.id] ?? m);
+    } finally {
+      this.inFlight.delete(m.id);
+    }
+  }
 
-    const hash = vaaHash(vaa);
-    if (await this.isConsumed(m, hash)) {
-      this.patch(m.id, { status: 'delivered' });
+  private async deliver(m: RelayMessage): Promise<void> {
+    if (m.status === 'delivered') return;
+    const vaa = m.vaa ?? (await this.obtainVaa(m));
+    if (!vaa) {
+      // Guardians have not signed yet: poll again later (backing off) without counting a failure.
+      const polls = (m.vaaPolls ?? 0) + 1;
+      this.patch(m.id, { vaaPolls: polls, nextAttemptAt: this.now() + vaaPollDelayMs(polls) });
+      return;
+    }
+    if (!m.vaa) this.patch(m.id, { vaa, status: 'ready' });
+
+    if (await this.isConsumed(m, vaaHash(vaa))) {
+      this.delivered(m.id);
       this.ctx.log('relayer', 'already delivered', { id: m.id });
       return;
     }
-    const wallet = this.walletFor(m.target);
-    if (!wallet) return; // read-only agent: report as pending
-    const txHash = await this.submit(m, vaa, wallet);
-    const receipt = await this.clientFor(m.target).waitForTransactionReceipt({ hash: txHash });
-    // A reverted delivery (e.g. raced by another relayer, or out of gas) is retried; the next attempt's
-    // isConsumed check marks it delivered if someone else got there first.
-    if (receipt.status !== 'success') throw new Error(`delivery transaction ${txHash} reverted`);
-    this.patch(m.id, { status: 'delivered', deliveredTx: txHash, attempts: 0, lastError: undefined, nextAttemptAt: undefined });
-    this.ctx.log('relayer', 'delivered', { id: m.id, txHash });
+    const sender = this.senderFor(m.target);
+    if (!sender) return; // read-only agent: report as pending
+    const { hash, receipt } = await sender.send(this.deliveryRequest(m, vaa), { kind: `relay-${m.direction}`, floor: GAS_FLOOR.vaaRelay });
+    // A reverted delivery (e.g. raced by another relayer) is retried; the next attempt's isConsumed check marks it
+    // delivered if someone else got there first.
+    if (receipt.status !== 'success') throw new Error(`delivery transaction ${hash} reverted`);
+    this.delivered(m.id, hash);
+    const deferred = m.direction === 'release' ? releaseDeferred(receipt, this.targetContract(m.target)) : null;
+    if (deferred) {
+      this.patch(m.id, { deferred });
+      this.ctx.log('relayer', 'release delivered but deferred: the recipient must call SpokeGateway.claim(token, to)', {
+        id: m.id,
+        txHash: hash,
+        network: m.target,
+        recipient: deferred.recipient,
+        token: deferred.token,
+        amount: String(deferred.amount),
+      });
+      return;
+    }
+    this.ctx.log('relayer', 'delivered', { id: m.id, txHash: hash });
+  }
+
+  private delivered(id: string, deliveredTx?: Hex): void {
+    this.patch(id, {
+      status: 'delivered',
+      ...(deliveredTx ? { deliveredTx } : {}),
+      deliveredAt: this.now(),
+      attempts: 0,
+      lastError: undefined,
+      nextAttemptAt: undefined,
+      vaa: undefined, // the target's replay guard is the record now
+    });
   }
 
   private async obtainVaa(m: RelayMessage): Promise<Hex | null> {
-    const api = NETWORKS[m.source].wormholescanApi;
-    if (api) return fetchSignedVaa(api, m.emitterChain, m.emitter, m.sequence, this.fetchImpl);
+    if (this.usesGuardians(m.source)) return this.fetchVaa(m.source, m.emitterChain, m.emitter, m.sequence);
     // Devnet: rebuild the message from the core log and sign with the dev guardian.
     const key = this.ctx.config.devGuardianKey;
     if (!key) throw new Error('DEVNET_GUARDIAN_KEY is required on the devnet');
@@ -256,6 +582,23 @@ export class Relayer {
     throw new Error('LogMessagePublished not found in source transaction');
   }
 
+  /** Signed VAA from the first source that has it; null while none has (not signed yet). */
+  private async fetchVaa(source: NetworkName, emitterChain: number, emitter: Address, sequence: bigint): Promise<Hex | null> {
+    let firstError: unknown = null;
+    let answered = false;
+    for (const api of this.ctx.config.vaaApis?.[source] ?? []) {
+      try {
+        const vaa = await fetchSignedVaa(api, emitterChain, emitter, sequence, this.fetchImpl);
+        if (vaa) return vaa;
+        answered = true;
+      } catch (err) {
+        firstError ??= err;
+      }
+    }
+    if (!answered && firstError) throw firstError;
+    return null;
+  }
+
   private async isConsumed(m: RelayMessage, hash: Hex): Promise<boolean> {
     if (m.direction === 'deposit') {
       return this.ctx.hub.client.readContract({
@@ -269,29 +612,11 @@ export class Relayer {
     return spoke.client.readContract({ address: spoke.deployment.contracts.spokeGateway, abi: spokeGatewayAbi, functionName: 'isConsumed', args: [hash] });
   }
 
-  private async submit(m: RelayMessage, vaa: Hex, wallet: Wallet): Promise<Hex> {
+  private deliveryRequest(m: RelayMessage, vaa: Hex): object {
     if (m.direction === 'deposit') {
-      return writeWithBuffer(this.ctx.hub.client, wallet, {
-        address: this.ctx.hub.deployment.contracts.keeperGateway,
-        abi: keeperGatewayAbi,
-        functionName: 'relayMessage',
-        args: [vaa],
-      });
+      return { address: this.ctx.hub.deployment.contracts.keeperGateway, abi: keeperGatewayAbi, functionName: 'relayMessage', args: [vaa] };
     }
-    return writeWithBuffer(this.clientFor(m.target), wallet, {
-      address: this.spoke(m.target).deployment.contracts.spokeGateway,
-      abi: spokeGatewayAbi,
-      functionName: 'receiveMessage',
-      args: [vaa],
-    });
-  }
-
-  /** Manually relay one message (MCP tool). */
-  async relay(id: string): Promise<RelayMessage> {
-    const m = this.store.get().messages[id];
-    if (!m) throw new Error(`Unknown message ${id}`);
-    await this.advance(m);
-    return this.store.get().messages[id];
+    return { address: this.spoke(m.target).deployment.contracts.spokeGateway, abi: spokeGatewayAbi, functionName: 'receiveMessage', args: [vaa] };
   }
 
   // --- helpers ------------------------------------------------------------------
@@ -306,26 +631,52 @@ export class Relayer {
     return network === this.ctx.hub.network ? this.ctx.hub.client : this.spoke(network).client;
   }
 
-  private walletFor(network: NetworkName): Wallet | null {
-    return network === this.ctx.hub.network ? this.ctx.hub.wallet : this.spoke(network).wallet;
+  private senderFor(network: NetworkName): TxSender | null {
+    if (network === this.ctx.hub.network) return this.ctx.hub.sender ?? null;
+    return this.ctx.spokes.find((sp) => sp.network === network)?.sender ?? null;
   }
 
   private patch(id: string, patch: Partial<RelayMessage>): void {
     this.store.update((s) => {
-      s.messages[id] = { ...s.messages[id], ...patch };
+      if (s.messages[id]) s.messages[id] = { ...s.messages[id], ...patch };
     });
   }
 
   private fail(m: RelayMessage, err: unknown): void {
-    const attempts = m.attempts + 1;
-    const message = err instanceof Error ? err.message.split('\n')[0] : String(err);
-    const status = m.status === 'failed' ? (m.vaa ? 'ready' : 'waiting_vaa') : m.status;
+    // Re-read the record: the attempt may have stored the VAA before failing, and `m` predates that.
+    const current = this.store.get().messages[m.id];
+    if (!current || current.status === 'delivered') return;
+    const attempts = current.attempts + 1;
+    const message = publicError(err);
     const delay = retryDelayMs(attempts);
-    this.patch(m.id, { attempts, lastError: message, status, nextAttemptAt: this.now() + delay });
+    this.patch(m.id, { attempts, lastError: message, status: current.vaa ? 'ready' : 'waiting_vaa', nextAttemptAt: this.now() + delay });
     this.ctx.log('relayer', 'attempt failed', { id: m.id, attempts, retryInMs: delay, error: message });
   }
 
+  /** Drops delivered messages beyond the newest KEEP_DELIVERED and older than a week. */
+  private prune(): void {
+    const now = this.now();
+    const delivered = Object.values(this.store.get().messages)
+      .filter((m) => m.status === 'delivered')
+      .sort((a, b) => (b.deliveredAt ?? b.observedAt) - (a.deliveredAt ?? a.observedAt));
+    const drop = delivered.filter((m, i) => i >= KEEP_DELIVERED || now - (m.deliveredAt ?? m.observedAt) > KEEP_DELIVERED_MS);
+    if (drop.length === 0) return;
+    this.store.update((s) => {
+      for (const m of drop) delete s.messages[m.id];
+    });
+  }
+
   private scanFailed(network: NetworkName, err: unknown): void {
-    this.ctx.log('relayer', 'scan failed', { network, error: err instanceof Error ? err.message.split('\n')[0] : String(err) });
+    const error = publicError(err);
+    const before = this.scanErrors.get(network);
+    this.scanErrors.set(network, { since: before?.since ?? this.now(), error });
+    if (before?.error !== error) this.ctx.log('relayer', 'scan failed', { network, error });
+  }
+
+  private scanRecovered(network: NetworkName): void {
+    const before = this.scanErrors.get(network);
+    if (!before) return;
+    this.scanErrors.delete(network);
+    this.ctx.log('relayer', 'scan recovered', { network, failingForSec: Math.round((this.now() - before.since) / 1000) });
   }
 }
