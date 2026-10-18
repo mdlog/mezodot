@@ -19,6 +19,14 @@ describe('format', () => {
     expect(fmtHealth(1.2738)).toBe('1.27×');
   });
 
+  it('marks a positive rate below display precision instead of rounding it to zero', () => {
+    // pMUSD at 1.6% utilization: 0.123% borrow × 1.6% × (1 − 10% reserve) ≈ 0.0018% a year.
+    expect(fmtApy(0.0000183)).toBe('<0.01%');
+    expect(fmtApy(0)).toBe('0.00%');
+    expect(fmtApy(0.0012)).toBe('0.12%');
+    expect(fmtApy(-0.012)).toBe('-1.20%');
+  });
+
   it('keeps cents on small USD amounts', () => {
     // 51 MEZO at $0.00295 is worth $0.15: rounding it to whole dollars showed a funded pool as $0.
     expect(compactUsd(51 * 0.00295)).toBe('$0.15');

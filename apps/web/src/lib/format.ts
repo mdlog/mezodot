@@ -34,7 +34,13 @@ export const units = (value: bigint, decimals: number): number => Number(value) 
 
 export const fmtToken = (value: bigint, decimals: number, digits = 2): string => fmt(units(value, decimals), digits);
 
-/** Annual rate (fraction) as a percentage string. */
-export const fmtApy = (rate: number, digits = 2): string => `${(rate * 100).toFixed(digits)}%`;
+/**
+ * Annual rate (fraction) as a percentage string. A positive rate too small to show at `digits` reads as <0.01%
+ * rather than 0.00%: suppliers earn borrowRate × utilization × (1 − reserve factor), tiny at low utilization.
+ */
+export const fmtApy = (rate: number, digits = 2): string => {
+  const step = 10 ** -digits;
+  return rate > 0 && rate * 100 < step / 2 ? `<${step.toFixed(digits)}%` : `${(rate * 100).toFixed(digits)}%`;
+};
 
 export const shortAddress = (a: string): string => `${a.slice(0, 6)}…${a.slice(-4)}`;
