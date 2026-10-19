@@ -5043,3 +5043,172 @@ a.nav-link {
 .withdraw-panel .button--wide {
   margin-top: 14px;
 }
+
+/* Message lifecycle: one compact card per Wormhole message. */
+.flight-list {
+  display: grid;
+  gap: 8px;
+}
+.flight-card {
+  border: 1px solid #e7e5de;
+  border-radius: 8px;
+  background: #fffefa;
+  padding: 10px 11px 9px;
+  display: grid;
+  gap: 7px;
+}
+.flight-card--live {
+  border-color: #d9d6f5;
+  background: #fbfaff;
+}
+.flight-card--warn {
+  border-color: #ecd9a6;
+  background: #fffbef;
+}
+.flight-card--bad {
+  border-color: #efc7c3;
+  background: #fff7f6;
+}
+.flight-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 9px;
+}
+.flight-route {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #a3a4ab;
+}
+.flight-text {
+  min-width: 0;
+}
+.flight-text b {
+  display: block;
+  font-size: 12.5px;
+  color: #2c2d3a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.flight-text small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: #9a9ba2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.flight-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font: 10.5px var(--mono);
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+.flight-pill .spin {
+  width: 11px;
+  height: 11px;
+}
+.flight-pill--live {
+  background: #efedff;
+  color: #4f46c8;
+}
+.flight-pill--ok {
+  background: #e9f6ee;
+  color: #2f7d4c;
+}
+.flight-pill--warn {
+  background: #fdf1d3;
+  color: #8a6512;
+}
+.flight-pill--bad {
+  background: #fde6e3;
+  color: #a33b30;
+}
+.flight-dismiss {
+  color: #aaaab0;
+}
+.flight-progress {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.flight-progress span {
+  height: 4px;
+  border-radius: 2px;
+  background: #ecebe5;
+}
+.flight-progress span.is-done {
+  background: #8e87dc;
+}
+.flight-card--ok .flight-progress span.is-done {
+  background: #5fae7c;
+}
+.flight-progress span.is-current {
+  background: linear-gradient(90deg, #8e87dc 0 40%, #ecebe5 40%);
+  background-size: 250% 100%;
+  animation: flight-pulse 1.6s ease-in-out infinite;
+}
+@keyframes flight-pulse {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flight-progress span.is-current {
+    animation: none;
+    background: #c9c5f0;
+  }
+}
+.flight-caption {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #6d6f7b;
+}
+.flight-caption.is-error {
+  color: #a33b30;
+}
+.flight-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: #a3a4ab;
+}
+.flight-foot:empty {
+  display: none;
+}
+.button--small {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 11.5px;
+}
+.flight-more {
+  margin-top: 8px;
+  font-size: 11.5px;
+}
+@media (max-width: 520px) {
+  .flight-main {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .flight-pill {
+    grid-column: 2 / 3;
+    justify-self: start;
+  }
+  .flight-dismiss {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}

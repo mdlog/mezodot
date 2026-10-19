@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowDownLeft, ArrowRight, BadgeCheck, Bitcoin, Check, Shield, TriangleAlert, Waves, X } from 'lucide-react';
+import { ArrowDownLeft, ArrowRight, Bitcoin, Check, Shield, TriangleAlert, Waves, X } from 'lucide-react';
 import { useAccount, usePublicClient } from 'wagmi';
 import { isAddressEqual, type Address, type Hash, type PublicClient } from 'viem';
 import { healthStatus, maxWithdrawableUnits } from '@mezodot/sdk';
@@ -256,6 +256,9 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
   );
 }
 
+/** Flights listed before \"Show all\": in-flight messages stay visible, delivered ones are a single line each. */
+const MAX_FLIGHTS_SHOWN = 4;
+
 function FlightRow({ flight }: { flight: Flight }) {
   const { removeFlight, updateFlight } = useUi();
   const bitcoinWallet = useBitcoinWallet();
@@ -293,6 +296,11 @@ function FlightRow({ flight }: { flight: Flight }) {
     flight.direction === 'deposit'
       ? ['Locked on spoke', 'Guardians signed VAA', 'Credited by VaultManager', 'Borrow capacity live']
       : ['Debited on hub', 'Guardians signed VAA', 'Released on spoke', 'Tokens in wallet'];
+  // The step under way, worded as it happens (the list above reads as done).
+  const activeSteps =
+    flight.direction === 'deposit'
+      ? ['Locking on the spoke', 'Guardians sign the VAA', 'Crediting on the hub', 'Opening borrow capacity']
+      : ['Debiting on the hub', 'Guardians sign the VAA', 'Releasing on the spoke', 'Sending tokens to your wallet'];
   const ageMin = (Date.now() - flight.createdAt) / 60_000;
   // Delivering a release means signing on the spoke, which Bitcoin wallets cannot do.
   const canSelfRelay = status?.vaa && !status.delivered && ageMin > 0.5 && !(bitcoinWallet && flight.direction === 'release');
@@ -319,56 +327,89 @@ function FlightRow({ flight }: { flight: Flight }) {
     void run('Deliver message', flight.direction === 'deposit' ? relayHubSteps(status.vaa) : relaySpokeSteps(spoke!, status.vaa));
   };
 
+  const delivered4 = Boolean(status?.delivered) && !deferred;
+  const tone = status?.failed ? 'bad' : deferred ? 'warn' : delivered4 ? 'ok' : 'live';
+  const pill = status?.failed
+    ? 'Failed'
+    : deferred
+      ? 'Claim needed'
+      : delivered4
+        ? 'Delivered'
+        : stage <= 1
+          ? flight.sequence === null && (status?.sourcePending ?? true)
+            ? 'Confirming'
+            : 'Waiting for finality'
+          : stage === 2
+            ? 'Relaying'
+            : flight.direction === 'deposit'
+              ? 'Crediting'
+              : 'Releasing';
+  const doneCount = delivered4 ? steps.length : Math.min(stage, steps.length);
+  const caption = status?.failed
+    ? `${status.failed}; your funds did not move.`
+    : deferred
+      ? hint(3)
+      : delivered4
+        ? flight.direction === 'deposit'
+          ? `Credited on ${target.label}: it counts toward your borrow limit.`
+          : `Released on ${target.label} to your wallet.`
+        : `Step ${stage + 1} of ${steps.length} · ${activeSteps[stage]}${hint(stage) ? ` · ${hint(stage)}` : ''}`;
+
   return (
-    <div className="flight">
-      <div className="flight-head">
-        <b>{flight.label}</b>
-        <span>
-          <TxLink network={source} hash={flight.txHash} /> · {timeAgo(flight.createdAt)}
-          <button
-            className="icon-button"
-            onClick={() => removeFlight(flight.id)}
-            aria-label={status?.delivered || status?.failed ? 'Dismiss' : 'Stop tracking this message (delivery continues)'}
-            title={status?.delivered || status?.failed ? 'Dismiss' : 'Stop tracking (delivery continues)'}
-          >
-            <X size={13} />
-          </button>
+    <article className={`flight-card flight-card--${tone}`} aria-label={flight.label}>
+      <div className="flight-main">
+        <span className="flight-route" aria-label={`${source.label} to ${target.label}`}>
+          <ChainLogo network={source.name} size={20} />
+          <ArrowRight size={12} />
+          <ChainLogo network={target.name} size={20} />
         </span>
-      </div>
-      {status?.failed ? (
-        <p className="inline-error" role="status">
-          {status.failed}; your funds did not move. Dismiss this row.
-        </p>
-      ) : (
-        <ol className="message-steps" aria-live="polite">
-          {steps.map((label, i) => {
-            const done = stage > i || (stage === 4 && i === 3);
-            const current = !done && stage === i;
-            return (
-              <li className={`message-step ${done ? 'step-done' : ''} ${current ? 'step-current' : ''}`} key={label}>
-                <span>{done ? <Check size={11} /> : !current ? `0${i + 1}` : deferred ? <TriangleAlert size={11} /> : <Spinner />}</span>
-                <div>
-                  <b>{label}</b>
-                  {hint(i) && <small className="step-hint">{hint(i)}</small>}
-                </div>
-                {done && <BadgeCheck size={14} />}
-              </li>
-            );
-          })}
-        </ol>
-      )}
-      {canSelfRelay && (
-        <button className="button button--outline" onClick={selfRelay} disabled={Boolean(busy)}>
-          {busy ?? 'Relay it yourself'}
+        <div className="flight-text">
+          <b>{flight.label}</b>
+          <small>
+            {timeAgo(flight.createdAt)} · <TxLink network={source} hash={flight.txHash} />
+          </small>
+        </div>
+        <span className={`flight-pill flight-pill--${tone}`}>
+          {tone === 'live' && <Spinner />}
+          {tone === 'ok' && <Check size={11} />}
+          {(tone === 'warn' || tone === 'bad') && <TriangleAlert size={11} />}
+          {pill}
+        </span>
+        <button
+          className="icon-button flight-dismiss"
+          onClick={() => removeFlight(flight.id)}
+          aria-label={status?.delivered || status?.failed ? 'Dismiss' : 'Stop tracking this message (delivery continues)'}
+          title={status?.delivered || status?.failed ? 'Dismiss' : 'Stop tracking (delivery continues)'}
+        >
+          <X size={13} />
         </button>
+      </div>
+      {!status?.failed && (
+        <div className="flight-progress" role="progressbar" aria-valuemin={0} aria-valuemax={steps.length} aria-valuenow={doneCount} aria-label={pill}>
+          {steps.map((label, i) => (
+            <span key={label} className={i < doneCount ? 'is-done' : i === doneCount && !delivered4 ? 'is-current' : ''} title={label} />
+          ))}
+        </div>
+      )}
+      <p className={`flight-caption ${status?.failed ? 'is-error' : ''}`} aria-live="polite">
+        {caption}
+      </p>
+      {(canSelfRelay || !delivered4) && !status?.failed && (
+        <div className="flight-foot">
+          {!status?.delivered && <span>Relayer: {status?.relayer ?? '…'}</span>}
+          {canSelfRelay && (
+            <button className="button button--outline button--small" onClick={selfRelay} disabled={Boolean(busy)}>
+              {busy ?? 'Relay it yourself'}
+            </button>
+          )}
+        </div>
       )}
       {statusQuery.error && (
         <p className="inline-error" role="status">
           Could not check this message right now: {readError(statusQuery.error)}. It is checked again every few seconds.
         </p>
       )}
-      {!status?.delivered && !status?.failed && <p className="muted-note">Relayer: {status?.relayer ?? '…'}</p>}
-    </div>
+    </article>
   );
 }
 
@@ -472,18 +513,28 @@ function ClaimRow({ claim, account }: { claim: SpokeClaim; account: Address }) {
 function FlightsPanel() {
   const { flights, dismissedFlights, addFlight } = useUi();
   const activity = useActivity().data?.items;
+  const [showAll, setShowAll] = useState(false);
   // Messages this browser is not tracking (another device, cleared storage) come back from on-chain events.
   useEffect(() => {
     if (!activity) return;
     for (const f of recoverFlights(activity, { flights, dismissed: dismissedFlights }, Date.now()).reverse()) addFlight(f);
   }, [activity, flights, dismissedFlights, addFlight]);
+  // Newest first; FlightRow collapses delivered ones to a single line, so the list stays short.
+  const shown = showAll ? flights : flights.slice(0, MAX_FLIGHTS_SHOWN);
   return (
     <section className="panel timeline-panel">
-      <PanelTitle label="Message lifecycle" meta="Wormhole · live" />
+      <PanelTitle label="Message lifecycle" meta={flights.length > 0 ? `Wormhole · live · ${flights.length} tracked` : 'Wormhole · live'} />
       {flights.length === 0 && <p className="muted-note">Messages you send appear here and are tracked until delivered.</p>}
-      {flights.slice(0, 4).map((f) => (
-        <FlightRow key={f.id} flight={f} />
-      ))}
+      <div className="flight-list">
+        {shown.map((f) => (
+          <FlightRow key={f.id} flight={f} />
+        ))}
+      </div>
+      {flights.length > MAX_FLIGHTS_SHOWN && (
+        <button className="text-link flight-more" onClick={() => setShowAll((v) => !v)}>
+          {showAll ? 'Show fewer' : `Show all ${flights.length}`}
+        </button>
+      )}
     </section>
   );
 }
