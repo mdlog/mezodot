@@ -58,8 +58,8 @@ export function Crosschain() {
         <DepositPanel spokes={deployedSpokes} />
         <div className="bridge-side">
           <ClaimsPanel />
-          <FlightsPanel />
           <WithdrawRemotePanel />
+          <FlightsPanel />
         </div>
       </div>
       <InfoBar title="How safety works." action="Architecture" onAction={() => go('architecture')}>
