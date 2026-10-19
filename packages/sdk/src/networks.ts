@@ -86,7 +86,9 @@ export const NETWORKS: Record<NetworkName, NetworkInfo> = {
     wormholeChainId: 10002,
     wormholescanApi: WORMHOLESCAN_TESTNET,
     supraProofUrl: null,
-    maxLogRange: 5_000n,
+    // 11155111.rpc.thirdweb.com (viem's default): "Maximum allowed number of requested blocks is 1000" (measured
+    // 2026-10-19); a larger range fails every scan of this spoke.
+    maxLogRange: 1_000n,
     // Ethereum: two epochs; deposit → hub credit took 14.4 min
     finalitySec: 15 * 60,
   },
