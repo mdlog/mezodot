@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { usePublicClient } from 'wagmi';
-import { TransactionReceiptNotFoundError, getAbiItem, isAddressEqual, parseEventLogs, type Address, type Hex, type PublicClient } from 'viem';
+import { TransactionReceiptNotFoundError, getAbiItem, isAddress, isAddressEqual, parseEventLogs, type Address, type Hex, type PublicClient } from 'viem';
 import { fetchSignedVaa, spokeGatewayAbi, vaaDigest, wormholeAdapterAbi, type NetworkName } from '@mezodot/sdk';
 import { AGENT_URL, ENV_NAME, HUB, SPOKES, networkByName, type HubInfo, type SpokeInfo } from '../chain/env';
 import type { ActivityItem } from './activity';
@@ -23,6 +23,11 @@ export type Flight = {
   createdAt: number;
   /** Rebuilt from on-chain events (another device, cleared storage) rather than started in this browser. */
   recovered?: boolean;
+  /**
+   * The wallet that sent it: a flight is shown only while that wallet is connected. Absent on flights stored before
+   * flights carried their sender, until that account's own on-chain events claim them (see unclaimedOwnFlights).
+   */
+  account?: Address;
 };
 
 export const flightId = (emitterChain: number, emitter: Address, sequence: bigint | string): string => `${emitterChain}/${emitter.toLowerCase()}/${sequence}`;
@@ -77,7 +82,8 @@ const isFlight = (f: unknown): f is Flight => {
     (x.sequence === null || typeof x.sequence === 'string') &&
     typeof x.txHash === 'string' &&
     typeof x.label === 'string' &&
-    typeof x.createdAt === 'number'
+    typeof x.createdAt === 'number' &&
+    (x.account === undefined || (typeof x.account === 'string' && isAddress(x.account)))
   );
 };
 
@@ -137,6 +143,27 @@ export function recoverFlights(items: readonly ActivityItem[], store: FlightStor
     out.push(flight);
   }
   return out;
+}
+
+/** The flights `account` sent; none without a connected account (the store is shared by everyone using this browser). */
+export const flightsOf = (flights: readonly Flight[], account: Address | undefined): Flight[] =>
+  account ? flights.filter((f) => f.account !== undefined && isAddressEqual(f.account, account)) : [];
+
+/**
+ * Stored flights without a sender that the connected account's own on-chain events show it sent (flights saved before
+ * flights carried their account): the ids to stamp with that account. A flight no event of the account matches stays
+ * unclaimed, and so stays hidden from every account.
+ */
+export function unclaimedOwnFlights(items: readonly ActivityItem[], flights: readonly Flight[]): string[] {
+  const ids = new Set<string>();
+  const txs = new Set<string>();
+  for (const item of items) {
+    if (!item.message) continue;
+    ids.add(flightId(item.message.emitterChain, item.message.emitter, item.message.sequence));
+    ids.add(pendingFlightId(item.txHash));
+    txs.add(item.txHash.toLowerCase());
+  }
+  return flights.filter((f) => !f.account && (ids.has(f.id) || txs.has(f.txHash.toLowerCase()))).map((f) => f.id);
 }
 
 /** The Wormhole sequence a source transaction emitted, from its receipt logs. */

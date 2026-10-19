@@ -14,6 +14,8 @@ import {
   sequenceFromLogs,
   serializeFlightStore,
   type Flight,
+  flightsOf,
+  unclaimedOwnFlights,
 } from './flights';
 
 const spoke = SPOKES.find((s) => s.deployment)!;
@@ -220,5 +222,51 @@ describe('a delivered release is held for a claim only if its own delivery was d
       [961n, 980n],
       [955n, 960n],
     ]);
+  });
+});
+
+describe('flights belong to the wallet that sent them', () => {
+  const ALICE = '0x4C6165286739696849Fb3e77A16b0639D762c5B6' as const;
+  const BOB = '0x000000000000000000000000000000000000b0b0' as const;
+  const now = 10 * 3600_000;
+  const own = (patch: Partial<ActivityItem> = {}): ActivityItem => ({
+    id: 'x',
+    kind: 'Cross-chain',
+    network: spoke.name,
+    asset: 'WETH',
+    amount: 10n ** 18n,
+    decimals: 18,
+    detail: '',
+    txHash: TX,
+    blockNumber: 1n,
+    timestamp: now - 60_000,
+    message: { direction: 'deposit', target: HUB.name, emitterChain: spoke.wormholeChainId, emitter: gateway, sequence: '7', label: '1.0000 WETH from Base' },
+    ...patch,
+  });
+
+  it("shows nothing without a connected wallet, and only the connected wallet's flights with one", () => {
+    const flights = [deposit({ id: 'a', account: ALICE }), deposit({ id: 'b', account: BOB }), deposit({ id: 'c' })];
+    expect(flightsOf(flights, undefined)).toEqual([]);
+    expect(flightsOf(flights, ALICE.toLowerCase() as `0x${string}`).map((f) => f.id)).toEqual(['a']);
+    expect(flightsOf(flights, BOB).map((f) => f.id)).toEqual(['b']);
+  });
+
+  it('lets an account claim only the unowned flights its own on-chain events match', () => {
+    const flights = [
+      deposit({ id: flightId(spoke.wormholeChainId, gateway, 7n) }), // its event's message
+      deposit({ id: pendingFlightId(TX), sequence: null }), // recorded at signing, same transaction
+      deposit({ id: 'someone-else', txHash: '0x9999999999999999999999999999999999999999999999999999999999999999' }),
+      deposit({ id: 'owned', account: BOB }),
+    ];
+    expect(unclaimedOwnFlights([own()], flights)).toEqual([flightId(spoke.wormholeChainId, gateway, 7n), pendingFlightId(TX)]);
+    // An event that is not a cross-chain message proves nothing about a flight.
+    expect(unclaimedOwnFlights([own({ message: undefined })], flights)).toEqual([]);
+  });
+
+  it('keeps the sender through storage and drops a malformed one', () => {
+    const round = parseFlightStore(serializeFlightStore({ flights: [deposit({ account: ALICE })], dismissed: [] }), null);
+    expect(round.flights[0].account).toBe(ALICE);
+    const bad = parseFlightStore(JSON.stringify({ flights: [{ ...deposit(), account: 'not-an-address' }], dismissed: [] }), null);
+    expect(bad.flights).toEqual([]);
   });
 });

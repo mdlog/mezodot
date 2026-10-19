@@ -11,7 +11,17 @@ import { claimSteps, relayHubSteps, relaySpokeSteps, spokeDepositSteps, withdraw
 import { useTx } from '../chain/tx';
 import { useActivity } from '../data/activity';
 import { claimRecipient, useSpokeClaims, type SpokeClaim } from '../data/claims';
-import { flightId, pendingFlightId, recoverFlights, releaseHeld, sequenceFromLogs, useFlightStatus, useReleaseOutcome } from '../data/flights';
+import {
+  flightId,
+  flightsOf,
+  pendingFlightId,
+  recoverFlights,
+  releaseHeld,
+  sequenceFromLogs,
+  unclaimedOwnFlights,
+  useFlightStatus,
+  useReleaseOutcome,
+} from '../data/flights';
 import { lockBlocked, lockRoom, useSpokeLockState } from '../data/guards';
 import { readError, useHubClient, usePosition, usePrices, useSpokeClients, useValuedPosition, useWalletBalances } from '../data/hooks';
 import { truncatedUnits } from '../data/limits';
@@ -139,6 +149,7 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
           txHash: hash,
           label: `${fmt(units(parsed, DECIMALS[asset]), 4)} ${asset} from ${spoke.label}`,
           createdAt: Date.now(),
+          account: address,
         });
       },
     });
@@ -511,28 +522,38 @@ function ClaimRow({ claim, account }: { claim: SpokeClaim; account: Address }) {
 }
 
 function FlightsPanel() {
-  const { flights, dismissedFlights, addFlight } = useUi();
+  const { address, isConnected } = useAccount();
+  const { flights, dismissedFlights, addFlight, updateFlight } = useUi();
   const activity = useActivity().data?.items;
   const [showAll, setShowAll] = useState(false);
-  // Messages this browser is not tracking (another device, cleared storage) come back from on-chain events.
+  // The account's own events claim the unowned flights it sent and bring back messages this browser is not tracking
+  // (another device, cleared storage). The store is shared by everyone using this browser.
   useEffect(() => {
-    if (!activity) return;
-    for (const f of recoverFlights(activity, { flights, dismissed: dismissedFlights }, Date.now()).reverse()) addFlight(f);
-  }, [activity, flights, dismissedFlights, addFlight]);
-  // Newest first; FlightRow collapses delivered ones to a single line, so the list stays short.
-  const shown = showAll ? flights : flights.slice(0, MAX_FLIGHTS_SHOWN);
+    if (!activity || !address) return;
+    for (const id of unclaimedOwnFlights(activity, flights)) updateFlight(id, { account: address });
+    for (const f of recoverFlights(activity, { flights, dismissed: dismissedFlights }, Date.now()).reverse()) addFlight({ ...f, account: address });
+  }, [activity, address, flights, dismissedFlights, addFlight, updateFlight]);
+  // Only the connected wallet's messages, and none (nothing polled) without one.
+  const mine = flightsOf(flights, address);
+  const shown = showAll ? mine : mine.slice(0, MAX_FLIGHTS_SHOWN);
   return (
     <section className="panel timeline-panel">
-      <PanelTitle label="Message lifecycle" meta={flights.length > 0 ? `Wormhole · live · ${flights.length} tracked` : 'Wormhole · live'} />
-      {flights.length === 0 && <p className="muted-note">Messages you send appear here and are tracked until delivered.</p>}
+      <PanelTitle label="Message lifecycle" meta={mine.length > 0 ? `Wormhole · live · ${mine.length} tracked` : 'Wormhole · live'} />
+      {!isConnected ? (
+        <p className="muted-note">
+          Connect a wallet to follow the cross-chain messages it sent. Delivery does not depend on this page: the Mezodot agent relays every message.
+        </p>
+      ) : (
+        mine.length === 0 && <p className="muted-note">Messages you send appear here and are tracked until delivered.</p>
+      )}
       <div className="flight-list">
         {shown.map((f) => (
           <FlightRow key={f.id} flight={f} />
         ))}
       </div>
-      {flights.length > MAX_FLIGHTS_SHOWN && (
+      {mine.length > MAX_FLIGHTS_SHOWN && (
         <button className="text-link flight-more" onClick={() => setShowAll((v) => !v)}>
-          {showAll ? 'Show fewer' : `Show all ${flights.length}`}
+          {showAll ? 'Show fewer' : `Show all ${mine.length}`}
         </button>
       )}
     </section>
@@ -597,6 +618,7 @@ function WithdrawRemotePanel() {
           txHash: hash,
           label: `${fmt(units(parsed, row.collateral.decimals), 4)} ${row.collateral.symbol} back to ${spoke.label}`,
           createdAt: Date.now(),
+          account: address,
         });
       },
     });
