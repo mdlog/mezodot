@@ -1,3 +1,10 @@
 dist
 node_modules
 pnpm-lock.yaml
+contracts/lib
+contracts/out
+contracts/cache
+contracts/broadcast
+.superpowers
+# Rewritten by forge on every deploy (no trailing newline): formatting them would only churn.
+packages/sdk/src/deployments/*.json

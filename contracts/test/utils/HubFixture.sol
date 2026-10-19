@@ -1,0 +1,250 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.28;
+
+import {Test} from "forge-std/Test.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {MockPyth} from "@pythnetwork/pyth-sdk-solidity/MockPyth.sol";
+import {InterestRateModel} from "../../src/hub/InterestRateModel.sol";
+import {PToken} from "../../src/hub/PToken.sol";
+import {OracleRouter} from "../../src/hub/OracleRouter.sol";
+import {PythSource} from "../../src/oracle/PythSource.sol";
+import {VaultManager} from "../../src/hub/VaultManager.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
+
+/// @notice Deploys a complete hub (tokens, pools, oracle, VaultManager) with spec parameters.
+abstract contract HubFixture is Test {
+    uint16 internal constant BASE_SEPOLIA = 10004;
+    uint16 internal constant ETH_SEPOLIA = 10002;
+
+    bytes32 internal constant MUSD_KEY = keccak256("MUSD");
+    bytes32 internal constant MEZO_KEY = keccak256("MEZO");
+    bytes32 internal constant ETH_KEY = keccak256("ETH");
+    bytes32 internal constant USDC_KEY = keccak256("USDC");
+    bytes32 internal constant BTC_KEY = keccak256("BTC");
+
+    bytes32 internal constant MUSD_ID = bytes32(uint256(1));
+    bytes32 internal constant MEZO_ID = bytes32(uint256(2));
+    bytes32 internal constant ETH_ID = bytes32(uint256(3));
+    bytes32 internal constant USDC_ID = bytes32(uint256(4));
+    bytes32 internal constant BTC_ID = bytes32(uint256(5));
+
+    /// OracleRouter source tag of the Pyth leg (update bytes are `tag ‖ payload`).
+    uint8 internal constant PYTH_TAG = 1;
+
+    // Spoke token addresses as seen from the hub (universal 32-byte form).
+    bytes32 internal constant SPOKE_WETH = bytes32(uint256(uint160(0x4200000000000000000000000000000000000006)));
+    bytes32 internal constant SPOKE_USDC = bytes32(uint256(uint160(0x036CbD53842c5426634e7929541eC2318f3dCF7e)));
+
+    MockERC20 internal musd;
+    MockERC20 internal mezo;
+    PToken internal pMUSD;
+    PToken internal pMEZO;
+    MockPyth internal pyth;
+    OracleRouter internal oracle;
+    VaultManager internal vaultManager;
+
+    uint256 internal musdMarket;
+    uint256 internal mezoMarket;
+    uint256 internal pMusdCollateral;
+    uint256 internal pMezoCollateral;
+    uint256 internal wethBase;
+    uint256 internal usdcBase;
+    /// Plain-token hub collateral (Mezo's BTC); only set up by tests that call setUpBtc().
+    MockERC20 internal btc;
+    uint256 internal btcCollateral;
+
+    address internal lp = makeAddr("lp");
+    address internal alice = makeAddr("alice");
+    address internal liquidator = makeAddr("liquidator");
+
+    int64 internal ethPrice = 3_200e8;
+    int64 internal mezoPrice = 794_000; // $0.00794 at expo -8
+    int64 internal musdPrice = 1e8;
+    int64 internal usdcPrice = 1e8;
+    int64 internal btcPrice = 80_000e8;
+
+    function setUpHub() internal {
+        vm.warp(1_700_000_000);
+        musd = new MockERC20("Mezo USD", "MUSD", 18);
+        mezo = new MockERC20("Mezo", "MEZO", 18);
+        pMUSD = new PToken(
+            IERC20(address(musd)),
+            "Mezodot MUSD",
+            "pMUSD",
+            new InterestRateModel(0, 0.06e18, 0.8e18, 0.8e18),
+            0.1e18,
+            address(this)
+        );
+        pMEZO = new PToken(
+            IERC20(address(mezo)),
+            "Mezodot MEZO",
+            "pMEZO",
+            new InterestRateModel(0.02e18, 0.08e18, 0.7e18, 1e18),
+            0.1e18,
+            address(this)
+        );
+        pyth = new MockPyth(60, 1);
+        oracle = new OracleRouter(address(this));
+        oracle.setSource(PYTH_TAG, new PythSource(pyth));
+        oracle.setFeed(MUSD_KEY, pythFeed(MUSD_ID));
+        oracle.setFeed(MEZO_KEY, pythFeed(MEZO_ID));
+        oracle.setFeed(ETH_KEY, pythFeed(ETH_ID));
+        oracle.setFeed(USDC_KEY, pythFeed(USDC_ID));
+
+        vaultManager = new VaultManager(oracle, address(this));
+        pMUSD.setVaultManager(address(vaultManager));
+        pMEZO.setVaultManager(address(vaultManager));
+        musdMarket = vaultManager.addMarket(pMUSD, MUSD_KEY);
+        mezoMarket = vaultManager.addMarket(pMEZO, MEZO_KEY);
+
+        pMusdCollateral = vaultManager.addCollateral(_local(address(pMUSD), MUSD_KEY, 8000, 8500, 500));
+        pMezoCollateral = vaultManager.addCollateral(_local(address(pMEZO), MEZO_KEY, 5000, 6000, 1000));
+        wethBase = vaultManager.addCollateral(_remote(BASE_SEPOLIA, SPOKE_WETH, 18, ETH_KEY, 7500, 8000, 700));
+        usdcBase = vaultManager.addCollateral(_remote(BASE_SEPOLIA, SPOKE_USDC, 6, USDC_KEY, 8000, 8500, 500));
+
+        pushPrices();
+        // Seed hub liquidity.
+        supplyFor(lp, pMUSD, 1_000_000e18);
+        supplyFor(lp, pMEZO, 500_000_000e18);
+    }
+
+    /// BTC as plain hub collateral: LTV 70%, liquidation threshold 78%, bonus 5%.
+    function setUpBtc() internal {
+        btc = new MockERC20("Bitcoin", "BTC", 18);
+        oracle.setFeed(BTC_KEY, pythFeed(BTC_ID));
+        btcCollateral = vaultManager.addCollateral(_plain(address(btc), BTC_KEY, 7000, 7800, 500));
+        pushPrices();
+    }
+
+    function _local(address token, bytes32 priceKey, uint16 ltv, uint16 lt, uint16 bonus)
+        internal
+        pure
+        returns (VaultManager.CollateralConfig memory)
+    {
+        return VaultManager.CollateralConfig({
+            enabled: true,
+            isRemote: false,
+            isShare: true,
+            token: token,
+            chainId: 0,
+            remoteToken: bytes32(0),
+            decimals: 18,
+            priceKey: priceKey,
+            ltvBps: ltv,
+            ltBps: lt,
+            bonusBps: bonus,
+            cap: type(uint256).max
+        });
+    }
+
+    function _remote(
+        uint16 chainId,
+        bytes32 token,
+        uint8 decimals,
+        bytes32 priceKey,
+        uint16 ltv,
+        uint16 lt,
+        uint16 bonus
+    ) internal pure returns (VaultManager.CollateralConfig memory) {
+        return VaultManager.CollateralConfig({
+            enabled: true,
+            isRemote: true,
+            isShare: false,
+            token: address(0),
+            chainId: chainId,
+            remoteToken: token,
+            decimals: decimals,
+            priceKey: priceKey,
+            ltvBps: ltv,
+            ltBps: lt,
+            bonusBps: bonus,
+            cap: type(uint256).max
+        });
+    }
+
+    /// A token held on the hub and valued unit for unit (no exchange rate), such as BTC.
+    function _plain(address token, bytes32 priceKey, uint16 ltv, uint16 lt, uint16 bonus)
+        internal
+        pure
+        returns (VaultManager.CollateralConfig memory)
+    {
+        return VaultManager.CollateralConfig({
+            enabled: true,
+            isRemote: false,
+            isShare: false,
+            token: token,
+            chainId: 0,
+            remoteToken: bytes32(0),
+            decimals: 18,
+            priceKey: priceKey,
+            ltvBps: ltv,
+            ltBps: lt,
+            bonusBps: bonus,
+            cap: type(uint256).max
+        });
+    }
+
+    /// Single Pyth leg, 120 s max age, 2% confidence cap (the spec's pull-oracle parameters).
+    function pythFeed(bytes32 id) internal pure returns (OracleRouter.Feed memory) {
+        return OracleRouter.Feed({
+            primary: OracleRouter.Leg({source: PYTH_TAG, maxAge: 120, id: id}),
+            secondary: OracleRouter.Leg({source: 0, maxAge: 0, id: bytes32(0)}),
+            maxConfBps: 200,
+            maxDivergenceBps: 0
+        });
+    }
+
+    /// Writes all four prices with the current timestamp directly into MockPyth.
+    /// MockPyth ignores updates that are not newer than the stored one, so advance one second first.
+    function pushPrices() internal {
+        skip(1);
+        bytes[] memory updates = rawPythUpdates();
+        pyth.updatePriceFeeds{value: pyth.getUpdateFee(updates)}(updates);
+    }
+
+    /// MockPyth payloads for every feed (BTC once set up), stamped now (what Pyth's own contract accepts).
+    function rawPythUpdates() internal view returns (bytes[] memory updates) {
+        uint64 t = uint64(block.timestamp);
+        updates = new bytes[](address(btc) == address(0) ? 4 : 5);
+        updates[0] = pyth.createPriceFeedUpdateData(MUSD_ID, musdPrice, 0, -8, musdPrice, 0, t);
+        updates[1] = pyth.createPriceFeedUpdateData(MEZO_ID, mezoPrice, 0, -8, mezoPrice, 0, t);
+        updates[2] = pyth.createPriceFeedUpdateData(ETH_ID, ethPrice, 0, -8, ethPrice, 0, t);
+        updates[3] = pyth.createPriceFeedUpdateData(USDC_ID, usdcPrice, 0, -8, usdcPrice, 0, t);
+        if (address(btc) != address(0)) {
+            updates[4] = pyth.createPriceFeedUpdateData(BTC_ID, btcPrice, 0, -8, btcPrice, 0, t);
+        }
+    }
+
+    /// The same updates tagged for OracleRouter, as passed to risk-checked entrypoints.
+    function priceUpdates() internal view returns (bytes[] memory updates) {
+        updates = rawPythUpdates();
+        for (uint256 i = 0; i < updates.length; i++) {
+            updates[i] = abi.encodePacked(PYTH_TAG, updates[i]);
+        }
+    }
+
+    function noUpdates() internal pure returns (bytes[] memory) {
+        return new bytes[](0);
+    }
+
+    function supplyFor(address who, PToken pool, uint256 amount) internal returns (uint256 shares) {
+        MockERC20 token = MockERC20(pool.asset());
+        token.mint(who, amount);
+        vm.startPrank(who);
+        token.approve(address(pool), amount);
+        shares = pool.deposit(amount, who);
+        vm.stopPrank();
+    }
+
+    /// Supplies `amount` into `pool` and posts the resulting shares as collateral.
+    function postLocal(address who, PToken pool, uint256 collateralId, uint256 amount)
+        internal
+        returns (uint256 shares)
+    {
+        shares = supplyFor(who, pool, amount);
+        vm.startPrank(who);
+        pool.approve(address(vaultManager), shares);
+        vaultManager.depositCollateral(collateralId, shares);
+        vm.stopPrank();
+    }
+}

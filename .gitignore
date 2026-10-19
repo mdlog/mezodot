@@ -7,5 +7,15 @@ dist/
 contracts/out/
 contracts/cache/
 contracts/broadcast/*/31337/
+contracts/broadcast/*/31338/
+contracts/broadcast/**/dry-run/
 .devnet/
 services/agent/.state/
+.superpowers/
+services/agent/.env
+.worktrees/
+.secrets/
+# Signing material belongs outside the repository (docs/DEPLOY.md, key storage); never commit any of it
+*.password
+*.keystore
+keystores/

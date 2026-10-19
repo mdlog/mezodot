@@ -1,0 +1,56 @@
+# Mezodot keeper agent: relayer + liquidator + risk engine + HTTP/MCP API (services/agent/README.md).
+#   cp services/agent/.env.example services/agent/.env   # MEZODOT_ENV, KEEPER_PRIVATE_KEY, MCP_TOKEN, ...
+#   docker compose up -d agent                           # builds the image first, every time (pull_policy: build)
+#   docker compose ps agent                              # "healthy" mirrors GET /health (503 when degraded)
+#
+# The image bakes in packages/sdk's deployment JSON, so the image must be rebuilt after every redeploy; the build on
+# every `up` takes care of it. The agent resets its own cursors when the contracts change (see the README).
+#
+# The container runs as the unprivileged `node` user (uid 1000). A state volume created by an older, root-run image
+# needs its owner fixed once (the agent refuses to start and logs this command):
+#   docker compose run --rm --user root --cap-add CHOWN --entrypoint chown agent -R node:node /data
+#
+# After editing services/agent/.env, `docker compose up -d agent` recreates the container with it (`restart` does not).
+# MCP over stdio from the image follows this volume read-only and never sends transactions (README, MCP):
+#   docker run --rm -i --env-file services/agent/.env -v mezodot_agent-state:/data:ro mezodot-agent:latest node mcp-stdio.mjs
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: services/agent/Dockerfile
+    image: mezodot-agent:latest
+    pull_policy: build
+    env_file: services/agent/.env
+    ports:
+      - '127.0.0.1:8787:8787'
+    volumes:
+      - agent-state:/data
+    restart: unless-stopped
+    # tini as PID 1: forwards SIGTERM to the agent, which waits for in-flight receipts before exiting.
+    init: true
+    stop_grace_period: 2m
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:' + (process.env.HTTP_PORT || 8787) + '/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 1m
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+
+volumes:
+  agent-state:

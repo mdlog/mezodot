@@ -1,0 +1,29 @@
+{
+  "name": "@mezodot/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "mezodot-mcp": "./bin/mcp-stdio.mjs"
+  },
+  "scripts": {
+    "start": "tsx --env-file-if-exists=.env src/index.ts",
+    "mcp": "tsx --env-file-if-exists=.env src/mcp/stdio.ts",
+    "bundle": "node scripts/bundle.mjs",
+    "test": "vitest run",
+    "check": "tsc --noEmit && vitest run",
+    "devnet:e2e": "tsx scripts/devnet-e2e.ts"
+  },
+  "dependencies": {
+    "@mezodot/sdk": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "viem": "^2.57.7",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

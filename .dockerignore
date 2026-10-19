@@ -1,0 +1,15 @@
+**/node_modules
+contracts/lib
+contracts/out
+contracts/cache
+contracts/broadcast
+.devnet
+.superpowers
+**/dist
+**/.state
+**/.env
+.git
+# Never in an image or build context.
+.secrets
+**/.secrets
+.worktrees

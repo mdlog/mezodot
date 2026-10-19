@@ -1,0 +1,340 @@
+import type { ReactNode } from 'react';
+import {
+  ArrowDownLeft,
+  ArrowDownToLine,
+  ArrowRight,
+  ArrowUpRight,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  GitBranch,
+  LockKeyhole,
+  RefreshCw,
+  Shield,
+  ShieldAlert,
+  Undo2,
+  Unlock,
+  Wallet,
+  type LucideIcon,
+} from 'lucide-react';
+import { ConnectButton } from '@rainbow-me/rainbowkit';
+import type { NetworkInfo } from '@mezodot/sdk';
+import { ENV_NAME, HUB, explorerAddress, explorerTx } from '../chain/env';
+import type { ActivityKind } from '../data/activity';
+import { pageList, type Page } from '../lib/paginate';
+
+export function Brand() {
+  return (
+    <div className="brand-lockup">
+      <div className="brand-mark">
+        <span />
+        <span />
+        <span />
+        <i />
+      </div>
+      <div>
+        <strong>mezodot</strong>
+      </div>
+    </div>
+  );
+}
+
+/** Network badge replacing the old "simulated data" tag: data on these pages is live. */
+export function NetworkTag() {
+  return (
+    <span className={`sim-tag network-tag network-tag--${ENV_NAME}`}>
+      <i /> {ENV_NAME === 'devnet' ? 'LOCAL DEVNET' : HUB.label.toUpperCase()}
+    </span>
+  );
+}
+
+export function PageTitle({ eyebrow, title, subtitle, right }: { eyebrow: string; title: string; subtitle: string; right?: ReactNode }) {
+  return (
+    <div className="page-title">
+      <div>
+        <div className="eyebrow">
+          <span>{eyebrow}</span>
+          <b>·</b>
+          <span>MEZO HUB</span>
+        </div>
+        <h1>{title}</h1>
+        <p>{subtitle}</p>
+      </div>
+      {right && <div className="title-actions">{right}</div>}
+    </div>
+  );
+}
+
+export function PanelTitle({ label, meta, action }: { label: string; meta?: string; action?: ReactNode }) {
+  return (
+    <div className="panel-title">
+      <div>
+        <h3>{label}</h3>
+        {meta && <span>{meta}</span>}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+export function SummaryStrip({ snapshot, time, icon: Icon }: { snapshot: ReactNode; time: string; icon: LucideIcon }) {
+  return (
+    <div className="summary-strip">
+      <NetworkTag />
+      <span className="snapshot">{snapshot}</span>
+      <span className="snapshot-time">
+        <Icon size={13} /> {time}
+      </span>
+    </div>
+  );
+}
+
+export function StatCard({
+  label,
+  value,
+  change,
+  icon: Icon,
+  accent = false,
+  foot,
+}: {
+  label: string;
+  value: string;
+  change?: string;
+  icon: LucideIcon;
+  accent?: boolean;
+  foot: string;
+}) {
+  return (
+    <article className={`stat-card ${accent ? 'stat-card--accent' : ''}`}>
+      <div className="stat-top">
+        <span>{label}</span>
+        <span className="stat-icon">
+          <Icon size={15} />
+        </span>
+      </div>
+      <div className="stat-value-row">
+        <strong>{value}</strong>
+        {change && <span className="positive">{change}</span>}
+      </div>
+      <div className="stat-foot">
+        <span>{foot}</span>
+      </div>
+    </article>
+  );
+}
+
+export function InfoBar({ title, children, action, onAction }: { title: string; children: ReactNode; action?: string; onAction?: () => void }) {
+  return (
+    <div className="disclaimer-bar">
+      <Shield size={15} />
+      <span>
+        <b>{title}</b> {children}
+      </span>
+      {action && onAction && (
+        <button onClick={onAction}>
+          {action} <ArrowRight size={13} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function AmountInput({
+  id,
+  value,
+  onChange,
+  unit,
+  onMax,
+  large = false,
+  autoFocus = false,
+  disabled = false,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+  unit: string;
+  onMax?: () => void;
+  large?: boolean;
+  autoFocus?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <div className={`amount-input ${large ? 'amount-input--large' : ''}`}>
+      <input
+        id={id}
+        type="number"
+        inputMode="decimal"
+        min="0"
+        step="any"
+        value={value}
+        disabled={disabled}
+        data-autofocus={autoFocus || undefined}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <span>{unit}</span>
+      {onMax && (
+        <button type="button" onClick={onMax} disabled={disabled}>
+          MAX
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Held assets without an acceptable price, by VaultManager's rules: collateral counts as $0 toward borrowing, while
+ * debt is priced strictly, so borrowing, removing collateral and loops revert until its price is fresh. Value and
+ * health use the last stored price meanwhile (useValuedPosition). Pass `unpricedDebts` to say which case applies;
+ * without it the notice states both.
+ */
+export function PriceNotice({ unpriced, relayError, unpricedDebts }: { unpriced: string[]; relayError: string | null; unpricedDebts?: string[] }) {
+  const debts = unpricedDebts ?? [];
+  if (unpriced.length === 0 && debts.length === 0) return null;
+  const relay = relayError ? ' — the price relay is unreachable' : '';
+  const collateralOnly = unpriced.filter((s) => !debts.includes(s));
+  return (
+    <p className="inline-error" role="status">
+      {debts.length > 0 ? (
+        <>
+          No usable {debts.join(' / ')} price right now{relay}. Debt is priced strictly, so borrowing, removing collateral and loops revert until a fresh price
+          is posted; value and health are shown at the last stored price.
+          {collateralOnly.length > 0 && ` ${collateralOnly.join(' / ')} collateral also counts as $0 toward your borrow limit.`}
+        </>
+      ) : unpricedDebts ? (
+        <>
+          No usable {unpriced.join(' / ')} price right now{relay}. That collateral counts as $0 toward your borrow limit until a fresh price is available (its
+          value and health use the last stored price).
+        </>
+      ) : (
+        <>
+          No usable {unpriced.join(' / ')} price right now{relay}. Collateral priced in it counts as $0 toward your borrow limit, and debt in it blocks
+          borrowing and withdrawals until a fresh price is posted.
+        </>
+      )}
+    </p>
+  );
+}
+
+export function TxLink({ network, hash, label }: { network: NetworkInfo; hash: string; label?: string }) {
+  const url = explorerTx(network, hash);
+  const text = label ?? `${hash.slice(0, 8)}…${hash.slice(-4)}`;
+  if (!url) return <code className="tx-code">{text}</code>;
+  return (
+    <a className="tx-code tx-link" href={url} target="_blank" rel="noreferrer">
+      {text} <ExternalLink size={11} />
+    </a>
+  );
+}
+
+export function AddressLink({ network, address }: { network: NetworkInfo; address: string }) {
+  const url = explorerAddress(network, address);
+  const text = `${address.slice(0, 6)}…${address.slice(-4)}`;
+  if (!url) return <code className="tx-code">{text}</code>;
+  return (
+    <a className="tx-code tx-link" href={url} target="_blank" rel="noreferrer">
+      {text} <ExternalLink size={11} />
+    </a>
+  );
+}
+
+/** Shown in place of data when the hub has not been deployed on this network yet. */
+export function NotDeployed() {
+  return (
+    <div className="panel empty-state empty-state--panel">
+      <ShieldAlert size={23} />
+      <b>Mezodot is not live on {HUB.label} yet</b>
+      <span>
+        Markets, borrowing and loops open here once the contracts are deployed.
+        {import.meta.env.DEV && (
+          <>
+            {' '}
+            Local development: run the deployment in <code>docs/DEPLOY.md</code>, or start the devnet (<code>scripts/devnet/start.sh</code>) and open the app
+            with <code>VITE_MEZODOT_ENV=devnet</code>.
+          </>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/** Wraps an action area: prompts for a wallet when disconnected. */
+export function ConnectGate({ connected, children, label = 'Connect a wallet to continue' }: { connected: boolean; children: ReactNode; label?: string }) {
+  if (connected) return <>{children}</>;
+  return (
+    <div className="connect-gate">
+      <Wallet size={16} />
+      <span>{label}</span>
+      <ConnectButton.Custom>
+        {({ openConnectModal }) => (
+          <button className="button button--dark" onClick={openConnectModal}>
+            Connect wallet
+          </button>
+        )}
+      </ConnectButton.Custom>
+    </div>
+  );
+}
+
+const EVENT_ICONS: Record<ActivityKind, LucideIcon> = {
+  Supply: ArrowDownToLine,
+  Withdraw: ArrowUpRight,
+  'Collateral in': LockKeyhole,
+  'Collateral out': Unlock,
+  'Cross-chain': GitBranch,
+  Release: GitBranch,
+  Borrow: ArrowDownLeft,
+  Repay: Undo2,
+  Loop: RefreshCw,
+  Unwind: Undo2,
+  Liquidation: ShieldAlert,
+};
+
+export function EventIcon({ kind }: { kind: ActivityKind }) {
+  const Icon = EVENT_ICONS[kind];
+  return (
+    <span className={`event-icon event-${kind.toLowerCase().replace(/[^a-z]/g, '')}`}>
+      <Icon size={15} />
+    </span>
+  );
+}
+
+export function Spinner() {
+  return <RefreshCw size={13} className="spin" aria-hidden="true" />;
+}
+
+/** "6–10 of 23" with previous / next and page buttons; hidden when everything fits on one page. */
+export function Pagination({ page, label, onPage }: { page: Page<unknown>; label: string; onPage: (page: number) => void }) {
+  if (page.pageCount <= 1) return null;
+  return (
+    <nav className="pagination" aria-label={`${label} pages`}>
+      <span className="pagination-range">
+        {page.from}–{page.to} of {page.total}
+      </span>
+      <div className="pagination-controls">
+        <button className="page-button" onClick={() => onPage(page.page - 1)} disabled={page.page === 0} aria-label="Previous page">
+          <ChevronLeft size={14} />
+        </button>
+        {pageList(page.page, page.pageCount).map((p, i) =>
+          p === null ? (
+            <span key={`gap-${i}`} className="page-gap" aria-hidden="true">
+              …
+            </span>
+          ) : (
+            <button
+              key={p}
+              className={`page-button${p === page.page ? ' is-current' : ''}`}
+              onClick={() => onPage(p)}
+              aria-current={p === page.page ? 'page' : undefined}
+              aria-label={`Page ${p + 1}`}
+            >
+              {p + 1}
+            </button>
+          ),
+        )}
+        <button className="page-button" onClick={() => onPage(page.page + 1)} disabled={page.page === page.pageCount - 1} aria-label="Next page">
+          <ChevronRight size={14} />
+        </button>
+      </div>
+    </nav>
+  );
+}

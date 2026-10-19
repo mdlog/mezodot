@@ -1,0 +1,24 @@
+{
+  // Operations scripts (verify-deployment, revenue-report, check-admin-docs) and their tests. The repository root
+  // has no TypeScript toolchain of its own, so viem and vitest resolve to the copies the SDK and the agent install:
+  // tsx reads these `paths` at runtime and tsc for type-checking (see the root package.json scripts).
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "typeRoots": ["../services/agent/node_modules/@types"],
+    "types": ["node"],
+    "paths": {
+      "viem": ["../packages/sdk/node_modules/viem"],
+      "viem/*": ["../packages/sdk/node_modules/viem/*"],
+      "vitest": ["../services/agent/node_modules/vitest"]
+    }
+  },
+  "include": ["*.ts", "lib/**/*.ts", "test/**/*.ts"]
+}
