@@ -49,7 +49,7 @@ export function Markets() {
   const none = (amount: bigint | undefined) => isConnected && amount === 0n;
   const musd = protocol?.markets.find((m) => m.symbol === 'MUSD');
   const musdBlocked = musd ? supplyBlocked(musd, flags) : null;
-  // PRD flow A supplies 10,000 MUSD; a wallet holding less is offered what it has instead of an amount it cannot send.
+  // The example supplies 10,000 MUSD; a wallet holding less is offered what it has instead of an amount it cannot send.
   const flowA = musd ? 10_000n * 10n ** BigInt(musd.decimals) : 0n;
   const walletMusd = musd ? (balances?.hub.tokens[musd.symbol] ?? 0n) : 0n;
   const flowASupply = walletMusd > 0n && walletMusd < flowA ? walletMusd : flowA;
@@ -57,7 +57,7 @@ export function Markets() {
   return (
     <>
       <PageTitle
-        eyebrow="LIQUIDITY / 01"
+        eyebrow="LIQUIDITY"
         title="Markets & vaults"
         subtitle="Supply MUSD or MEZO and receive pMUSD / pMEZO — ERC-4626 shares whose exchange rate grows with borrower interest. Post them as collateral and they keep earning."
         right={
@@ -299,7 +299,7 @@ export function Markets() {
             </button>
           </div>
           <div className="panel example-panel">
-            <span className="overline">PRD FLOW A · PASSIVE LP</span>
+            <span className="overline">EXAMPLE · PASSIVE LP</span>
             <div className="example-math">
               <span>
                 10,000 <small>MUSD supplied</small>

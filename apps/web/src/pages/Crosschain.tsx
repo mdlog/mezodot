@@ -45,7 +45,7 @@ export function Crosschain() {
   return (
     <>
       <PageTitle
-        eyebrow="CAPITAL / 02"
+        eyebrow="CAPITAL"
         title="Collateral, without the detour."
         subtitle="Lock collateral in a SpokeGateway on Base or Ethereum Sepolia. A guardian-signed Wormhole message credits it on the Mezo Hub, where you borrow MUSD."
         right={
@@ -167,7 +167,7 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
     <section className="panel bridge-config">
       <PanelTitle label="Post cross-chain collateral" meta="SpokeGateway → WormholeAdapter → VaultManager" />
       <div className="form-section">
-        <span className="field-label">01 / SOURCE CHAIN</span>
+        <span className="field-label">SOURCE CHAIN</span>
         <div className="chain-options">
           {spokes.map((s) => {
             const selected = s.name === spoke.name;
@@ -185,7 +185,7 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
         </div>
       </div>
       <div className="form-section">
-        <span className="field-label">02 / COLLATERAL ASSET</span>
+        <span className="field-label">COLLATERAL ASSET</span>
         <div className="asset-select-row">
           {(['WETH', 'USDC'] as const).map((a) => (
             <button key={a} className={`asset-choice ${asset === a ? 'is-selected' : ''}`} onClick={() => setAsset(a)} aria-pressed={asset === a}>
@@ -198,7 +198,7 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
       </div>
       <div className="form-section">
         <label className="field-label" htmlFor="bridge-amount">
-          03 / AMOUNT{' '}
+          AMOUNT{' '}
           <span>
             {spoke.label} balance ·{' '}
             {!spokeBalances
@@ -658,7 +658,7 @@ function WithdrawRemotePanel() {
       ) : (
         <>
           <div className="form-section">
-            <span className="field-label">01 / SPOKE COLLATERAL</span>
+            <span className="field-label">SPOKE COLLATERAL</span>
             <div className="withdraw-options" role="group" aria-label="Spoke collateral to withdraw">
               {remote.map((r) => {
                 const isSelected = row?.collateral.id === r.collateral.id;
@@ -687,7 +687,7 @@ function WithdrawRemotePanel() {
           </div>
           <div className="form-section">
             <label className="field-label" htmlFor="withdraw-remote">
-              02 / AMOUNT{' '}
+              AMOUNT{' '}
               <span>
                 Max {row ? truncatedUnits(maxOut, row.collateral.decimals, 6) : '0'} {row?.collateral.symbol}
               </span>
@@ -710,7 +710,7 @@ function WithdrawRemotePanel() {
             )}
           </div>
           <div className="form-section">
-            <span className="field-label">03 / DELIVERY</span>
+            <span className="field-label">DELIVERY</span>
             <dl className="release-summary">
               <div>
                 <dt>Arrives on</dt>

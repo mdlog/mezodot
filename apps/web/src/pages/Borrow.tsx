@@ -68,7 +68,7 @@ export function Borrow() {
   return (
     <>
       <PageTitle
-        eyebrow="CAPITAL / 03"
+        eyebrow="CAPITAL"
         title="Borrow against your position."
         subtitle="Borrow MUSD or MEZO on the Mezo Hub against pTokens and collateral locked on Base or Ethereum. One health factor across every chain."
         right={

@@ -35,7 +35,7 @@ const LEVERAGE_OPTIONS = [1.5, 2, 2.5, 3, 3.5, 4];
 const LIQUIDITY_USE = 0.98;
 /** Accepted shortfall of the equity an unwind returns against its preview (interest and rounding). */
 const UNWIND_SLIPPAGE_BPS = 50;
-/** PRD flow C. */
+/** The example the desk walks through: 1,000 MUSD looped to 3×. */
 const SCENARIO = { principal: 1_000, leverage: 3 };
 /** MezodotPool's flash-loan fee (a contract constant, mirrored by the SDK), paid to the pool's reserves when a loop opens. */
 const FLASH_FEE = pct(FLASH_FEE_BPS / BPS, 2);
@@ -47,7 +47,7 @@ export function Loop() {
   return (
     <>
       <PageTitle
-        eyebrow="CAPITAL / 04"
+        eyebrow="CAPITAL"
         title="Leverage desk."
         subtitle={`One-transaction positions on the Mezo Hub: a BTC long through a Tigris flash swap (no flash fee: the debt is exactly the borrow), or a pMUSD supply loop on the MUSD pool's flash loan (${FLASH_FEE} fee to its reserves) that unwinds against your pMUSD with no fee. VaultManager enforces the LTV, so an unsafe position simply reverts.`}
         right={
@@ -471,7 +471,7 @@ function MusdLoop() {
         <Sparkles size={16} />
         <div>
           <b>
-            PRD flow C: {fmt(SCENARIO.principal)} MUSD at {SCENARIO.leverage}×
+            Example: {fmt(SCENARIO.principal)} MUSD at {SCENARIO.leverage}×
           </b>
           <p>
             Flash borrow {fmt(scenario.flashAmount)} MUSD, supply {fmt(scenario.gross)}, borrow {fmt(scenario.debt, 1)} (incl. the {FLASH_FEE} fee) and repay

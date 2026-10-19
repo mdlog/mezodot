@@ -34,7 +34,6 @@ export function Brand() {
       </div>
       <div>
         <strong>mezodot</strong>
-        <small>PROTOCOL / 01</small>
       </div>
     </div>
   );

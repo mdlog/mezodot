@@ -117,7 +117,7 @@ export function Architecture() {
   return (
     <>
       <PageTitle
-        eyebrow="INTELLIGENCE / 06"
+        eyebrow="INTELLIGENCE"
         title="Designed as one market."
         subtitle="A Mezo Hub that holds liquidity and accounting. Spokes that keep collateral on its home chain. Wormhole Core messages, verified on-chain, connecting them."
         right={
@@ -166,9 +166,8 @@ export function Architecture() {
           </div>
         ) : (
           <div className="contract-map-list" role="tabpanel">
-            {contractRows().map((c, i) => (
+            {contractRows().map((c) => (
               <div className="contract-row" key={`${c.name}-${c.location}`}>
-                <span className="contract-index">{String(i + 1).padStart(2, '0')}</span>
                 <span className="contract-hex">
                   <Code2 size={16} />
                 </span>
@@ -188,7 +187,7 @@ export function Architecture() {
 
       <div className="architecture-notes">
         <article className="panel arch-note">
-          <span className="arch-note-id">01 / HUB</span>
+          <span className="arch-note-id">HUB</span>
           <h3>One place to account.</h3>
           <p>
             MUSD and MEZO liquidity, debt and every position live on Mezo. VaultManager values all collateral with Pyth and Supra prices and enforces one health
@@ -196,7 +195,7 @@ export function Architecture() {
           </p>
         </article>
         <article className="panel arch-note">
-          <span className="arch-note-id">02 / SPOKE</span>
+          <span className="arch-note-id">SPOKE</span>
           <h3>Collateral stays put.</h3>
           <p>
             Deposits lock first, then credit. Withdrawals debit the hub first, then release. Hub credit can never exceed tokens locked on the spoke — an
@@ -204,7 +203,7 @@ export function Architecture() {
           </p>
         </article>
         <article className="panel arch-note">
-          <span className="arch-note-id">03 / COMPOSABLE</span>
+          <span className="arch-note-id">COMPOSABLE</span>
           <h3>Capital stays productive.</h3>
           <p>pMUSD and pMEZO are standard ERC-4626 shares that keep earning while posted as collateral, and plug into any Mezo DEX or vault.</p>
         </article>

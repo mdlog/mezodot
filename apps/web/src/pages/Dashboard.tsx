@@ -128,7 +128,7 @@ export function Dashboard() {
         <article className="feature-card feature-card--loop">
           <div className="feature-copy">
             <span className="overline">
-              <Zap size={13} /> LEVERAGE ENGINE <b>·</b> 01
+              <Zap size={13} /> LEVERAGE ENGINE
             </span>
             <h2>
               One position.
@@ -145,7 +145,7 @@ export function Dashboard() {
           </div>
           <div className="feature-card-foot">
             <span>
-              <i className="small-dot" /> PRD flow C: 1,000 MUSD × 3
+              <i className="small-dot" /> Example: 1,000 MUSD × 3
             </span>
             <span>
               pMUSD / MUSD <ArrowUpRight size={13} />
@@ -156,7 +156,7 @@ export function Dashboard() {
         <article className="feature-card feature-card--bridge">
           <div className="bridge-topline">
             <span className="overline">
-              <Waves size={13} /> SPOKE GATEWAY <b>·</b> 02
+              <Waves size={13} /> SPOKE GATEWAY
             </span>
             <span className="route-id">{SPOKES.map((s) => s.label).join(' · ')}</span>
           </div>
@@ -196,7 +196,6 @@ export function Dashboard() {
             <span>
               <span className="live-dot live-dot--muted" /> Principal never leaves the source chain
             </span>
-            <span>FLOW / B</span>
           </div>
         </article>
       </div>

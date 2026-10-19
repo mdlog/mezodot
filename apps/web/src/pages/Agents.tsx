@@ -139,7 +139,7 @@ export function Agents() {
   return (
     <>
       <PageTitle
-        eyebrow="INTELLIGENCE / 05"
+        eyebrow="INTELLIGENCE"
         title="Risk, with receipts."
         subtitle="Permissionless keepers liquidate and relay through KeeperGateway. The Mezodot agent publishes quantitative risk — volatility, VaR-based LTV advice and Deflated Sharpe walk-forward tests — over HTTP and MCP."
         right={

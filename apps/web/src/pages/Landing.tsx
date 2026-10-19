@@ -368,9 +368,7 @@ function HowItWorks() {
               <span className="lp-step-icon">
                 <s.icon size={17} />
               </span>
-              <b>
-                <small>0{i + 1}</small> {s.title}
-              </b>
+              <b>{s.title}</b>
               <p>{s.body}</p>
             </li>
           ))}

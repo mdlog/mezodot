@@ -77,6 +77,11 @@ button:disabled {
   align-items: center;
   gap: 10px;
 }
+/* The brand is a home link: no link underline or link colour. */
+a:has(> .brand-lockup) {
+  text-decoration: none;
+  color: inherit;
+}
 .brand-mark {
   width: 34px;
   height: 34px;
@@ -822,7 +827,7 @@ button:disabled {
   align-items: center;
   gap: 6px;
 }
-.feature-card-foot > span:last-child {
+.feature-card-foot > span:last-child:not(:first-child) {
   font: 11.5px var(--mono);
   letter-spacing: 0.5px;
 }
@@ -3471,14 +3476,10 @@ tbody tr:last-child td {
 .contract-row {
   min-height: 47px;
   display: grid;
-  grid-template-columns: 30px 27px 155px 1fr 95px;
+  grid-template-columns: 27px 155px 1fr 95px;
   align-items: center;
   gap: 9px;
   border-top: 1px solid #eeede8;
-}
-.contract-index {
-  font: 11.5px var(--mono);
-  color: #a6a6ad;
 }
 .contract-hex {
   width: 24px;
@@ -3977,7 +3978,7 @@ tbody tr:last-child td {
     font-size: 21px;
   }
   .contract-row {
-    grid-template-columns: 25px 25px 132px 1fr 82px;
+    grid-template-columns: 25px 132px 1fr 82px;
   }
 }
 @media (max-width: 900px) {
@@ -4429,7 +4430,7 @@ tbody tr:last-child td {
     font-size: 11px;
   }
   .contract-row {
-    grid-template-columns: 20px 24px 1fr 70px;
+    grid-template-columns: 24px 1fr 70px;
     gap: 5px;
     padding: 6px 0;
   }
@@ -4437,7 +4438,7 @@ tbody tr:last-child td {
     font-size: 11px;
   }
   .contract-description {
-    grid-column: 3/-1;
+    grid-column: 2/-1;
     grid-row: 2;
     font-size: 11px;
     margin-top: -3px;
