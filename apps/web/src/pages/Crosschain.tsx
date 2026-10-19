@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ArrowDownLeft, ArrowRight, BadgeCheck, Bitcoin, Check, Shield, TriangleAlert, Waves, X } from 'lucide-react';
 import { useAccount, usePublicClient } from 'wagmi';
 import { isAddressEqual, type Address, type Hash, type PublicClient } from 'viem';
-import { maxWithdrawableUnits } from '@mezodot/sdk';
+import { healthStatus, maxWithdrawableUnits } from '@mezodot/sdk';
 import { HubPending, QueryError } from '../components/StatusBanners';
 import { AmountInput, ConnectGate, InfoBar, NotDeployed, PageTitle, PanelTitle, Spinner, SummaryStrip, TxLink, PriceNotice } from '../components/ui';
 import { HUB, HUB_DEPLOYED, SPOKES, networkByName, spokeByWormholeChain, type SpokeInfo } from '../chain/env';
@@ -14,11 +14,12 @@ import { claimRecipient, useSpokeClaims, type SpokeClaim } from '../data/claims'
 import { flightId, pendingFlightId, recoverFlights, releaseHeld, sequenceFromLogs, useFlightStatus, useReleaseOutcome } from '../data/flights';
 import { lockBlocked, lockRoom, useSpokeLockState } from '../data/guards';
 import { readError, useHubClient, usePosition, usePrices, useSpokeClients, useValuedPosition, useWalletBalances } from '../data/hooks';
+import { truncatedUnits } from '../data/limits';
 import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { spendableWeth, wrapNeeded } from '../lib/wrap';
 import { finalityEta, formatWait } from '../lib/eta';
 import { ChainLogo, TokenLogo } from '../components/Logos';
-import { fmt, money, shortAddress, timeAgo, units } from '../lib/format';
+import { fmt, fmtHealth, money, shortAddress, timeAgo, units } from '../lib/format';
 import { useUi, type Flight } from '../state/UiContext';
 
 type Asset = 'WETH' | 'USDC';
@@ -559,15 +560,23 @@ function WithdrawRemotePanel() {
     setAmount('');
   };
 
+  const spoke = row ? spokeByWormholeChain(row.collateral.chainId) : undefined;
+  const value = parsed ?? 0n;
+  const usd = row ? units(value, row.collateral.decimals) * row.price : 0;
+  // What leaving this collateral does to health: it stops counting at its liquidation threshold.
+  const hfAfter = valued && row && valued.debtUsd > 0 ? (valued.adjustedCollateralUsd - (usd * row.collateral.ltBps) / 10_000) / valued.debtUsd : Infinity;
+  const overMax = row !== undefined && parsed !== null && parsed > maxOut;
+  const etaMin = Math.max(1, Math.round(HUB.finalitySec / 60));
+
   return (
-    <section className="panel route-panel">
+    <section className="panel bridge-config withdraw-panel">
       <PanelTitle label="Withdraw to a spoke" meta="VaultManager.withdrawRemote" />
       {valued && valued.debtUsd > 0 && <PriceNotice unpriced={unpriced} relayError={relayError} />}
       {remote.length === 0 ? (
         !isConnected ? (
           <p className="muted-note">Connect a wallet to manage spoke collateral.</p>
         ) : valued ? (
-          <p className="muted-note">No spoke collateral posted.</p>
+          <p className="muted-note">No spoke collateral posted. Collateral you lock on a spoke appears here once the hub credits it.</p>
         ) : positionQuery.error ? (
           <QueryError error={positionQuery.error} what="your position" onRetry={() => void positionQuery.refetch()} />
         ) : (
@@ -575,44 +584,100 @@ function WithdrawRemotePanel() {
         )
       ) : (
         <>
-          <div className="asset-select-row" role="group" aria-label="Spoke collateral to withdraw">
-            {remote.map((r) => {
-              const isSelected = row?.collateral.id === r.collateral.id;
-              return (
-                <button
-                  key={r.collateral.id}
-                  className={`asset-choice ${isSelected ? 'is-selected' : ''}`}
-                  onClick={() => setSelected(r.collateral.id)}
-                  aria-pressed={isSelected}
-                >
-                  <b>{r.collateral.symbol}</b>
-                  <span>
-                    {fmt(r.units, 4)} · {spokeByWormholeChain(r.collateral.chainId)?.label ?? `chain ${r.collateral.chainId}`}
-                  </span>
-                </button>
-              );
-            })}
+          <div className="form-section">
+            <span className="field-label">01 / SPOKE COLLATERAL</span>
+            <div className="withdraw-options" role="group" aria-label="Spoke collateral to withdraw">
+              {remote.map((r) => {
+                const isSelected = row?.collateral.id === r.collateral.id;
+                const on = spokeByWormholeChain(r.collateral.chainId);
+                return (
+                  <button
+                    key={r.collateral.id}
+                    className={`chain-option withdraw-option ${isSelected ? 'is-selected' : ''}`}
+                    onClick={() => setSelected(r.collateral.id)}
+                    aria-pressed={isSelected}
+                  >
+                    <TokenLogo symbol={r.collateral.symbol} network={on?.name} size={26} />
+                    <span>
+                      <b>
+                        {truncatedUnits(r.balance, r.collateral.decimals, 6)} {r.collateral.symbol}
+                      </b>
+                      <small>
+                        on {on?.label ?? `chain ${r.collateral.chainId}`} · {money(r.valueUsd, 2)}
+                      </small>
+                    </span>
+                    {isSelected && <Check size={16} />}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          <label className="field-label" htmlFor="withdraw-remote">
-            AMOUNT{' '}
-            <span>
-              Max {row ? fmt(units(maxOut, row.collateral.decimals), 6) : '0'} {row?.collateral.symbol}
-            </span>
-          </label>
-          <AmountInput
-            id="withdraw-remote"
-            value={amount}
-            onChange={setAmount}
-            unit={row?.collateral.symbol ?? ''}
-            onMax={() => row && setAmount(toInput(maxOut, row.collateral.decimals))}
-          />
-          <button className="button button--light button--wide" onClick={withdraw} disabled={invalid || Boolean(busy)}>
-            {busy ?? 'Release on spoke'}
-          </button>
-          <p className="muted-note">
-            Up to {row ? fmt(units(maxOut, row.collateral.decimals), 6) : '0'} {row?.collateral.symbol} can leave while your debt stays within the borrow limit.
-            Tokens arrive on the spoke ≈ {Math.max(1, Math.round(HUB.finalitySec / 60))} min after the hub transaction (Mezo is final at once).
-          </p>
+          <div className="form-section">
+            <label className="field-label" htmlFor="withdraw-remote">
+              02 / AMOUNT{' '}
+              <span>
+                Max {row ? truncatedUnits(maxOut, row.collateral.decimals, 6) : '0'} {row?.collateral.symbol}
+              </span>
+            </label>
+            <AmountInput
+              id="withdraw-remote"
+              value={amount}
+              onChange={setAmount}
+              unit={row?.collateral.symbol ?? ''}
+              onMax={() => row && setAmount(toInput(maxOut, row.collateral.decimals))}
+            />
+            <div className="amount-estimate">
+              Value <b>{money(usd, 2)}</b>
+            </div>
+            {overMax && row && (
+              <p className="inline-error" role="alert">
+                Amount exceeds {maxOut < row.balance ? 'what can leave while your debt stays within the borrow limit' : `your posted ${row.collateral.symbol}`}:
+                at most {truncatedUnits(maxOut, row.collateral.decimals, 6)} {row.collateral.symbol}.
+              </p>
+            )}
+          </div>
+          <div className="form-section">
+            <span className="field-label">03 / DELIVERY</span>
+            <dl className="release-summary">
+              <div>
+                <dt>Arrives on</dt>
+                <dd>
+                  {spoke && <ChainLogo network={spoke.name} size={16} />} {spoke?.label ?? '—'}
+                </dd>
+              </div>
+              <div>
+                <dt>Recipient</dt>
+                <dd>{address ? `${shortAddress(address)} (this wallet)` : '—'}</dd>
+              </div>
+              {valued && valued.debtUsd > 0 && (
+                <div>
+                  <dt>Health factor</dt>
+                  <dd>
+                    <b>{fmtHealth(valued.healthFactor)}</b> →{' '}
+                    <b className={`tone-${Number.isFinite(hfAfter) ? healthStatus(hfAfter).tone : 'ok'}`}>{fmtHealth(hfAfter)}</b>
+                  </dd>
+                </div>
+              )}
+              <div>
+                <dt>Arrival</dt>
+                <dd>≈ {etaMin} min after the hub transaction</dd>
+              </div>
+            </dl>
+          </div>
+          <ConnectGate connected={isConnected}>
+            <button className="button button--dark button--wide" onClick={withdraw} disabled={invalid || Boolean(busy)}>
+              {busy ?? (
+                <>
+                  Release to {spoke?.label ?? 'the spoke'} <ArrowRight size={15} />
+                </>
+              )}
+            </button>
+          </ConnectGate>
+          <div className="small-disclosure">
+            <Shield size={14} /> The hub debits your collateral first, then sends a guardian-signed Wormhole RELEASE to the {spoke?.label ?? 'spoke'} gateway
+            (Mezo is final at once). The Mezodot agent delivers it, and you can relay it yourself from Message lifecycle. Price updates and the Wormhole fee are
+            attached to the transaction.
+          </div>
         </>
       )}
     </section>

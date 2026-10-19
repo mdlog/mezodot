@@ -4999,3 +4999,47 @@ a.nav-link {
 .claim-recipient .amount-input input {
   font-size: 12.5px;
 }
+
+/* Withdraw to a spoke: the same sections as the lock panel, one card per spoke collateral. */
+.withdraw-options {
+  display: grid;
+  gap: 8px;
+}
+.withdraw-option {
+  height: auto;
+  min-height: 52px;
+  padding: 8px 10px;
+}
+.withdraw-option b {
+  font: 12.5px var(--mono);
+}
+.release-summary {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+.release-summary > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+.release-summary dt {
+  color: #9b9ca3;
+}
+.release-summary dd {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #45475a;
+  text-align: right;
+}
+.release-summary b {
+  font: 12px var(--mono);
+}
+.withdraw-panel .connect-gate,
+.withdraw-panel .button--wide {
+  margin-top: 14px;
+}
