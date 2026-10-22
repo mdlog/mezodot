@@ -11,6 +11,7 @@ Implemented (see README):
 - [x] Autonomous keeper E2E and browser E2E
 - [x] CI on every pull request (contracts, SDK ABI drift, formatting, packages, ops scripts, admin-powers docs) and nightly testnet, fork and devnet checks
 - [x] Operations: deployment check, revenue report with collection plan, BTC smoke test; DEPLOY, RUNBOOK, REVENUE and SECURITY docs
+- [x] Source verification: all 14 live contracts are exact matches on Sourcify, and both spoke gateways are verified on Blockscout (Base Sepolia, Ethereum Sepolia) (DEPLOY.md, step 4)
 
 Next:
 
@@ -19,6 +20,6 @@ Next:
 - [ ] Owner key: move the deployer keystore out of the repository and drop its password file (DEPLOY.md, key storage); then a hardware wallet or multisig
 - [ ] Deploy scripts: write the deployment JSON only once the broadcast is mined (a dry run no longer writes it, but a broadcast still writes it during forge's local run), and record the owner and an ABI/version hash in it
 - [ ] Oracle: close the residual price pick window on USDC's Pyth leg and the single MUSD and MEZO legs (3,900 s; SECURITY.md, price pick window), e.g. a short max age for the prices liquidations read, or short MUSD/MEZO max ages once a Pyth key entitled to them keeps those legs fresh
-- [ ] Verify contract sources on the explorers (Blockscout on Mezo, Etherscan on the Sepolia chains)
+- [ ] Hub sources on Mezo's explorer: its Blockscout (v6.9.2) answers "Unable to verify" for the 12 via-IR hub contracts that Sourcify matches exactly (DEPLOY.md, step 4); ask Mezo to upgrade its verifier, then verify them there
 - [ ] External audit; timelock + multisig ownership, with a guardian role that can only tighten parameters
 - [ ] pToken integrations with Mezo DEX pools (pMUSD/MUSD liquidity)

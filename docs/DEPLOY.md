@@ -131,7 +131,16 @@ pnpm verify:deployment mezo-testnet          # --brief: failures and warnings on
 
 Then run the BTC smoke test of step 8 before announcing the deployment.
 
-Optional source verification on the explorers (not yet run for the current deployment): append `--verify --verifier blockscout --verifier-url https://explorer.test.mezo.org/api/` to the hub commands (Mezo's explorer is Blockscout), and `--verify --etherscan-api-key $ETHERSCAN_API_KEY` to the spoke commands.
+Source verification (run for the current deployment on 2026-10-23: all 14 live contracts are exact matches on Sourcify, `https://repo.sourcify.dev/<chain id>/<address>`, and both spoke gateways are verified on Blockscout). Verify each address against the source that deployed it: the creation input recorded in `contracts/broadcast/<script>/<chain id>/run-*.json` must start with the artifact's `bytecode.object`, and the rest of that input is the constructor arguments.
+
+```bash
+# Mezo hub (chain 31611): Sourcify
+forge verify-contract --root contracts --chain 31611 --verifier sourcify --constructor-args 0x<args> <address> src/hub/VaultManager.sol:VaultManager
+# Spokes (84532, 11155111): Blockscout, and Sourcify as above
+forge verify-contract --root contracts --chain 84532 --verifier blockscout --verifier-url https://base-sepolia.blockscout.com/api/ --constructor-args 0x<args> <address> src/spoke/SpokeGateway.sol:SpokeGateway
+```
+
+Mezo's testnet explorer runs Blockscout v6.9.2; its API is `https://api.explorer.test.mezo.org/api/` (`https://explorer.test.mezo.org/api/` is the web app and answers 404). It answers `Fail - Unable to verify` for these contracts, which are built with `via_ir` (no via-IR contract is verified on that explorer), although Sourcify reproduces them byte for byte. The hub's sources are therefore published on Sourcify until that explorer can verify them. Etherscan on the Sepolia chains needs `--verifier etherscan --etherscan-api-key $ETHERSCAN_API_KEY` and has not been run.
 
 ## 5. Commit
 
