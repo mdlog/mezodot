@@ -11,6 +11,14 @@ export const viewFromHash = (hash: string): View => {
 
 export const hashFor = (view: View): string => (view === 'landing' ? '#/' : `#/${view}`);
 
+/**
+ * The view-change effect. Returns nothing: Chrome 153 returns a promise from `window.scrollTo`, and an effect that
+ * passed it on would give React a non-function cleanup, which throws "destroy is not a function" on the next view.
+ */
+export const scrollToTop = (): void => {
+  window.scrollTo(0, 0);
+};
+
 /** Hash-based routing (`#/markets`) so views survive reloads and can be deep-linked without server config. */
 export function useHashRoute(): [View, (view: View) => void] {
   const [view, setView] = useState<View>(() => viewFromHash(window.location.hash));
@@ -22,7 +30,7 @@ export function useHashRoute(): [View, (view: View) => void] {
   }, []);
 
   // A new view starts at its top (the landing page is long; the app keeps the window as its scroller).
-  useEffect(() => window.scrollTo(0, 0), [view]);
+  useEffect(scrollToTop, [view]);
 
   const navigate = useCallback((next: View) => {
     const hash = hashFor(next);
