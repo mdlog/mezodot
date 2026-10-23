@@ -71,17 +71,18 @@ Built for the **Mezo Buildathon, Track 1** (DeFi: borrowing, lending, looping, y
 
 ### The app
 
-| Page          | Route            | What you can do                                                                                                         |
-| ------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Landing       | `#/`             | The product story, with motion drawn from the protocol's own flows                                                      |
-| Overview      | `#/dashboard`    | TVL, protocol revenue, markets and recent activity                                                                      |
-| Markets       | `#/markets`      | Supply MUSD or MEZO for pMUSD / pMEZO, whose exchange rate grows with borrower interest                                 |
-| Cross-chain   | `#/crosschain`   | Lock WETH / USDC on a spoke, follow each Wormhole message through its lifecycle, relay it yourself, withdraw to a spoke |
-| Borrow        | `#/borrow`       | Borrow MUSD or MEZO against pTokens, BTC and spoke collateral                                                           |
-| Loop          | `#/loop`         | Leverage desk: a BTC long through a Tigris flash swap, or a pMUSD supply loop on the MUSD pool's flash loan (0.09% fee) |
-| Agents & risk | `#/agents`       | Keepers, liquidations and the agent's risk report                                                                       |
-| Architecture  | `#/architecture` | The capital topology as a system diagram with user journeys                                                             |
-| Activity      | `#/activity`     | Your on-chain history across the hub and the spokes, read from contract events                                          |
+| Page          | Route            | What you can do                                                                                                           |
+| ------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Landing       | `#/`             | The product story, with motion drawn from the protocol's own flows                                                        |
+| Overview      | `#/dashboard`    | TVL, protocol revenue, markets and the collateral accepted on every chain                                                 |
+| Markets       | `#/markets`      | Supply MUSD or MEZO for pMUSD / pMEZO, whose exchange rate grows with borrower interest                                   |
+| Portfolio     | `#/portfolio`    | Everything your wallet holds: supplied pTokens, collateral on the hub and spokes, debt, health factor and recent activity |
+| Activity      | `#/activity`     | Your full on-chain history across the hub and the spokes, read from contract events, with CSV export                      |
+| Cross-chain   | `#/crosschain`   | Lock WETH / USDC on a spoke, follow each Wormhole message through its lifecycle, relay it yourself, withdraw to a spoke   |
+| Borrow        | `#/borrow`       | Borrow MUSD or MEZO against pTokens, BTC and spoke collateral                                                             |
+| Loop          | `#/loop`         | Leverage desk: a BTC long through a Tigris flash swap, or a pMUSD supply loop on the MUSD pool's flash loan (0.09% fee)   |
+| Agents & risk | `#/agents`       | Keepers, liquidations and the agent's risk report                                                                         |
+| Architecture  | `#/architecture` | The capital topology as a system diagram with user journeys                                                               |
 
 Wallets: **Mezo Passport** (Unisat, OKX and Xverse through Mezo smart accounts) and EVM wallets through RainbowKit / WalletConnect.
 

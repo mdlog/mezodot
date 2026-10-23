@@ -1,27 +1,9 @@
-import { healthStatus } from '@mezodot/sdk';
+import { healthStatus, type ValuedPosition } from '@mezodot/sdk';
+import { PanelTitle } from '../components/ui';
 import { HEALTH_BANDS, gaugePoint, healthPosition, ltvBands } from '../lib/health';
-import { pct } from '../lib/format';
+import { fmtHealth, money, pct } from '../lib/format';
 
 const at = (position: number) => `${position * 100}%`;
-
-/** Health factor on the shared scale: liquidation (1.0×) at the left end, 3.0× and "no debt" at the right. */
-export function HealthBar({ hf }: { hf: number }) {
-  const tone = healthStatus(hf).tone;
-  return (
-    <div className="scale-track" aria-hidden="true">
-      <div className="scale-bands">
-        {HEALTH_BANDS.map((b) => (
-          <span
-            key={b.tone}
-            className={`scale-band tone-${b.tone}${b.tone === tone ? ' is-active' : ''}`}
-            style={{ left: at(healthPosition(b.from)), width: at(healthPosition(b.to) - healthPosition(b.from)) }}
-          />
-        ))}
-      </div>
-      <i className={`scale-marker tone-${tone}`} style={{ left: at(healthPosition(hf)) }} />
-    </div>
-  );
-}
 
 // Gauge geometry in viewBox units: pivot, arc radius, and the gap left between bands (fraction of the arc).
 const CX = 60;
@@ -94,5 +76,59 @@ export function LtvMeter({ ltv, maxLtv, liqLtv, hf }: { ltv: number; maxLtv: num
         max borrow {pct(maxLtv, 0)}
       </span>
     </div>
+  );
+}
+
+/**
+ * The account's health at fresh prices: factor and gauge, LTV against the max-borrow and liquidation lines (the
+ * blended thresholds of the collateral mix, or the usual 75% / 80% before anything is posted), and the totals behind
+ * them. Shown on Borrow next to the form and on Portfolio.
+ */
+export function PositionHealth({ valued }: { valued: ValuedPosition | null }) {
+  const hf = valued?.healthFactor ?? Infinity;
+  const status = healthStatus(hf);
+  const maxLtv = valued && valued.collateralUsd > 0 ? valued.borrowLimitUsd / valued.collateralUsd : 0.75;
+  const liqLtv = valued && valued.collateralUsd > 0 ? valued.adjustedCollateralUsd / valued.collateralUsd : 0.8;
+  return (
+    <section className="panel risk-panel">
+      <PanelTitle
+        label="Position health"
+        meta="Fresh-price valuation"
+        action={
+          <span className={`health-badge tone-${status.tone}`}>
+            <i /> {status.label}
+          </span>
+        }
+      />
+      <div className="health-overview">
+        <div className="health-number">
+          <span>HEALTH FACTOR</span>
+          <strong className={`tone-${status.tone}`}>{fmtHealth(hf)}</strong>
+          <em>Liquidatable below 1.00×</em>
+        </div>
+        <HealthGauge hf={hf} />
+      </div>
+      <div className="risk-meter">
+        <div>
+          <span>Current LTV</span>
+          <b>{pct(valued?.ltv ?? 0)}</b>
+        </div>
+        <LtvMeter ltv={valued?.ltv ?? 0} maxLtv={maxLtv} liqLtv={liqLtv} hf={hf} />
+      </div>
+      <div className="risk-math">
+        <span>
+          Collateral value <b>{money(valued?.collateralUsd ?? 0)}</b>
+        </span>
+        <span>
+          Borrow limit <b>{money(valued?.borrowLimitUsd ?? 0)}</b>
+        </span>
+        <span>
+          Outstanding debt <b>{money(valued?.debtUsd ?? 0)}</b>
+        </span>
+        <span>
+          Available <b className="positive-text">{money(valued?.availableUsd ?? 0)}</b>
+        </span>
+      </div>
+    </section>
   );
 }

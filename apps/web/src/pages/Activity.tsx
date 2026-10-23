@@ -56,7 +56,7 @@ export function Activity() {
   return (
     <>
       <PageTitle
-        eyebrow="INTELLIGENCE"
+        eyebrow="ACCOUNT"
         title="Every move, accounted for."
         subtitle="Your on-chain history across the Mezo Hub and spoke chains, read directly from contract events."
         right={

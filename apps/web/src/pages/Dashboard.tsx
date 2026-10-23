@@ -1,43 +1,31 @@
-import { useState } from 'react';
-import { ArrowRight, ArrowUpRight, Clock3, GitBranch, Layers3, Radio, RefreshCw, Waves, Zap } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Clock3, GitBranch, Layers3, Radio, RefreshCw, Wallet, Waves, Zap } from 'lucide-react';
 import { useAccount } from 'wagmi';
-import { BPS, FLASH_FEE_BPS, healthStatus, perSecondToApy } from '@mezodot/sdk';
+import { BPS, FLASH_FEE_BPS, perSecondToApy } from '@mezodot/sdk';
 import { ChainLogo, ChainLogoStack, TokenLogo } from '../components/Logos';
 import { LoopDiagram, prdLoopPlan } from '../components/LoopDiagram';
-import { HubPending, QueryError } from '../components/StatusBanners';
-import { EventIcon, InfoBar, NotDeployed, PageTitle, Pagination, PanelTitle, PriceNotice, StatCard, SummaryStrip, TxLink } from '../components/ui';
-import { HUB, HUB_DEPLOYED, SPOKES, networkByName, spokeByWormholeChain } from '../chain/env';
-import { useActivity } from '../data/activity';
-import { loopVolumeUsd, useAgent, useHubStatus, useLoopStats, usePosition, usePrices, useProtocol, useValuedPosition } from '../data/hooks';
-import { compactUsd, fmt, fmtApy, fmtHealth, money, pct, timeAgo, units } from '../lib/format';
-import { paginate } from '../lib/paginate';
-import { protocolTotals } from '../lib/tvl';
+import { HubPending } from '../components/StatusBanners';
+import { InfoBar, NotDeployed, PageTitle, PanelTitle, StatCard, SummaryStrip } from '../components/ui';
+import { HUB, HUB_DEPLOYED, SPOKES, spokeByWormholeChain } from '../chain/env';
+import { loopVolumeUsd, useAgent, useHubStatus, useLoopStats, usePrices, useProtocol } from '../data/hooks';
+import { compactUsd, fmt, fmtApy, money, pct, timeAgo, units } from '../lib/format';
+import { collateralTotals, protocolTotals } from '../lib/tvl';
 import { useUi } from '../state/UiContext';
-import { HealthBar } from './shared';
 
 type Stats = { crossChainBorrowRatio: number | null; borrowers: number };
 
-const ACTIVITY_PAGE_SIZE = 5;
-
+/** The protocol at a glance. The connected wallet's own position and history are on Portfolio. */
 export function Dashboard() {
   const { go } = useUi();
-  const { address, isConnected } = useAccount();
+  const { isConnected } = useAccount();
   const protocol = useProtocol().data;
   const prices = usePrices().data;
   const loops = useLoopStats().data;
   const stats = useAgent<Stats>('/stats').data;
-  const { valued, unpriced, unpricedDebts, relayError } = useValuedPosition();
   const hub = useHubStatus();
-  const positionQuery = usePosition();
-  const activityQuery = useActivity();
-  const activity = activityQuery.data?.items ?? [];
-  // The page belongs to the wallet it was picked for: another wallet starts on its newest events.
-  const [activityPage, setActivityPage] = useState<{ owner?: string; page: number }>({ page: 0 });
-  const shownActivity = paginate(activity, activityPage.owner === address ? activityPage.page : 0, ACTIVITY_PAGE_SIZE);
 
   // TVL net of borrows (idle pool cash, hub BTC, spoke collateral); supply and borrows are shown beside it.
   const totals = protocol && prices ? protocolTotals(protocol, prices.prices) : null;
-  const status = valued ? healthStatus(valued.healthFactor) : null;
+  const collateral = protocol && prices ? collateralTotals(protocol, prices.prices) : [];
   const demoLoop = prdLoopPlan(protocol?.collaterals);
   // "Live" only while the hub reads succeed: not before the first one, nor once they fail (values then are older).
   const live = protocol !== undefined && hub.error === null;
@@ -49,9 +37,16 @@ export function Dashboard() {
         title="Capital, in motion."
         subtitle="An omnichain money market for MUSD and MEZO: ERC-4626 yield, cross-chain collateral via Wormhole, and 1-click loops on the Mezo Hub."
         right={
-          <button className="button button--dark" onClick={() => go('loop')}>
-            <Zap size={15} /> Open loop desk <ArrowRight size={14} />
-          </button>
+          <>
+            {isConnected && (
+              <button className="button button--outline" onClick={() => go('portfolio')}>
+                <Wallet size={15} /> Your portfolio
+              </button>
+            )}
+            <button className="button button--dark" onClick={() => go('loop')}>
+              <Zap size={15} /> Open loop desk <ArrowRight size={14} />
+            </button>
+          </>
         }
       />
       <SummaryStrip
@@ -200,7 +195,7 @@ export function Dashboard() {
         </article>
       </div>
 
-      <div className="dashboard-lower">
+      <div className="dashboard-tables">
         <section className="panel market-panel">
           <PanelTitle
             label="Markets"
@@ -271,121 +266,60 @@ export function Dashboard() {
           </div>
         </section>
 
-        <section className="panel position-panel">
+        <section className="panel market-panel">
           <PanelTitle
-            label="Your position"
-            meta={
-              !isConnected
-                ? 'Connect a wallet'
-                : unpricedDebts.length > 0
-                  ? 'Debt without a fresh price at its last stored price'
-                  : 'Valued at prices the protocol accepts now'
+            label="Collateral"
+            meta="Accepted on the hub and on spokes · posted by every account"
+            action={
+              <button className="text-link" onClick={() => go('borrow')}>
+                Borrow against it <ArrowRight size={13} />
+              </button>
             }
           />
-          {valued ? (
-            <>
-              <div className="position-value">
-                <div>
-                  <span>NET COLLATERAL − DEBT</span>
-                  <strong>{money(valued.collateralUsd - valued.debtUsd)}</strong>
-                </div>
-                {/* With a debt unpriced every borrow reverts (debt is priced strictly), so no limit is offered. */}
-                <span className="value-chip">{unpricedDebts.length > 0 ? 'Borrowing blocked' : `Borrow limit ${money(valued.borrowLimitUsd)}`}</span>
-              </div>
-              <div className="position-list">
-                {valued.collateral
-                  .filter((c) => c.balance > 0n)
-                  .map((c) => (
-                    <div key={c.collateral.id}>
-                      <TokenLogo symbol={c.collateral.symbol} network={spokeByWormholeChain(c.collateral.chainId)?.name} size={23} />
-                      <span>
-                        <b>{c.collateral.symbol} collateral</b>
-                        <small>
-                          {fmt(c.units, 4)} · {c.collateral.isRemote ? `spoke chain ${c.collateral.chainId}` : 'Mezo Hub'}
-                        </small>
-                      </span>
-                      <strong>{money(c.valueUsd)}</strong>
-                    </div>
-                  ))}
-                {valued.debts
-                  .filter((d) => d.amount > 0n)
-                  .map((d) => (
-                    <div key={d.market.id}>
-                      <TokenLogo symbol={d.market.symbol} size={23} />
-                      <span>
-                        <b>{d.market.symbol} borrowed</b>
-                        <small>{fmtApy(perSecondToApy(d.market.borrowRatePerSecond))} borrow APY</small>
-                      </span>
-                      <strong className="debt-value">−{money(d.valueUsd)}</strong>
-                    </div>
-                  ))}
-                {valued.collateral.every((c) => c.balance === 0n) && valued.debts.every((d) => d.amount === 0n) && (
-                  <p className="muted-note">No collateral or debt yet.</p>
-                )}
-              </div>
-              <div className="health-row">
-                <div>
-                  <span>HEALTH FACTOR</span>
-                  <b className={`tone-${status!.tone}`}>{fmtHealth(valued.healthFactor)}</b>
-                </div>
-                <HealthBar hf={valued.healthFactor} />
-                <span className={`health-status tone-${status!.tone}`}>{status!.label}</span>
-              </div>
-              <PriceNotice unpriced={unpriced} relayError={relayError} unpricedDebts={unpricedDebts} />
-            </>
-          ) : (
-            <PositionPending connected={isConnected} error={positionQuery.error} onRetry={() => void positionQuery.refetch()} />
-          )}
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ASSET</th>
+                  <th>HELD ON</th>
+                  <th>MAX LTV</th>
+                  <th>LIQUIDATION</th>
+                  <th>BONUS</th>
+                  <th>POSTED</th>
+                </tr>
+              </thead>
+              <tbody>
+                {collateral.map(({ collateral: c, valueUsd }) => {
+                  const spoke = c.isRemote ? spokeByWormholeChain(c.chainId) : undefined;
+                  return (
+                    <tr key={c.id}>
+                      <td>
+                        <div className="asset-cell">
+                          <TokenLogo symbol={c.symbol} network={spoke?.name} />
+                          <span>
+                            <b>{c.symbol}</b>
+                            {!c.enabled && <small>Not accepted now</small>}
+                          </span>
+                        </div>
+                      </td>
+                      <td>{c.isRemote ? (spoke?.label ?? `Spoke chain ${c.chainId}`) : 'Mezo Hub'}</td>
+                      <td>{c.ltvBps / 100}%</td>
+                      <td>{c.ltBps / 100}%</td>
+                      <td>{c.bonusBps / 100}%</td>
+                      <td>{compactUsd(valueUsd)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {!protocol && <HubPending what="collateral" />}
         </section>
       </div>
-
-      <section className="activity-preview panel">
-        <PanelTitle
-          label="Your recent activity"
-          meta="On-chain events"
-          action={
-            <button className="text-link" onClick={() => go('activity')}>
-              Open activity <ArrowRight size={13} />
-            </button>
-          }
-        />
-        <div className="activity-rows">
-          {shownActivity.rows.map((item) => (
-            <div className="activity-row" key={item.id}>
-              <EventIcon kind={item.kind} />
-              <span className="activity-row-main">
-                <b>
-                  {item.kind} {fmt(units(item.amount, item.decimals), 4)} {item.asset}
-                </b>
-                <small>{item.detail}</small>
-              </span>
-              <TxLink network={networkByName(item.network) ?? HUB} hash={item.txHash} />
-              <span className="activity-row-time">{item.timestamp ? timeAgo(item.timestamp) : ''}</span>
-            </div>
-          ))}
-          {activityQuery.isError && <QueryError error={activityQuery.error} what="your on-chain history" onRetry={() => void activityQuery.refetch()} />}
-          {activity.length === 0 && !activityQuery.isError && <ActivityPending connected={isConnected} loaded={activityQuery.data !== undefined} />}
-        </div>
-        <Pagination page={shownActivity} label="Activity" onPage={(page) => setActivityPage({ owner: address, page })} />
-      </section>
 
       <InfoBar title="Unaudited testnet protocol." action="How it works" onAction={() => go('architecture')}>
         Smart contracts on {HUB.label} and spoke testnets. Use test funds only.
       </InfoBar>
     </>
   );
-}
-
-/** Why the activity list is empty: no wallet, no events, or history still waiting on (or failing) the hub read. */
-function ActivityPending({ connected, loaded }: { connected: boolean; loaded: boolean }) {
-  if (!connected) return <p className="muted-note">Connect a wallet to see your activity.</p>;
-  if (loaded) return <p className="muted-note">No activity yet.</p>;
-  return <HubPending what="your activity" />;
-}
-
-/** Why the position panel is empty: no wallet, the hub read failing, the position read failing, or still loading. */
-function PositionPending({ connected, error, onRetry }: { connected: boolean; error: unknown; onRetry: () => void }) {
-  if (!connected) return <p className="muted-note">Connect a wallet to see your collateral, debt and health factor.</p>;
-  if (error) return <QueryError error={error} what="your position" onRetry={onRetry} />;
-  return <HubPending what="your position" />;
 }
