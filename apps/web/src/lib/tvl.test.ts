@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PRICE_KEYS, type ProtocolState } from '@mezodot/sdk';
-import { protocolTotals } from './tvl';
+import { prices, protocol as hub } from '../test/fixtures';
+import { collateralTotals, protocolTotals } from './tvl';
 
 const E18 = 10n ** 18n;
 
@@ -29,5 +30,23 @@ describe('protocol totals (audit: TVL counted borrowed and looped liquidity)', (
 
   it('counts unpriced assets as zero', () => {
     expect(protocolTotals(protocol, { BTC: 80_000 }).tvl).toBeCloseTo(40_000, 6);
+  });
+});
+
+describe('collateral totals', () => {
+  it('values posted pTokens through the pool exchange rate, and BTC and spoke tokens as held', () => {
+    const rows = collateralTotals(hub, prices);
+    expect(rows.map((r) => r.collateral.symbol)).toEqual(['pMUSD', 'BTC', 'WETH']);
+    // 1,000 pMUSD at 1.1 MUSD each; 2 BTC at $60,000; 3 WETH at $3,000.
+    expect(rows[0].units).toBeCloseTo(1_100, 9);
+    expect(rows[0].valueUsd).toBeCloseTo(1_100, 9);
+    expect(rows[1].units).toBeCloseTo(2, 9);
+    expect(rows[1].valueUsd).toBeCloseTo(120_000, 9);
+    expect(rows[2].units).toBeCloseTo(3, 9);
+    expect(rows[2].valueUsd).toBeCloseTo(9_000, 9);
+  });
+
+  it('values collateral without a price at zero', () => {
+    expect(collateralTotals(hub, { MUSD: 1 }).map((r) => r.valueUsd)).toEqual([expect.closeTo(1_100, 9), 0, 0]);
   });
 });

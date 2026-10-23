@@ -12,6 +12,7 @@ import {
   Radio,
   RefreshCw,
   Route,
+  Wallet,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -34,26 +35,30 @@ import { Dashboard } from './pages/Dashboard';
 import { Loop } from './pages/Loop';
 import { Landing } from './pages/Landing';
 import { Markets } from './pages/Markets';
+import { Portfolio } from './pages/Portfolio';
 import { TxProvider } from './state/TxContext';
 import { UiProvider, useUi } from './state/UiContext';
 
-type NavItem = { key: View; label: string; icon: LucideIcon; group: 'PROTOCOL' | 'CAPITAL' | 'INTELLIGENCE' };
+// PROTOCOL is the same for everyone; ACCOUNT is the connected wallet's own (positions and history).
+const NAV_GROUPS = ['PROTOCOL', 'ACCOUNT', 'CAPITAL', 'INTELLIGENCE'] as const;
+type NavItem = { key: View; label: string; icon: LucideIcon; group: (typeof NAV_GROUPS)[number] };
 
 const NAV_ITEMS: NavItem[] = [
   { key: 'dashboard', label: 'Overview', icon: LayoutDashboard, group: 'PROTOCOL' },
   { key: 'markets', label: 'Markets', icon: BarChart3, group: 'PROTOCOL' },
+  { key: 'portfolio', label: 'Portfolio', icon: Wallet, group: 'ACCOUNT' },
+  { key: 'activity', label: 'Activity', icon: ActivityIcon, group: 'ACCOUNT' },
   { key: 'crosschain', label: 'Cross-chain', icon: Route, group: 'CAPITAL' },
   { key: 'borrow', label: 'Borrow', icon: ArrowDownLeft, group: 'CAPITAL' },
   { key: 'loop', label: 'Loop', icon: RefreshCw, group: 'CAPITAL' },
   { key: 'agents', label: 'Agents & risk', icon: Radio, group: 'INTELLIGENCE' },
   { key: 'architecture', label: 'Architecture', icon: Network, group: 'INTELLIGENCE' },
-  { key: 'activity', label: 'Activity', icon: ActivityIcon, group: 'INTELLIGENCE' },
 ];
-const NAV_GROUPS = ['PROTOCOL', 'CAPITAL', 'INTELLIGENCE'] as const;
 
 /** App views; the landing page renders on its own, outside the app shell. */
 const PAGES: Record<Exclude<View, 'landing'>, () => JSX.Element> = {
   dashboard: Dashboard,
+  portfolio: Portfolio,
   markets: Markets,
   crosschain: Crosschain,
   borrow: Borrow,

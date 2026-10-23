@@ -13,9 +13,9 @@ import { borrowBlocked, borrowRoom, repayWithSharesPlan, useHubFlags } from '../
 import { borrowHeadroomUsd } from '../data/limits';
 import { useHubClient, useValuedPosition } from '../data/hooks';
 import { floorUnits, parseInput, toInput } from '../lib/amount';
-import { fmt, fmtApy, fmtHealth, money, pct, units } from '../lib/format';
+import { fmt, fmtApy, fmtHealth, money, units } from '../lib/format';
 import { useUi } from '../state/UiContext';
-import { HealthGauge, LtvMeter } from './shared';
+import { PositionHealth } from './shared';
 
 export function Borrow() {
   const { go, openModal } = useUi();
@@ -41,11 +41,9 @@ export function Borrow() {
   // VaultManager prices debt strictly: while a debt has no usable price every borrow reverts (PriceNotice says why).
   const invalid = parsed === null || parsed > maxBorrow || blocked !== null || unpricedDebts.length > 0;
   const hfAfter = valued ? (valued.debtUsd + value * price > 0 ? valued.adjustedCollateralUsd / (valued.debtUsd + value * price) : Infinity) : Infinity;
-  const status = healthStatus(valued?.healthFactor ?? Infinity);
   const debt = market ? (position?.debts.find((d) => d.marketId === market.id)?.amount ?? 0n) : 0n;
-  const ltvMarks = protocol?.collaterals.filter((c) => valued?.collateral.find((v) => v.collateral.id === c.id && v.balance > 0n)) ?? [];
-  const maxLtv = valued && valued.collateralUsd > 0 ? valued.borrowLimitUsd / valued.collateralUsd : 0.75;
-  const liqLtv = valued && valued.collateralUsd > 0 ? valued.adjustedCollateralUsd / valued.collateralUsd : 0.8;
+  // Posted collateral, as one total here; Portfolio lists it asset by asset.
+  const held = valued?.collateral.filter((c) => c.balance > 0n) ?? [];
 
   // Debt in a pool can also be repaid by burning posted shares of that pool (pMUSD for MUSD): no MUSD needed.
   const shareCollateral = market ? protocol?.collaterals.find((c) => c.isShare && c.token.toLowerCase() === market.pool.toLowerCase()) : undefined;
@@ -96,22 +94,28 @@ export function Borrow() {
           <PanelTitle label="Borrow" meta="Mezo Hub · MezodotPool" />
           <div className="borrow-from">
             <div>
-              <span className="field-label">COLLATERAL POSITION</span>
-              {(valued?.collateral.filter((c) => c.balance > 0n) ?? []).map((c) => (
-                <div className="collateral-detail" key={c.collateral.id}>
-                  <TokenLogo symbol={c.collateral.symbol} network={spokeByWormholeChain(c.collateral.chainId)?.name} size={29} />
+              <span className="field-label">COLLATERAL</span>
+              {valued && held.length > 0 && (
+                <div className="collateral-detail">
+                  <span className="collateral-logos" aria-hidden="true">
+                    {held.map((c) => (
+                      <TokenLogo key={c.collateral.id} symbol={c.collateral.symbol} network={spokeByWormholeChain(c.collateral.chainId)?.name} size={24} />
+                    ))}
+                  </span>
                   <span>
-                    <b>
-                      {fmt(c.units, 4)} {c.collateral.symbol}
-                    </b>
+                    <b>{money(valued.collateralUsd)}</b>
                     <small>
-                      {c.collateral.isRemote ? `${spokeByWormholeChain(c.collateral.chainId)?.label ?? 'Spoke'} · ` : 'Mezo Hub · '}
-                      {money(c.valueUsd)} · LTV {c.collateral.ltvBps / 100}%
+                      across {held.length} asset{held.length === 1 ? '' : 's'}
                     </small>
                   </span>
                 </div>
-              ))}
-              {valued && valued.collateralUsd === 0 && <p className="muted-note">No collateral posted yet.</p>}
+              )}
+              {valued && held.length === 0 && <p className="muted-note">No collateral posted yet.</p>}
+              {isConnected && (
+                <button className="text-link collateral-breakdown" onClick={() => go('portfolio')}>
+                  View in Portfolio <ArrowRight size={13} />
+                </button>
+              )}
             </div>
             <div className="borrow-add-links">
               <button className="text-link" onClick={() => go('markets')}>
@@ -200,46 +204,7 @@ export function Borrow() {
         </section>
 
         <div className="borrow-side">
-          <section className="panel risk-panel">
-            <PanelTitle
-              label="Position health"
-              meta="Fresh-price valuation"
-              action={
-                <span className={`health-badge tone-${status.tone}`}>
-                  <i /> {status.label}
-                </span>
-              }
-            />
-            <div className="health-overview">
-              <div className="health-number">
-                <span>HEALTH FACTOR</span>
-                <strong className={`tone-${status.tone}`}>{fmtHealth(valued?.healthFactor ?? Infinity)}</strong>
-                <em>Liquidatable below 1.00×</em>
-              </div>
-              <HealthGauge hf={valued?.healthFactor ?? Infinity} />
-            </div>
-            <div className="risk-meter">
-              <div>
-                <span>Current LTV</span>
-                <b>{pct(valued?.ltv ?? 0)}</b>
-              </div>
-              <LtvMeter ltv={valued?.ltv ?? 0} maxLtv={maxLtv} liqLtv={liqLtv} hf={valued?.healthFactor ?? Infinity} />
-            </div>
-            <div className="risk-math">
-              <span>
-                Collateral value <b>{money(valued?.collateralUsd ?? 0)}</b>
-              </span>
-              <span>
-                Borrow limit <b>{money(valued?.borrowLimitUsd ?? 0)}</b>
-              </span>
-              <span>
-                Outstanding debt <b>{money(valued?.debtUsd ?? 0)}</b>
-              </span>
-              <span>
-                Available <b className="positive-text">{money(valued?.availableUsd ?? 0)}</b>
-              </span>
-            </div>
-          </section>
+          <PositionHealth valued={valued} />
           <div className="panel vaultmanager-note">
             <span className="note-icon">
               <ShieldAlert size={17} />
@@ -248,7 +213,7 @@ export function Borrow() {
               <b>One risk view, multiple chains.</b>
               <p>
                 VaultManager sums every collateral — pTokens on Mezo and WETH/USDC on spokes — weighted by its LTV and liquidation threshold.{' '}
-                {ltvMarks.length > 1 ? 'Limits shown are the blended thresholds of your collateral mix.' : ''}
+                {held.length > 1 ? 'Limits shown are the blended thresholds of your collateral mix.' : ''}
               </p>
             </div>
           </div>

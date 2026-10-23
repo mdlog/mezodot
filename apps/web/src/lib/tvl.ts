@@ -1,5 +1,5 @@
 import type { Hex } from 'viem';
-import { symbolForPriceKey, type ProtocolState, type UsdPrices } from '@mezodot/sdk';
+import { pTokenUnits, symbolForPriceKey, type CollateralState, type ProtocolState, type UsdPrices } from '@mezodot/sdk';
 
 /** Protocol totals in USD. */
 export type ProtocolTotals = {
@@ -32,4 +32,17 @@ export function protocolTotals(protocol: ProtocolState, prices: UsdPrices): Prot
     if (!c.isShare) tvl += (Number(c.total) / 10 ** c.decimals) * priceOf(c.priceKey);
   }
   return { tvl, supplied, borrowed };
+}
+
+/** One collateral type and what every account has posted of it, in underlying units and USD. */
+export type CollateralTotal = { collateral: CollateralState; units: number; valueUsd: number };
+
+/** Collateral posted across the protocol: pTokens through their pool's exchange rate, BTC and spoke tokens as held. */
+export function collateralTotals(protocol: ProtocolState, prices: UsdPrices): CollateralTotal[] {
+  return protocol.collaterals.map((c) => {
+    const market = c.isShare ? protocol.markets.find((m) => m.pool.toLowerCase() === c.token.toLowerCase()) : undefined;
+    const units = c.isShare ? (market ? pTokenUnits(market, c.total) : 0) : Number(c.total) / 10 ** c.decimals;
+    const symbol = symbolForPriceKey(c.priceKey);
+    return { collateral: c, units, valueUsd: units * (symbol ? (prices[symbol] ?? 0) : 0) };
+  });
 }

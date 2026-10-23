@@ -12,6 +12,7 @@ describe('hash routes', () => {
     expect(viewFromHash('#/dashboard')).toBe('dashboard');
     expect(viewFromHash('#/markets')).toBe('markets');
     expect(viewFromHash('#activity')).toBe('activity');
+    expect(viewFromHash('#/portfolio')).toBe('portfolio');
   });
 
   it('round-trips each view through its hash', () => {
