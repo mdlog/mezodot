@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="apps/web/public/mezodot-mark.svg" alt="Mezodot logo" width="112" height="112" />
+  <img src="apps/web/public/mezodot-logo.svg" alt="Mezodot logo" width="112" height="112" />
 </p>
 
 <h1 align="center">Mezodot Protocol</h1>
