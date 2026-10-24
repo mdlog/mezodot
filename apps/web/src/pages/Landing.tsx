@@ -1,65 +1,31 @@
-import { useEffect, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
-import {
-  ArrowRight,
-  ArrowUpRight,
-  Bot,
-  Coins,
-  GitBranch,
-  Layers3,
-  LockKeyhole,
-  Radio,
-  RefreshCw,
-  ShieldCheck,
-  Undo2,
-  Waves,
-  type LucideIcon,
-} from 'lucide-react';
-import { BPS, FLASH_FEE_BPS, perSecondToApy } from '@mezodot/sdk';
-import { ChainLogo, TokenLogo } from '../components/Logos';
-import { LoopDiagram, prdLoopPlan } from '../components/LoopDiagram';
+import { useEffect, type MouseEvent } from 'react';
+import { ArrowRight, ArrowUpRight, Layers3, Radio, ShieldCheck, Waves, type LucideIcon } from 'lucide-react';
+import { perSecondToApy } from '@mezodot/sdk';
 import { Brand } from '../components/ui';
-import { HUB, SPOKES } from '../chain/env';
-import { computeTvl, loopVolumeUsd, useAgent, useHubStatus, useLoopStats, usePrices, useProtocol } from '../data/hooks';
+import { useProtocol } from '../data/hooks';
 import type { View } from '../hooks/useHashRoute';
 import { AgentConsole } from '../landing/AgentConsole';
-import { HeroNetwork } from '../landing/HeroNetwork';
-import { prefersReducedMotion, useCountUp, useInView, useScrolled } from '../landing/motion';
+import { Journey } from '../landing/Journey';
+import { OrbitHero } from '../landing/OrbitHero';
+import { Simulator } from '../landing/Simulator';
+import { prefersReducedMotion, useInView, useScrolled } from '../landing/motion';
 import { YieldSpark } from '../landing/YieldSpark';
-import { compactUsd, fmt, fmtApy, pct, units } from '../lib/format';
+import { fmt, fmtApy, units } from '../lib/format';
 import { useUi } from '../state/UiContext';
 import '../landing/landing.css';
 
 const SECTIONS = [
-  ['product', 'Product'],
-  ['how', 'How it works'],
+  ['journey', 'How it works'],
+  ['simulator', 'Try it'],
+  ['features', 'Features'],
   ['security', 'Security'],
 ] as const;
-
-/** Spoke chains with a SpokeGateway deployed in this environment. */
-const DEPLOYED_SPOKES = SPOKES.filter((s) => s.deployment).length;
-
-/** True while the figures come from hub reads that just succeeded: only then may the page say "live". */
-function useHubLive(): boolean {
-  const protocol = useProtocol().data;
-  const { error } = useHubStatus();
-  return protocol !== undefined && error === null;
-}
 
 /** Scrolls to a section without touching the hash, which the router owns. */
 const jumpTo = (id: string) => (e: MouseEvent) => {
   e.preventDefault();
   document.getElementById(id)?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' });
 };
-
-/** Fades its content up the first time it scrolls into view. */
-function Reveal({ children, className = '', delay = 0 }: { children: ReactNode; className?: string; delay?: number }) {
-  const [ref, seen] = useInView<HTMLDivElement>();
-  return (
-    <div ref={ref} className={`reveal${seen ? ' is-visible' : ''} ${className}`} style={{ '--reveal-delay': `${delay}ms` } as CSSProperties}>
-      {children}
-    </div>
-  );
-}
 
 export function Landing() {
   const { go } = useUi();
@@ -78,10 +44,10 @@ export function Landing() {
     <div className="landing">
       <LandingNav onLaunch={launch} />
       <main>
-        <Hero onLaunch={launch} />
-        <LiveStats />
-        <Product />
-        <HowItWorks />
+        <OrbitHero onLaunch={launch} />
+        <Journey />
+        <Simulator onOpen={() => go('crosschain')} />
+        <Features onPortfolio={() => go('portfolio')} />
         <Security onArchitecture={() => go('architecture')} />
         <Closing onLaunch={launch} />
       </main>
@@ -121,258 +87,61 @@ function LandingNav({ onLaunch }: { onLaunch: () => void }) {
   );
 }
 
-function Hero({ onLaunch }: { onLaunch: () => void }) {
-  const live = useHubLive();
-  return (
-    <section className="lp-hero">
-      <div className="lp-hero-backdrop" aria-hidden="true" />
-      <div className="lp-container lp-hero-grid">
-        <div className="lp-hero-copy">
-          <span className="lp-pill">
-            {live && <i />}
-            {live ? `Live on ${HUB.label}` : HUB.label} · {DEPLOYED_SPOKES} spoke chain{DEPLOYED_SPOKES === 1 ? '' : 's'}
-          </span>
-          <h1>
-            Capital, <em>in motion.</em>
-          </h1>
-          <p className="lp-lead">
-            An omnichain money market on Mezo. Earn ERC-4626 yield on MUSD and MEZO, borrow against BTC on Mezo or WETH and USDC that never leave Base or
-            Ethereum, and go long BTC up to 3× in a single transaction.
-          </p>
-          <div className="lp-cta-row">
-            <button className="lp-button lp-button--primary" onClick={onLaunch}>
-              Launch app <ArrowRight size={16} />
-            </button>
-            <a className="lp-button lp-button--ghost" href="#how" onClick={jumpTo('how')}>
-              How it works
-            </a>
-          </div>
-          <ul className="lp-proof">
-            <li>
-              <Waves size={14} /> Wormhole guardian-signed messages
-            </li>
-            <li>
-              <Radio size={14} /> Pyth and Supra prices
-            </li>
-            <li>
-              <Coins size={14} /> ERC-4626 vault shares
-            </li>
-          </ul>
-        </div>
-        <div className="lp-hero-visual">
-          <HeroNetwork />
-          {(['WETH', 'USDC', 'MUSD', 'MEZO'] as const).map((s) => (
-            <span key={s} className={`lp-chip lp-chip--${s.toLowerCase()}`} aria-hidden="true">
-              <TokenLogo symbol={s} size={22} /> {s}
-            </span>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
+/** A few of the tools the agent's MCP server registers (services/agent/src/mcp/server.ts). */
+const MCP_TOOLS = ['get_position', 'get_risk_report', 'simulate_borrow', 'simulate_loop', 'list_liquidatable', 'relay_message'];
 
-type Stats = { crossChainBorrowRatio: number | null; borrowers: number };
-
-function LiveStats() {
-  const protocol = useProtocol().data;
-  const live = useHubLive();
-  const prices = usePrices().data;
-  const loops = useLoopStats().data;
-  const stats = useAgent<Stats>('/stats').data;
-  const [ref, seen] = useInView<HTMLDivElement>(0.3);
-  const tvl = useCountUp(protocol && prices ? computeTvl(protocol, prices.prices) : null, seen);
-  const volume = useCountUp(loops ? loopVolumeUsd(loops, prices?.prices) : null, seen);
-  const ratio = useCountUp(stats?.crossChainBorrowRatio ?? null, seen);
-  const chains = useCountUp(1 + DEPLOYED_SPOKES, seen, 900);
-  const items = [
-    { label: 'Total value locked', value: tvl === null ? '—' : compactUsd(tvl), foot: 'Hub pools and spoke collateral' },
-    {
-      label: 'Leverage volume',
-      value: volume === null ? '—' : compactUsd(volume),
-      foot: `${(loops?.musdLoops ?? 0) + (loops?.btcPositions ?? 0)} one-transaction positions`,
-    },
-    { label: 'Debt backed cross-chain', value: ratio === null ? '—' : pct(ratio), foot: 'Borrowed against Base and Ethereum collateral' },
-    {
-      label: 'Chains, one market',
-      value: chains === null ? '—' : fmt(Math.round(chains)),
-      foot: [HUB, ...SPOKES.filter((n) => n.deployment)].map((n) => n.label.split(' ')[0]).join(' · '),
-    },
-  ];
-  return (
-    <section className="lp-stats" aria-label="Live protocol figures">
-      <div ref={ref} className="lp-container">
-        <div className="lp-stats-head">
-          {/* "Live" only while the hub answers: before the first read, or once reads fail, it just names the network. */}
-          <span className="lp-live">
-            {live && <i />}
-            {live ? `LIVE ON ${HUB.label.toUpperCase()}` : HUB.label.toUpperCase()}
-          </span>
-          {protocol && <span>block {fmt(Number(protocol.blockNumber))}</span>}
-        </div>
-        <div className="lp-stats-grid">
-          {items.map((s, i) => (
-            <Reveal key={s.label} className="lp-stat" delay={i * 90}>
-              <span>{s.label}</span>
-              <strong>{s.value}</strong>
-              <small>{s.foot}</small>
-            </Reveal>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function SectionHead({ eyebrow, title, accent, body }: { eyebrow: string; title: string; accent: string; body: string }) {
-  return (
-    <Reveal className="lp-section-head">
-      <span className="lp-eyebrow">{eyebrow}</span>
-      <h2>
-        {title} <em>{accent}</em>
-      </h2>
-      <p>{body}</p>
-    </Reveal>
-  );
-}
-
-function FeatureCopy({ icon: Icon, kicker, title, body }: { icon: LucideIcon; kicker: string; title: string; body: string }) {
-  return (
-    <div className="lp-feature-copy">
-      <span className="lp-kicker">
-        <Icon size={14} /> {kicker}
-      </span>
-      <h3>{title}</h3>
-      <p>{body}</p>
-    </div>
-  );
-}
-
-/** Spokes on the left, the hub on the right, messages running between them. */
-function RouteStrip() {
-  return (
-    <div className="route-strip" aria-hidden="true">
-      <div className="route-end">
-        <span className="route-logos">
-          <ChainLogo network="base-sepolia" size={34} />
-          <ChainLogo network="eth-sepolia" size={34} />
-        </span>
-        <small>lock on a spoke</small>
-      </div>
-      <div className="route-wire">
-        <span className="route-label">VAA · guardian quorum</span>
-        <i />
-        <i />
-        <i />
-      </div>
-      <div className="route-end">
-        <ChainLogo network="mezo-testnet" size={40} />
-        <small>credit on Mezo</small>
-      </div>
-    </div>
-  );
-}
-
-function Product() {
+function Features({ onPortfolio }: { onPortfolio: () => void }) {
   const protocol = useProtocol().data;
   const musd = protocol?.markets.find((m) => m.symbol === 'MUSD');
   const [consoleRef, consoleSeen] = useInView<HTMLDivElement>();
+  const [yieldRef, yieldSeen] = useInView<HTMLDivElement>();
   return (
-    <section id="product" className="lp-section">
+    <section id="features" className="lp-features" aria-labelledby="lp-features-title">
       <div className="lp-container">
-        <SectionHead
-          eyebrow="PRODUCT"
-          title="One market. Three chains."
-          accent="No bridged principal."
-          body="Everything settles on the Mezo Hub. Only guardian-signed messages cross chains, so collateral stays exactly where it was locked."
-        />
-        <div className="lp-feature-grid">
-          <Reveal className="lp-feature lp-feature--wide">
-            <FeatureCopy
-              icon={GitBranch}
-              kicker="CROSS-CHAIN COLLATERAL"
-              title="Borrow on Mezo against assets on Base and Ethereum"
-              body="Lock WETH or USDC in a SpokeGateway. Wormhole guardians sign the deposit once its block is final, and VaultManager credits it to one health factor on the hub. Repay, and a release message unlocks it at home."
-            />
-            <RouteStrip />
-          </Reveal>
-          <Reveal className="lp-feature">
-            <FeatureCopy
-              icon={Coins}
-              kicker="ERC-4626 YIELD"
-              title="Shares that grow with every borrow"
-              body="Supply MUSD or MEZO and receive pMUSD or pMEZO. Their exchange rate rises as borrower interest accrues, and keeps rising while they are posted as collateral."
-            />
-            <YieldSpark
-              rate={musd ? fmt(units(musd.exchangeRate, musd.decimals), 6) : '1.000000'}
-              apy={musd ? fmtApy(perSecondToApy(musd.supplyRatePerSecond)) : '—'}
-            />
-          </Reveal>
-          <Reveal className="lp-feature" delay={90}>
-            <FeatureCopy
-              icon={RefreshCw}
-              kicker="ONE-TRANSACTION LEVERAGE"
-              title="Long BTC up to 3×, or loop MUSD, in one signature"
-              body={`A flash swap on Mezo's Tigris DEX hands over the BTC first; it is posted and the MUSD you borrow pays the pool, with no flash fee. The MUSD loop takes the pool's own flash loan (${pct(FLASH_FEE_BPS / BPS, 2)} to reserves) and unwinds by netting the debt against your pMUSD.`}
-            />
-            <div className="lp-feature-visual">
-              <LoopDiagram plan={prdLoopPlan(protocol?.collaterals)} />
-            </div>
-          </Reveal>
-          <Reveal className="lp-feature lp-feature--wide">
-            <FeatureCopy
-              icon={Bot}
-              kicker="AGENT-RUN RISK"
-              title="Keepers, relayers and oracles that never sleep"
-              body="The Mezodot agent relays Wormhole messages, attaches Supra price proofs and liquidates unhealthy positions, and offers the same tools to AI agents over MCP."
-            />
+        <header className="lp-section-head">
+          <h2 id="lp-features-title">Working while you are not</h2>
+          <p>Keepers watch every position, deposits keep earning, and one page shows where everything stands.</p>
+        </header>
+        <div className="lp-features-grid">
+          <article className="lp-feature lp-feature--agent">
+            <h3>Agents that never sleep</h3>
+            <p>
+              The Mezodot agent relays Wormhole messages, attaches Supra price proofs and liquidates unhealthy positions. AI agents get the same tools over MCP.
+            </p>
             <div ref={consoleRef}>
               <AgentConsole active={consoleSeen} />
             </div>
-          </Reveal>
+            <div className="lp-mcp">
+              <p>
+                Over MCP, an AI agent can read markets, positions and risk, simulate a borrow or a loop, and find positions to liquidate. Some of its tools:
+              </p>
+              <ul>
+                {MCP_TOOLS.map((t) => (
+                  <li key={t}>
+                    <code>{t}</code>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </article>
+          <article className="lp-feature">
+            <h3>Yield that stays in the share</h3>
+            <p>Supply MUSD or MEZO for pMUSD or pMEZO. The exchange rate rises as borrowers pay interest, and keeps rising while the shares back a loan.</p>
+            <div ref={yieldRef} className={yieldSeen ? 'is-visible' : undefined}>
+              <YieldSpark
+                rate={musd ? fmt(units(musd.exchangeRate, musd.decimals), 6) : '1.000000'}
+                apy={musd ? fmtApy(perSecondToApy(musd.supplyRatePerSecond)) : '—'}
+              />
+            </div>
+          </article>
+          <article className="lp-feature">
+            <h3>Everything you hold, on one page</h3>
+            <p>Supplied pTokens, collateral on every chain, debt and health factor, each with the action it allows.</p>
+            <button className="lp-text-link" onClick={onPortfolio}>
+              Open Portfolio <ArrowRight size={14} />
+            </button>
+          </article>
         </div>
-      </div>
-    </section>
-  );
-}
-
-const STEPS: { icon: LucideIcon; title: string; body: string }[] = [
-  { icon: LockKeyhole, title: 'Lock', body: 'Deposit WETH or USDC into the SpokeGateway on Base or Ethereum.' },
-  { icon: Waves, title: 'Sign', body: 'Once the block is final, about 15 to 20 minutes, a quorum of Wormhole guardians signs it.' },
-  { icon: ShieldCheck, title: 'Credit', body: 'The hub verifies the message and VaultManager credits your collateral on Mezo.' },
-  { icon: Coins, title: 'Borrow', body: 'Borrow MUSD or MEZO against one health factor across every chain.' },
-  { icon: Undo2, title: 'Release', body: 'Repay, and a release message unlocks your collateral on its own chain.' },
-];
-
-function HowItWorks() {
-  const [ref, seen] = useInView<HTMLOListElement>(0.35);
-  const motion = !prefersReducedMotion();
-  const [active, setActive] = useState(motion ? 0 : STEPS.length - 1);
-  useEffect(() => {
-    if (!seen || !motion) return;
-    const id = setInterval(() => setActive((a) => (a + 1) % STEPS.length), 2_400);
-    return () => clearInterval(id);
-  }, [seen, motion]);
-  return (
-    <section id="how" className="lp-section lp-section--tint">
-      <div className="lp-container">
-        <SectionHead
-          eyebrow="HOW IT WORKS"
-          title="From a spoke chain to MUSD"
-          accent="in five steps."
-          body="The same path the Cross-chain page walks you through, with a live countdown while the guardians wait for finality."
-        />
-        <ol ref={ref} className="lp-steps" style={{ '--progress': active / (STEPS.length - 1) } as CSSProperties}>
-          {STEPS.map((s, i) => (
-            <li key={s.title} className={i <= active ? 'is-done' : ''} aria-current={i === active ? 'step' : undefined}>
-              <span className="lp-step-icon">
-                <s.icon size={17} />
-              </span>
-              <b>{s.title}</b>
-              <p>{s.body}</p>
-            </li>
-          ))}
-        </ol>
       </div>
     </section>
   );
@@ -381,50 +150,50 @@ function HowItWorks() {
 const GUARANTEES: { icon: LucideIcon; title: string; body: string }[] = [
   {
     icon: Radio,
-    title: 'Two price sources',
-    body: 'Pyth, pushed on Mezo, and Supra pull proofs, each with staleness and confidence limits and cross-checked for divergence.',
+    title: 'Prices with limits',
+    body: 'Pyth prices every market on Mezo. ETH, USDC and BTC also carry a Supra pull proof as a second source. Every feed has staleness and confidence limits.',
   },
   {
     icon: Waves,
     title: 'Finalized, single-use messages',
-    body: 'Guardians sign only after source-chain finality. Every message is bound to its destination and can be consumed once.',
+    body: 'Guardians sign only after the source chain finalizes. Every message is bound to its destination and can be used once.',
   },
   {
     icon: Layers3,
     title: 'Losses absorbed in order',
-    body: 'Bad debt is written off against protocol reserves first; suppliers carry only what reserves cannot cover.',
+    body: "Bad debt is written off against the pool's reserves first. Suppliers carry only what reserves cannot cover.",
   },
-  { icon: ShieldCheck, title: 'Exits stay open', body: 'Pausing stops new deposits and borrows. Repaying, withdrawing and closing positions keep working.' },
+  {
+    icon: ShieldCheck,
+    title: 'Exits stay open',
+    body: 'Pausing stops new supply, borrowing and flash loans. Repaying, withdrawing and liquidations keep working.',
+  },
 ];
 
 function Security({ onArchitecture }: { onArchitecture: () => void }) {
   return (
-    <section id="security" className="lp-section">
+    <section id="security" className="lp-security" aria-labelledby="lp-security-title">
       <div className="lp-container">
-        <SectionHead
-          eyebrow="SECURITY"
-          title="Built to fail"
-          accent="safely."
-          body="Risk is enforced by the contracts on Mezo, not by an operator. The agent only does what anyone else could."
-        />
-        <div className="lp-guarantees">
-          {GUARANTEES.map((g, i) => (
-            <Reveal key={g.title} className="lp-guarantee" delay={i * 80}>
-              <span className="lp-guarantee-icon">
-                <g.icon size={18} />
-              </span>
+        <header className="lp-section-head">
+          <h2 id="lp-security-title">Built to fail safely</h2>
+          <p>Risk is enforced by the contracts on Mezo, not by an operator. The agent only does what anyone else could.</p>
+        </header>
+        <ul className="lp-guarantees">
+          {GUARANTEES.map((g) => (
+            <li key={g.title}>
+              <g.icon size={18} aria-hidden="true" />
               <b>{g.title}</b>
               <p>{g.body}</p>
-            </Reveal>
+            </li>
           ))}
-        </div>
-        <Reveal className="lp-audit-note">
-          <span className="lp-badge">UNAUDITED · TESTNET ONLY</span>
-          <p>Mezodot runs on Mezo Testnet, Base Sepolia and Ethereum Sepolia. Use test funds only.</p>
+        </ul>
+        <p className="lp-audit-note">
+          <span className="lp-badge">Unaudited, testnet only</span>
+          Mezodot runs on Mezo Testnet, Base Sepolia and Ethereum Sepolia. Use test funds only.
           <button className="lp-text-link" onClick={onArchitecture}>
             Read the architecture <ArrowRight size={14} />
           </button>
-        </Reveal>
+        </p>
       </div>
     </section>
   );
@@ -434,31 +203,43 @@ function Closing({ onLaunch }: { onLaunch: () => void }) {
   return (
     <section className="lp-closing">
       <div className="lp-container lp-closing-inner">
-        <Reveal>
-          <h2>
-            Put idle collateral <em>to work.</em>
-          </h2>
-          <p>Connect a wallet on Mezo Testnet, Base Sepolia or Ethereum Sepolia and open your first position in minutes.</p>
-        </Reveal>
+        <div>
+          <h2>Put idle collateral to work.</h2>
+          <p>Connect a wallet on Mezo Testnet, Base Sepolia or Ethereum Sepolia and open a position in minutes.</p>
+        </div>
         <button className="lp-button lp-button--primary" onClick={onLaunch}>
-          Launch app <ArrowRight size={16} />
+          Launch app <ArrowUpRight size={16} />
         </button>
       </div>
     </section>
   );
 }
 
-const APP_LINKS: [View, string][] = [
-  ['dashboard', 'Overview'],
-  ['markets', 'Markets'],
-  ['crosschain', 'Cross-chain'],
-  ['borrow', 'Borrow'],
-  ['loop', 'Loop'],
-];
-const PROTOCOL_LINKS: [View, string][] = [
-  ['architecture', 'Architecture'],
-  ['agents', 'Agents & risk'],
-  ['activity', 'Activity'],
+const FOOTER_LINKS: [string, [View, string][]][] = [
+  [
+    'App',
+    [
+      ['dashboard', 'Overview'],
+      ['markets', 'Markets'],
+      ['crosschain', 'Cross-chain'],
+      ['borrow', 'Borrow'],
+      ['loop', 'Loop'],
+    ],
+  ],
+  [
+    'Account',
+    [
+      ['portfolio', 'Portfolio'],
+      ['activity', 'Activity'],
+    ],
+  ],
+  [
+    'Protocol',
+    [
+      ['architecture', 'Architecture'],
+      ['agents', 'Agents & risk'],
+    ],
+  ],
 ];
 const ECOSYSTEM: [string, string][] = [
   ['https://mezo.org', 'Mezo'],
@@ -468,18 +249,6 @@ const ECOSYSTEM: [string, string][] = [
 ];
 
 function LandingFooter({ go }: { go: (view: View) => void }) {
-  const appLink = ([view, label]: [View, string]) => (
-    <a
-      key={view}
-      href={`#/${view}`}
-      onClick={(e) => {
-        e.preventDefault();
-        go(view);
-      }}
-    >
-      {label}
-    </a>
-  );
   return (
     <footer className="lp-footer">
       <div className="lp-container lp-footer-grid">
@@ -487,14 +256,23 @@ function LandingFooter({ go }: { go: (view: View) => void }) {
           <Brand />
           <p>Productive capital, across chains. Built on Mezo.</p>
         </div>
-        <nav aria-label="App">
-          <b>App</b>
-          {APP_LINKS.map(appLink)}
-        </nav>
-        <nav aria-label="Protocol">
-          <b>Protocol</b>
-          {PROTOCOL_LINKS.map(appLink)}
-        </nav>
+        {FOOTER_LINKS.map(([group, links]) => (
+          <nav key={group} aria-label={group}>
+            <b>{group}</b>
+            {links.map(([view, label]) => (
+              <a
+                key={view}
+                href={`#/${view}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  go(view);
+                }}
+              >
+                {label}
+              </a>
+            ))}
+          </nav>
+        ))}
         <nav aria-label="Ecosystem">
           <b>Ecosystem</b>
           {ECOSYSTEM.map(([href, label]) => (
@@ -506,7 +284,7 @@ function LandingFooter({ go }: { go: (view: View) => void }) {
       </div>
       <div className="lp-container lp-footer-base">
         <span>© 2026 Mezodot</span>
-        <span>UNAUDITED · TESTNET ONLY</span>
+        <span>Unaudited, testnet only</span>
       </div>
     </footer>
   );

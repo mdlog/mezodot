@@ -1,11 +1,19 @@
-/* Landing page (pages/Landing.tsx). Dark hero and footer around light content sections, in the app's palette. */
+/*
+ * Landing page (pages/Landing.tsx). Colour carries state, the way the protocol does: violet is a message in flight,
+ * lime is signed, credited or live, indigo is the Mezo Hub, and each spoke keeps its chain's own hue.
+ */
 .landing {
   --lp-night: #121327;
   --lp-night-2: #1a1c36;
+  --lp-panel: #1f2148;
   --lp-on-night: #f3f2ec;
   --lp-on-night-muted: #a6a5c2;
   --lp-lime: #c9f27c;
   --lp-violet: #8b84f0;
+  --lp-indigo: #4338ca;
+  --lp-base: #2f6bff;
+  --lp-amber: #e9b45c;
+  --lp-coral: #ec7a63;
   --lp-paper: #f4f3ee;
   --lp-card: #fbfaf7;
   --lp-line: #e4e2db;
@@ -16,22 +24,22 @@
 .lp-container {
   --lp-gutter: 24px;
   width: 100%;
-  max-width: 1180px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 0 var(--lp-gutter);
 }
 
 /* ---- Buttons ---- */
 .lp-button {
-  height: 46px;
-  padding: 0 20px;
-  border-radius: 10px;
+  height: 48px;
+  padding: 0 22px;
+  border-radius: 12px;
   border: 1px solid transparent;
   display: inline-flex;
   align-items: center;
   gap: 9px;
   font:
-    600 14.5px 'IBM Plex Sans',
+    600 15px 'IBM Plex Sans',
     sans-serif;
   text-decoration: none;
   cursor: pointer;
@@ -42,29 +50,53 @@
     background 0.18s,
     border-color 0.18s;
 }
+.lp-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .lp-button--primary {
   background: var(--lp-lime);
   color: var(--lp-night);
-  box-shadow: 0 8px 24px -10px rgba(201, 242, 124, 0.7);
+  box-shadow: 0 10px 28px -12px rgba(201, 242, 124, 0.75);
 }
-.lp-button--primary:hover {
+.lp-button--primary:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 12px 28px -10px rgba(201, 242, 124, 0.9);
+  box-shadow: 0 14px 30px -12px rgba(201, 242, 124, 0.95);
 }
 .lp-button--ghost {
   color: var(--lp-on-night);
-  border-color: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.22);
   background: rgba(255, 255, 255, 0.04);
 }
 .lp-button--ghost:hover {
-  border-color: rgba(255, 255, 255, 0.4);
+  border-color: rgba(255, 255, 255, 0.45);
   background: rgba(255, 255, 255, 0.08);
 }
 .lp-button:focus-visible,
 .lp-links a:focus-visible,
-.lp-text-link:focus-visible {
+.lp-text-link:focus-visible,
+.sim-choice button:focus-visible,
+.sim-slider input:focus-visible,
+.orbit-node-button:focus-visible {
   outline: 2px solid var(--lp-violet);
   outline-offset: 3px;
+}
+.lp-text-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--lp-indigo);
+  font:
+    600 15px 'IBM Plex Sans',
+    sans-serif;
+  cursor: pointer;
+}
+.lp-text-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* ---- Navigation ---- */
@@ -79,7 +111,7 @@
   border-bottom: 1px solid transparent;
 }
 .lp-nav.is-scrolled {
-  background: rgba(18, 19, 39, 0.82);
+  background: rgba(18, 19, 39, 0.84);
   backdrop-filter: blur(14px);
   border-bottom-color: rgba(255, 255, 255, 0.08);
 }
@@ -97,19 +129,15 @@
 .lp-footer .brand-lockup strong {
   color: var(--lp-on-night);
 }
-.lp-nav .brand-lockup small,
-.lp-footer .brand-lockup small {
-  color: var(--lp-on-night-muted);
-}
 .lp-links {
   display: flex;
-  gap: 26px;
+  gap: 28px;
   margin-right: auto;
 }
 .lp-links a {
   color: var(--lp-on-night-muted);
   text-decoration: none;
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 500;
   transition: color 0.16s;
 }
@@ -126,438 +154,726 @@
 /* ---- Hero ---- */
 .lp-hero {
   position: relative;
-  background: var(--lp-night);
-  color: var(--lp-on-night);
-  padding: 128px 0 88px;
-  overflow: hidden;
-}
-.lp-hero-backdrop {
-  position: absolute;
-  inset: 0;
+  padding: 128px 0 40px;
   background:
-    radial-gradient(640px 420px at 78% 38%, rgba(109, 99, 240, 0.32), transparent 70%),
-    radial-gradient(520px 360px at 8% 92%, rgba(201, 242, 124, 0.1), transparent 70%),
-    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px) 0 0 / 56px 56px,
-    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px) 0 0 / 56px 56px;
-  mask-image: radial-gradient(ellipse 90% 80% at 50% 40%, #000 55%, transparent 100%);
+    radial-gradient(760px 520px at 76% 46%, rgba(80, 70, 220, 0.34), transparent 70%),
+    radial-gradient(520px 360px at 8% 12%, rgba(47, 107, 255, 0.12), transparent 70%), var(--lp-night);
+  color: var(--lp-on-night);
 }
 .lp-hero-grid {
-  position: relative;
   display: grid;
-  grid-template-columns: 1fr 1.08fr;
-  align-items: center;
+  grid-template-columns: minmax(0, 1.02fr) minmax(0, 0.98fr);
   gap: 40px;
-}
-.lp-pill {
-  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 13px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.05);
-  font: 12px var(--mono);
-  letter-spacing: 0.4px;
-  color: var(--lp-on-night-muted);
 }
-.lp-pill i,
-.lp-live i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--lp-lime);
-  box-shadow: 0 0 0 0 rgba(201, 242, 124, 0.6);
-  animation: lp-pulse 2.2s ease-out infinite;
+.lp-hero-kicker {
+  margin: 0 0 18px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--lp-violet);
 }
 .lp-hero h1 {
-  margin: 22px 0 18px;
-  font-size: 68px;
-  line-height: 1.02;
-  letter-spacing: -2.8px;
-  font-weight: 600;
+  margin: 0;
+  font-size: clamp(38px, 4.2vw, 60px);
+  line-height: 1.06;
+  letter-spacing: -0.035em;
+  font-weight: 700;
 }
-.lp-hero h1 em {
-  font-style: normal;
-  color: var(--lp-lime);
+.lp-h1-line {
+  display: block;
+  margin-top: 0.06em;
+}
+/* A chain's logo set as a glyph of the headline, on the text's baseline. */
+.lp-chain-word {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.16em;
+  white-space: nowrap;
+}
+.lp-chain-word .logo-mark {
+  width: 0.78em;
+  height: 0.78em;
+  border-radius: 50%;
+  box-shadow: 0 0 0 0.06em rgba(255, 255, 255, 0.12);
+  transform: translateY(0.02em);
 }
 .lp-lead {
-  max-width: 520px;
-  margin: 0 0 30px;
-  font-size: 17.5px;
-  line-height: 1.65;
+  margin: 26px 0 0;
+  max-width: 33em;
+  font-size: 18.5px;
+  line-height: 1.6;
   color: var(--lp-on-night-muted);
 }
 .lp-cta-row {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+  margin-top: 34px;
 }
-.lp-proof {
-  list-style: none;
-  padding: 0;
-  margin: 34px 0 0;
+
+/* The live figures under the hero, one line. */
+.lp-live-line {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 22px;
-  font: 12px var(--mono);
-  color: #8f8eae;
-}
-.lp-proof li {
-  display: inline-flex;
   align-items: center;
-  gap: 7px;
+  margin: 44px 0 0;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: var(--lp-on-night-muted);
 }
-.lp-proof svg {
-  color: var(--lp-violet);
+.lp-live-line > span {
+  padding: 4px 18px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
 }
-.lp-hero-visual {
-  position: relative;
-  width: 100%;
-  max-width: 580px;
-  justify-self: end;
-}
-
-/* Hero network animation (landing/HeroNetwork.tsx). */
-.hero-net {
-  display: block;
-  width: 100%;
-  height: auto;
-  overflow: visible;
-}
-.net-track {
-  fill: none;
-  stroke: rgba(188, 182, 255, 0.38);
-  stroke-width: 1.6;
-  stroke-dasharray: 3 7;
-  animation: lp-dash 1.1s linear infinite;
-}
-.net-ring {
-  fill: rgba(255, 255, 255, 0.025);
-  stroke: rgba(255, 255, 255, 0.12);
-}
-.net-guardian {
-  fill: var(--lp-violet);
-}
-.net-guardian.is-signer {
-  fill: var(--lp-lime);
-}
-.net-quorum {
-  font: 600 9px var(--mono);
-  fill: var(--lp-lime);
-}
-.net-caption {
-  font: 9px var(--mono);
-  letter-spacing: 1.6px;
-  fill: rgba(255, 255, 255, 0.36);
-}
-.net-ripple {
-  fill: none;
-  stroke: var(--lp-lime);
-  stroke-width: 1.5;
-}
-.net-ripple--hub {
-  stroke: var(--lp-violet);
-  stroke-width: 2;
-}
-.net-packet rect {
-  fill: var(--lp-lime);
-}
-.net-packet text {
-  font: 700 8px var(--mono);
-  letter-spacing: 0.6px;
-  fill: var(--lp-night);
-}
-.net-node {
-  fill: #1d1f3b;
-  stroke: rgba(255, 255, 255, 0.16);
-  stroke-width: 1.2;
-}
-.net-node--hub {
-  fill: #21234b;
-  stroke: rgba(139, 132, 240, 0.55);
-  stroke-width: 1.6;
-}
-.net-label {
-  font-size: 12.5px;
-  font-weight: 600;
-  fill: var(--lp-on-night);
-}
-.net-sublabel {
-  font: 9.5px var(--mono);
-  fill: #8f8eae;
-}
-
-/* Token chips drifting around the network. */
-.lp-chip {
-  position: absolute;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 11px 5px 5px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(26, 28, 54, 0.75);
-  backdrop-filter: blur(6px);
-  font: 500 11.5px var(--mono);
-  color: #e6e5f4;
-  animation: lp-float 6.5s ease-in-out infinite;
-}
-.lp-chip--weth {
-  left: 2%;
-  top: 2%;
-}
-.lp-chip--usdc {
-  left: 4%;
-  bottom: 0;
-  animation-delay: -2.2s;
-}
-.lp-chip--musd {
-  right: 4%;
-  top: 14%;
-  animation-delay: -1.1s;
-}
-.lp-chip--mezo {
-  right: 0;
-  bottom: 10%;
-  animation-delay: -3.4s;
-}
-
-/* ---- Live stats ---- */
-.lp-stats {
-  background: var(--lp-paper);
-  border-bottom: 1px solid var(--lp-line);
-  padding: 34px 0 42px;
-}
-.lp-stats-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 22px;
-  font: 11.5px var(--mono);
-  letter-spacing: 0.8px;
-  color: #8b8c96;
+.lp-live-line > span:first-child {
+  padding-left: 0;
+  border-left: 0;
 }
 .lp-live {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #56596a;
-}
-.lp-live i {
-  background: #6fa071;
-  animation-name: lp-pulse-green;
-}
-.lp-stats-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-}
-.lp-stat {
-  padding: 20px 0 0;
-  border-top: 2px solid var(--ink);
-}
-.lp-stat span,
-.lp-stat small {
-  display: block;
-}
-.lp-stat span {
-  font: 12px var(--mono);
-  letter-spacing: 0.4px;
-  color: #6c6e7c;
-}
-.lp-stat strong {
-  display: block;
-  margin: 10px 0 6px;
-  font-size: 38px;
-  letter-spacing: -1.4px;
   font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.lp-stat small {
-  font-size: 13px;
-  color: #8b8c96;
-}
-
-/* ---- Sections ---- */
-.lp-section {
-  padding: 104px 0;
-  scroll-margin-top: 68px;
-}
-.lp-section--tint {
-  background: #ebeaf5;
-}
-.lp-section-head {
-  max-width: 720px;
-  margin-bottom: 52px;
-}
-.lp-eyebrow,
-.lp-kicker {
-  font: 12px var(--mono);
-  letter-spacing: 1.6px;
-  color: var(--indigo);
-}
-.lp-section-head h2 {
-  margin: 14px 0 16px;
-  font-size: 44px;
-  line-height: 1.08;
-  letter-spacing: -1.6px;
-  font-weight: 600;
-}
-.lp-section-head h2 em {
-  font-style: normal;
-  color: var(--indigo);
-}
-.lp-section-head p {
-  margin: 0;
-  font-size: 17px;
-  line-height: 1.65;
-  color: #62657a;
-}
-
-/* Reveal on scroll (motion.ts useInView). */
-.reveal {
-  opacity: 0;
-  transform: translateY(22px);
-  transition:
-    opacity 0.7s ease,
-    transform 0.8s cubic-bezier(0.2, 0.7, 0.2, 1);
-  transition-delay: var(--reveal-delay, 0ms);
-}
-.reveal.is-visible {
-  opacity: 1;
-  transform: none;
-}
-
-/* ---- Product ---- */
-.lp-feature-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 18px;
-}
-.lp-feature {
-  background: var(--lp-card);
-  border: 1px solid var(--lp-line);
-  border-radius: 18px;
-  padding: 30px;
-  display: flex;
-  flex-direction: column;
-  gap: 26px;
-  transition:
-    opacity 0.7s ease var(--reveal-delay, 0ms),
-    transform 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) var(--reveal-delay, 0ms),
-    box-shadow 0.25s,
-    border-color 0.25s;
-}
-.lp-feature:hover {
-  border-color: #d3d0ea;
-  box-shadow: 0 18px 40px -28px rgba(67, 56, 202, 0.45);
-}
-.lp-feature--wide {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: 1fr 1.1fr;
-  align-items: center;
-  gap: 40px;
-}
-.lp-kicker {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-.lp-feature-copy h3 {
-  margin: 12px 0 10px;
-  font-size: 23px;
-  line-height: 1.25;
-  letter-spacing: -0.6px;
-  font-weight: 600;
-}
-.lp-feature-copy p {
-  margin: 0;
-  font-size: 15px;
-  line-height: 1.7;
-  color: #686b7e;
-}
-.lp-feature-visual {
-  margin-top: auto;
-  padding: 16px 12px 8px;
-  border-radius: 14px;
-  background: #dcdaf5;
-  display: grid;
-  place-items: center;
-}
-.lp-feature-visual .loop-diagram {
-  max-width: 300px;
-}
-
-/* Cross-chain route strip. */
-.route-strip {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 26px 22px;
-  border-radius: 14px;
-  background: var(--lp-night);
   color: var(--lp-on-night);
 }
-.route-end {
-  display: grid;
-  justify-items: center;
-  gap: 9px;
-}
-.route-end small {
-  font: 11px var(--mono);
-  color: var(--lp-on-night-muted);
-  white-space: nowrap;
-}
-.route-logos {
-  display: flex;
-}
-.route-logos .logo-mark + .logo-mark {
-  margin-left: -9px;
+.lp-live i {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  box-shadow: 0 0 0 2px var(--lp-night);
+  background: var(--lp-on-night-muted);
 }
-.route-wire {
-  position: relative;
-  flex: 1;
-  height: 2px;
-  margin-bottom: 20px;
-  background: repeating-linear-gradient(90deg, rgba(188, 182, 255, 0.5) 0 6px, transparent 6px 12px);
-}
-.route-label {
-  position: absolute;
-  left: 50%;
-  bottom: 12px;
-  transform: translateX(-50%);
-  font: 10.5px var(--mono);
-  color: var(--lp-lime);
-  white-space: nowrap;
-}
-.route-wire i {
-  position: absolute;
-  top: -4px;
-  width: 10px;
-  height: 10px;
-  margin-left: -5px;
-  border-radius: 50%;
+.lp-live.is-live i {
   background: var(--lp-lime);
-  box-shadow: 0 0 12px rgba(201, 242, 124, 0.8);
-  animation: lp-route 3.6s linear infinite;
-}
-.route-wire i:nth-of-type(2) {
-  animation-delay: -1.2s;
-}
-.route-wire i:nth-of-type(3) {
-  animation-delay: -2.4s;
+  animation: lp-pulse 2.2s infinite;
 }
 
-/* Yield sparkline (landing/YieldSpark.tsx). */
-.yield-spark {
+/* ---- The orbit (landing/OrbitHero.tsx) ---- */
+.orbit {
+  min-width: 0;
+}
+.orbit-stage {
+  position: relative;
+  aspect-ratio: 640 / 520;
+}
+.orbit-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.orbit-svg text {
+  font-family: 'IBM Plex Sans', sans-serif;
+}
+.orbit-ring {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.08);
+  stroke-dasharray: 2 9;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.orbit-ring--outer {
+  stroke: rgba(255, 255, 255, 0.05);
+}
+.orbit-svg.is-ambient .orbit-ring {
+  animation: lp-spin 90s linear infinite;
+}
+.orbit-svg.is-ambient .orbit-ring--outer {
+  animation-duration: 140s;
+  animation-direction: reverse;
+}
+.orbit-track {
+  fill: none;
+  stroke: rgba(139, 132, 240, 0.38);
+  stroke-width: 1.6;
+  stroke-dasharray: 3 7;
+}
+.orbit-svg.is-ambient .orbit-track {
+  animation: lp-dash 1.6s linear infinite;
+}
+.orbit-guardian-ring {
+  fill: rgba(18, 19, 39, 0.6);
+  stroke: rgba(255, 255, 255, 0.1);
+}
+.orbit-guardian {
+  fill: #3b3d66;
+  transition: fill 0.25s;
+}
+.orbit-guardian.is-signed {
+  fill: var(--lp-lime);
+}
+/* While nothing plays, each lap's message gathers its quorum: the 13 signers light up in turn. */
+.orbit-svg.is-ambient .orbit-guardian.is-signer {
+  animation: orbit-sign 6s linear infinite;
+  animation-delay: calc(var(--lap) + 1.9s + var(--k) * 0.06s);
+}
+.orbit-signed {
+  font:
+    600 12.5px 'DM Mono',
+    monospace !important;
+  fill: var(--lp-lime);
+}
+.orbit-node {
+  fill: var(--lp-panel);
+  stroke: rgba(255, 255, 255, 0.14);
+  stroke-width: 1.5;
+  transition:
+    stroke 0.3s,
+    filter 0.3s;
+}
+.orbit-node.is-locked {
+  stroke: var(--lp-violet);
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 10px rgba(139, 132, 240, 0.65));
+}
+.orbit-hub {
+  stroke: rgba(201, 242, 124, 0);
+  stroke-width: 3;
+  transition:
+    stroke 0.4s,
+    filter 0.4s;
+}
+.orbit-hub.is-credited {
+  stroke: var(--lp-lime);
+  filter: drop-shadow(0 0 18px rgba(201, 242, 124, 0.55));
+}
+.orbit-label {
+  font-size: 15px;
+  font-weight: 600;
+  fill: var(--lp-on-night);
+}
+.orbit-vaa rect {
+  fill: var(--lp-violet);
+  filter: drop-shadow(0 0 12px rgba(139, 132, 240, 0.85));
+}
+.orbit-vaa text {
+  font:
+    600 11.5px 'DM Mono',
+    monospace !important;
+  fill: var(--lp-night);
+}
+.orbit-chip rect {
+  fill: rgba(201, 242, 124, 0.14);
+  stroke: var(--lp-lime);
+}
+.orbit-chip text,
+.orbit-payout text {
+  font:
+    600 13.5px 'DM Mono',
+    monospace !important;
+  fill: var(--lp-lime);
+}
+.orbit-ambient circle {
+  fill: var(--lp-violet);
+  filter: drop-shadow(0 0 8px rgba(139, 132, 240, 0.9));
+}
+/* The nodes are buttons laid over the drawing; hovering or focusing one shows what is locked there. */
+.orbit-node-tip {
+  position: absolute;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+}
+.orbit-node-button {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: help;
+}
+.orbit-tip {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  z-index: 3;
+  width: max-content;
+  max-width: min(250px, 70vw);
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--lp-panel);
+  box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.7);
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--lp-on-night-muted);
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, 4px);
+  transition:
+    opacity 0.18s,
+    transform 0.18s,
+    visibility 0.18s;
+}
+.orbit-tip b {
+  color: var(--lp-on-night);
+  font-size: 14px;
+}
+.orbit-node-tip:hover .orbit-tip,
+.orbit-node-button:focus-visible + .orbit-tip {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+.orbit-caption {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+  padding-left: 9%;
+}
+.orbit-progress {
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.orbit-progress i {
+  display: block;
+  height: 100%;
+  background: var(--lp-lime);
+  transform-origin: left;
+}
+.orbit-caption p {
+  margin: 0;
+  min-height: 1.5em;
+  font-size: 16px;
+  color: var(--lp-on-night);
+}
+
+/* ---- Section heads ---- */
+.lp-section-head {
+  max-width: 640px;
+  margin-bottom: 56px;
+}
+.lp-section-head h2 {
+  margin: 0;
+  font-size: clamp(32px, 3.6vw, 46px);
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+  font-weight: 700;
+}
+.lp-section-head p {
+  margin: 16px 0 0;
+  font-size: 18px;
+  line-height: 1.6;
+  color: #5d5f6e;
+}
+
+/* ---- Journey (landing/Journey.tsx): chapters scroll, the stage stays ---- */
+.lp-journey {
+  padding: 120px 0 80px;
+}
+.lp-journey-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  gap: 72px;
+  align-items: start;
+}
+.lp-chapters {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.lp-chapters li {
+  min-height: 64vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  opacity: 0.32;
+  transition: opacity 0.35s;
+}
+.lp-chapters li.is-active {
+  opacity: 1;
+}
+.lp-chapter-num {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  font:
+    600 14px 'DM Mono',
+    monospace;
+  color: var(--lp-indigo);
+}
+.lp-chapters h3 {
+  margin: 18px 0 0;
+  font-size: 28px;
+  line-height: 1.18;
+  letter-spacing: -0.02em;
+}
+.lp-chapters p {
+  margin: 12px 0 0;
+  max-width: 30em;
+  font-size: 17px;
+  line-height: 1.65;
+  color: #5d5f6e;
+}
+.lp-stage {
+  position: sticky;
+  top: 12vh;
+  height: 76vh;
+  display: flex;
+  align-items: center;
+}
+.journey-scene {
+  width: 100%;
+  padding: 22px 22px 20px;
+  border-radius: 28px;
+  background: radial-gradient(420px 300px at 78% 46%, rgba(80, 70, 220, 0.32), transparent 70%), var(--lp-night);
+  box-shadow: 0 40px 80px -48px rgba(18, 19, 39, 0.9);
+}
+.journey-scene svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.journey-scene text {
+  font-family: 'IBM Plex Sans', sans-serif;
+}
+.journey-caption {
+  margin: 6px 0 0;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--lp-on-night);
+}
+.journey-track {
+  fill: none;
+  stroke: rgba(139, 132, 240, 0.35);
+  stroke-width: 1.6;
+  stroke-dasharray: 3 7;
+  transition:
+    stroke 0.4s,
+    opacity 0.4s;
+}
+.journey-track.is-active {
+  stroke: var(--lp-lime);
+}
+.journey-label {
+  font-size: 14px;
+  font-weight: 600;
+  fill: var(--lp-on-night);
+}
+.journey-you {
+  fill: var(--lp-panel);
+  stroke: rgba(255, 255, 255, 0.18);
+}
+.journey-wallet {
+  fill: none;
+  stroke: var(--lp-on-night-muted);
+  stroke-width: 2;
+}
+.journey-wallet-clasp {
+  fill: var(--lp-on-night-muted);
+}
+.svg-token {
+  overflow: visible;
+}
+.journey-vault {
+  fill: var(--lp-panel);
+  stroke: var(--lp-base);
+  stroke-width: 2;
+}
+.journey-lock {
+  font:
+    600 11px 'DM Mono',
+    monospace !important;
+  fill: var(--lp-on-night-muted);
+}
+.journey-ring {
+  fill: rgba(18, 19, 39, 0.6);
+  stroke: rgba(255, 255, 255, 0.12);
+}
+.journey-guardian {
+  fill: #3b3d66;
+  transition: fill 0.3s;
+}
+.journey-guardian.is-signed {
+  fill: var(--lp-lime);
+}
+.journey-hub {
+  fill: var(--lp-indigo);
+  stroke: rgba(201, 242, 124, 0);
+  stroke-width: 3;
+  transition:
+    stroke 0.4s,
+    filter 0.4s;
+}
+.journey-hub.is-credited {
+  stroke: var(--lp-lime);
+  filter: drop-shadow(0 0 16px rgba(201, 242, 124, 0.5));
+}
+.journey-loop {
+  transition: opacity 0.5s;
+}
+.journey-loop circle {
+  fill: none;
+  stroke: var(--lp-lime);
+  stroke-width: 2;
+  stroke-dasharray: 10 8;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: lp-spin 6s linear infinite;
+}
+.journey-loop text {
+  font:
+    700 20px 'DM Mono',
+    monospace !important;
+  fill: var(--lp-lime);
+}
+.journey-bar {
+  transition: opacity 0.5s;
+}
+.journey-bar rect {
+  fill: rgba(255, 255, 255, 0.1);
+}
+.journey-bar rect.journey-bar-fill {
+  fill: var(--lp-lime);
+  transform-box: fill-box;
+  transform-origin: left;
+  transition: transform 0.8s cubic-bezier(0.3, 0.6, 0.2, 1) 0.3s;
+}
+.journey-bar text {
+  font-size: 12.5px;
+  fill: var(--lp-on-night-muted);
+}
+.journey-pool {
+  transition: opacity 0.5s;
+}
+.journey-pool rect {
+  fill: var(--lp-panel);
+  stroke: var(--lp-amber);
+  stroke-width: 1.5;
+}
+.journey-pool text {
+  font-size: 13.5px;
+  font-weight: 600;
+  fill: var(--lp-on-night);
+}
+.journey-piece {
+  transition:
+    transform 0.9s cubic-bezier(0.45, 0.05, 0.2, 1),
+    opacity 0.5s;
+}
+.journey-vaa rect {
+  fill: var(--lp-violet);
+  filter: drop-shadow(0 0 10px rgba(139, 132, 240, 0.85));
+}
+.journey-vaa text {
+  font:
+    600 11.5px 'DM Mono',
+    monospace !important;
+  fill: var(--lp-night);
+}
+
+/* ---- Simulator (landing/Simulator.tsx) ---- */
+.lp-simulator {
+  padding: 80px 0 110px;
+}
+.sim {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 48px;
+  padding: 36px;
+  border-radius: 28px;
+  background: radial-gradient(520px 340px at 100% 0%, rgba(80, 70, 220, 0.28), transparent 70%), var(--lp-night);
+  color: var(--lp-on-night);
+}
+.sim-controls {
+  display: grid;
+  align-content: start;
+  gap: 26px;
+}
+.sim-choice {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sim-choice legend,
+.sim-slider label {
+  margin-bottom: 10px;
+  font-size: 14px;
+  color: var(--lp-on-night-muted);
+}
+.sim-choice legend {
+  float: left;
+  width: 100%;
+}
+.sim-choice button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 42px;
+  padding: 0 16px;
+  border-radius: 21px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: var(--lp-on-night);
+  font:
+    500 14.5px 'IBM Plex Sans',
+    sans-serif;
+  cursor: pointer;
+  transition:
+    background 0.18s,
+    border-color 0.18s;
+}
+.sim-choice button:hover {
+  border-color: rgba(255, 255, 255, 0.36);
+}
+.sim-choice button[aria-pressed='true'] {
+  border-color: var(--lp-violet);
+  background: rgba(139, 132, 240, 0.2);
+}
+.sim-slider label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.sim-slider output {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--lp-on-night);
+}
+.sim-slider input {
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  background: transparent;
+  accent-color: var(--lp-lime);
+  cursor: pointer;
+}
+.sim-readout {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  padding-left: 40px;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+.sim-readout dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px 24px;
+  margin: 0;
+}
+.sim-readout dt {
+  font-size: 14px;
+  color: var(--lp-on-night-muted);
+}
+.sim-readout dd {
+  margin: 6px 0 0;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.sim-wide {
+  grid-column: 1 / -1;
+}
+.sim-health.tone-ok dd {
+  color: var(--lp-lime);
+}
+.sim-health.tone-warn dd {
+  color: var(--lp-amber);
+}
+.sim-health.tone-danger dd {
+  color: var(--lp-coral);
+}
+.sim-note {
+  margin: 0;
+  font-size: 14px;
+  color: var(--lp-amber);
+}
+.sim-fine {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--lp-on-night-muted);
+}
+.sim-readout .lp-button {
+  justify-self: start;
+}
+
+/* ---- Features ---- */
+.lp-features {
+  padding: 40px 0 110px;
+}
+.lp-features-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 20px;
+}
+.lp-feature {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 30px;
+  border-radius: 22px;
+  border: 1px solid var(--lp-line);
+  background: var(--lp-card);
+}
+.lp-feature--agent {
+  grid-row: span 2;
+}
+.lp-feature h3 {
+  margin: 0;
+  font-size: 23px;
+  letter-spacing: -0.015em;
+}
+.lp-feature p {
+  margin: 0;
+  max-width: 34em;
+  font-size: 16px;
+  line-height: 1.6;
+  color: #5d5f6e;
+}
+.lp-feature .lp-text-link {
   margin-top: auto;
+  align-self: flex-start;
+}
+.lp-feature--agent .agent-console {
+  margin-top: 10px;
+}
+.lp-mcp {
+  margin-top: auto;
+  padding-top: 18px;
+  border-top: 1px solid var(--lp-line);
+}
+.lp-mcp p {
+  font-size: 15px;
+}
+.lp-mcp ul {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+}
+.lp-mcp code {
+  display: inline-block;
+  padding: 5px 9px;
+  border-radius: 7px;
+  background: #efeef8;
+  font: 13px var(--mono);
+  color: var(--lp-indigo);
+}
+
+/* Yield sparkline (landing/YieldSpark.tsx): the curve draws once it scrolls into view. */
+.yield-spark {
+  margin-top: 6px;
   padding: 18px 18px 16px;
   border-radius: 14px;
-  background: #f0eff9;
+  background: #efeef8;
 }
 .yield-spark svg {
   display: block;
@@ -571,7 +887,7 @@
 }
 .yield-line {
   fill: none;
-  stroke: var(--indigo);
+  stroke: var(--lp-indigo);
   stroke-width: 2.2;
   stroke-linecap: round;
   stroke-dasharray: 1;
@@ -580,16 +896,16 @@
 }
 .yield-dot {
   fill: var(--lp-lime);
-  stroke: var(--indigo);
+  stroke: var(--lp-indigo);
   stroke-width: 2;
   opacity: 0;
   transition: opacity 0.3s 1.9s;
 }
-.reveal.is-visible .yield-area,
-.reveal.is-visible .yield-dot {
+.is-visible .yield-area,
+.is-visible .yield-dot {
   opacity: 1;
 }
-.reveal.is-visible .yield-line {
+.is-visible .yield-line {
   stroke-dashoffset: 0;
 }
 .yield-figures {
@@ -603,8 +919,8 @@
   display: block;
 }
 .yield-figures small {
-  font: 11px var(--mono);
-  color: #8b8c96;
+  font-size: 12.5px;
+  color: #7f808c;
 }
 .yield-figures b {
   margin-top: 4px;
@@ -638,7 +954,7 @@
 }
 .agent-console-bar span {
   margin-left: 8px;
-  font: 11px var(--mono);
+  font: 11.5px var(--mono);
   color: var(--lp-on-night-muted);
 }
 .agent-console ol {
@@ -652,7 +968,7 @@
   display: grid;
   grid-template-columns: 64px 1fr;
   gap: 10px;
-  font: 12px/1.5 var(--mono);
+  font: 12.5px/1.5 var(--mono);
   color: #d7d6e8;
   animation: lp-console-in 0.5s ease both;
 }
@@ -671,162 +987,68 @@
   color: #f0a868;
 }
 
-/* ---- How it works ---- */
-.lp-steps {
-  --progress: 0;
-  position: relative;
+/* ---- Security ---- */
+.lp-security {
+  padding: 110px 0;
+  background: #ecebe4;
+}
+.lp-guarantees {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 22px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 40px 56px;
 }
-.lp-steps::before,
-.lp-steps::after {
-  content: '';
-  position: absolute;
-  top: 22px;
-  left: 22px;
-  height: 2px;
-  border-radius: 2px;
-}
-.lp-steps::before {
-  right: 22px;
-  background: #d5d3ea;
-}
-/* The fill reaches the active step's icon: steps are equal columns, so it spans `progress` of the track. */
-.lp-steps::after {
-  width: calc((100% - 44px) * var(--progress));
-  background: var(--indigo);
-  transition: width 0.6s cubic-bezier(0.3, 0.6, 0.2, 1);
-}
-.lp-steps li {
-  position: relative;
-  z-index: 1;
-}
-.lp-step-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
+.lp-guarantees li {
   display: grid;
-  place-items: center;
-  background: var(--lp-card);
-  border: 1.5px solid #d5d3ea;
-  color: #8c8aa8;
-  transition:
-    background 0.35s,
-    color 0.35s,
-    border-color 0.35s,
-    box-shadow 0.35s;
+  grid-template-columns: 22px 1fr;
+  column-gap: 14px;
 }
-.lp-steps li.is-done .lp-step-icon {
-  background: var(--indigo);
-  border-color: var(--indigo);
-  color: #fff;
+.lp-guarantees svg {
+  grid-row: span 2;
+  margin-top: 2px;
+  color: var(--lp-indigo);
 }
-.lp-steps li[aria-current='step'] .lp-step-icon {
-  box-shadow: 0 0 0 7px rgba(67, 56, 202, 0.14);
-}
-.lp-steps b {
-  display: block;
-  margin: 20px 0 8px;
+.lp-guarantees b {
   font-size: 18px;
-  font-weight: 600;
 }
-.lp-steps b small {
-  margin-right: 6px;
-  font: 12px var(--mono);
-  color: var(--indigo);
-}
-.lp-steps p {
-  margin: 0;
-  font-size: 14.5px;
-  line-height: 1.65;
-  color: #686b7e;
-}
-
-/* ---- Security ---- */
-.lp-guarantees {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 18px;
-}
-.lp-guarantee {
-  padding: 26px 24px;
-  border-radius: 16px;
-  border: 1px solid var(--lp-line);
-  background: var(--lp-card);
-}
-.lp-guarantee-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 11px;
-  display: grid;
-  place-items: center;
-  background: var(--indigo-light);
-  color: var(--indigo);
-}
-.lp-guarantee b {
-  display: block;
-  margin: 18px 0 8px;
-  font-size: 16.5px;
-  font-weight: 600;
-}
-.lp-guarantee p {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.65;
-  color: #686b7e;
+.lp-guarantees p {
+  margin: 8px 0 0;
+  max-width: 32em;
+  font-size: 16px;
+  line-height: 1.6;
+  color: #5d5f6e;
 }
 .lp-audit-note {
-  margin-top: 26px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px 18px;
-  padding: 16px 20px;
-  border-radius: 14px;
-  background: var(--amber-light);
-  border: 1px solid #efdcc0;
-}
-.lp-audit-note p {
-  margin: 0;
-  font-size: 14px;
-  color: #7a5a35;
+  gap: 12px 16px;
+  margin: 56px 0 0;
+  padding-top: 26px;
+  border-top: 1px solid #d9d7cf;
+  font-size: 15px;
+  color: #5d5f6e;
 }
 .lp-badge {
   padding: 5px 10px;
-  border-radius: 6px;
+  border-radius: 7px;
   background: #f3dfc2;
-  font: 600 11px var(--mono);
-  letter-spacing: 0.8px;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--amber);
 }
-.lp-text-link {
+.lp-audit-note .lp-text-link {
   margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 0;
-  background: transparent;
-  color: var(--indigo);
-  font:
-    600 14px 'IBM Plex Sans',
-    sans-serif;
-  cursor: pointer;
-}
-.lp-text-link:hover {
-  text-decoration: underline;
 }
 
 /* ---- Closing call to action ---- */
 .lp-closing {
-  position: relative;
   padding: 96px 0;
   background:
     radial-gradient(560px 300px at 85% 0%, rgba(109, 99, 240, 0.4), transparent 70%),
-    radial-gradient(480px 300px at 10% 100%, rgba(201, 242, 124, 0.12), transparent 70%), var(--lp-night-2);
+    radial-gradient(480px 300px at 10% 100%, rgba(201, 242, 124, 0.1), transparent 70%), var(--lp-night-2);
   color: var(--lp-on-night);
 }
 .lp-closing-inner {
@@ -838,18 +1060,14 @@
 .lp-closing h2 {
   margin: 0 0 12px;
   font-size: 46px;
-  letter-spacing: -1.7px;
+  letter-spacing: -0.035em;
   line-height: 1.06;
-  font-weight: 600;
-}
-.lp-closing h2 em {
-  font-style: normal;
-  color: var(--lp-lime);
+  font-weight: 700;
 }
 .lp-closing p {
   margin: 0;
   max-width: 520px;
-  font-size: 16.5px;
+  font-size: 17px;
   line-height: 1.65;
   color: var(--lp-on-night-muted);
 }
@@ -862,7 +1080,7 @@
 }
 .lp-footer-grid {
   display: grid;
-  grid-template-columns: 1.6fr repeat(3, 1fr);
+  grid-template-columns: 1.6fr repeat(4, 1fr);
   gap: 32px;
 }
 .lp-footer-brand p {
@@ -878,10 +1096,9 @@
 }
 .lp-footer nav b {
   margin-bottom: 4px;
-  font: 11.5px var(--mono);
-  letter-spacing: 1.2px;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--lp-on-night);
-  text-transform: uppercase;
 }
 .lp-footer nav a {
   display: inline-flex;
@@ -901,8 +1118,7 @@
   gap: 12px;
   margin-top: 48px;
   padding-top: 22px;
-  font: 11.5px var(--mono);
-  letter-spacing: 0.8px;
+  font-size: 13px;
 }
 /* The rule spans the content, not the gutters. */
 .lp-footer-base::before {
@@ -924,43 +1140,24 @@
     box-shadow: 0 0 0 9px rgba(201, 242, 124, 0);
   }
 }
-@keyframes lp-pulse-green {
-  0% {
-    box-shadow: 0 0 0 0 rgba(111, 160, 113, 0.55);
-  }
-  70%,
-  100% {
-    box-shadow: 0 0 0 8px rgba(111, 160, 113, 0);
-  }
-}
 @keyframes lp-dash {
   to {
-    stroke-dashoffset: -10;
+    stroke-dashoffset: -20;
   }
 }
-@keyframes lp-float {
+@keyframes lp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes orbit-sign {
   0%,
+  42% {
+    fill: var(--lp-lime);
+  }
+  46%,
   100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-9px);
-  }
-}
-@keyframes lp-route {
-  0% {
-    left: 0;
-    opacity: 0;
-  }
-  12% {
-    opacity: 1;
-  }
-  88% {
-    opacity: 1;
-  }
-  100% {
-    left: 100%;
-    opacity: 0;
+    fill: #3b3d66;
   }
 }
 @keyframes lp-console-in {
@@ -973,71 +1170,71 @@
     transform: none;
   }
 }
+@media (prefers-reduced-motion: reduce) {
+  .landing *,
+  .landing *::before,
+  .landing *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
 
 /* ---- Responsive ---- */
 @media (max-width: 1080px) {
-  .lp-hero h1 {
-    font-size: 56px;
-  }
   .lp-hero-grid {
     grid-template-columns: 1fr;
-    gap: 48px;
+    gap: 28px;
   }
-  .lp-hero-visual {
+  .orbit {
+    max-width: 640px;
+    width: 100%;
     justify-self: center;
   }
-  .lp-guarantees {
-    grid-template-columns: repeat(2, 1fr);
+  /* The stage stays on top of the screen; the chapters scroll under it. */
+  .lp-journey-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
   }
-  .lp-steps {
-    gap: 14px;
+  .lp-stage {
+    order: -1;
+    top: 68px;
+    height: auto;
+    z-index: 2;
+    padding: 8px 0 12px;
+    background: var(--lp-paper);
+  }
+  .journey-scene {
+    max-width: 520px;
+    margin: 0 auto;
+    padding: 12px 14px 12px;
+    border-radius: 20px;
+  }
+  .lp-chapters li {
+    min-height: 52vh;
+  }
+  .sim {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+  .sim-readout {
+    padding-left: 0;
+    padding-top: 28px;
+    border-left: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  .lp-features-grid {
+    grid-template-columns: 1fr;
+  }
+  .lp-feature--agent {
+    grid-row: auto;
   }
 }
 @media (max-width: 860px) {
   .lp-links {
     display: none;
   }
-  .lp-feature-grid {
+  .lp-guarantees {
     grid-template-columns: 1fr;
-  }
-  .lp-feature--wide {
-    grid-template-columns: 1fr;
-    gap: 26px;
-  }
-  .lp-stats-grid {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 26px 16px;
-  }
-  /* Steps stack, with the progress line running down the icons. */
-  .lp-steps {
-    grid-template-columns: 1fr;
-    gap: 26px;
-  }
-  .lp-steps::before,
-  .lp-steps::after {
-    top: 22px;
-    left: 21px;
-    width: 2px;
-  }
-  .lp-steps::before {
-    right: auto;
-    bottom: 22px;
-    height: auto;
-  }
-  .lp-steps::after {
-    height: calc((100% - 44px) * var(--progress));
-    transition-property: height;
-  }
-  .lp-steps li {
-    display: grid;
-    grid-template-columns: 44px 1fr;
-    column-gap: 18px;
-  }
-  .lp-steps b {
-    margin: 10px 0 6px;
-  }
-  .lp-steps p {
-    grid-column: 2;
   }
   .lp-closing-inner {
     flex-direction: column;
@@ -1054,58 +1251,72 @@
   .lp-container {
     --lp-gutter: 18px;
   }
-  /* The network diagram shrinks to the screen: keep its labels readable and drop the fine print. */
-  .net-label {
-    font-size: 17px;
-  }
-  .net-quorum {
-    font-size: 12px;
-  }
-  .net-sublabel,
-  .net-caption {
-    display: none;
-  }
   .lp-nav-inner {
     height: 60px;
   }
   .lp-hero {
-    padding: 104px 0 64px;
-  }
-  .lp-hero h1 {
-    font-size: 42px;
-    letter-spacing: -1.8px;
+    padding: 100px 0 28px;
   }
   .lp-lead {
+    font-size: 16.5px;
+  }
+  .lp-cta-row .lp-button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .orbit-label {
+    font-size: 19px;
+  }
+  .orbit-caption {
+    padding-left: 0;
+  }
+  .lp-live-line > span {
+    padding: 4px 12px;
+  }
+  .lp-stage {
+    top: 60px;
+  }
+  .journey-caption {
+    font-size: 14px;
+  }
+  /* The scene shrinks to the screen: its labels grow to stay readable. */
+  .journey-label {
+    font-size: 21px;
+  }
+  .journey-lock,
+  .journey-bar text {
+    font-size: 16px !important;
+  }
+  .journey-pool text {
+    font-size: 18px;
+  }
+  .lp-chapters h3 {
+    font-size: 23px;
+  }
+  .lp-chapters p {
     font-size: 16px;
   }
-  .lp-section {
+  .lp-journey,
+  .lp-security {
     padding: 72px 0;
   }
   .lp-section-head {
     margin-bottom: 36px;
   }
-  .lp-section-head h2,
-  .lp-closing h2 {
-    font-size: 32px;
-    letter-spacing: -1.1px;
+  .sim {
+    padding: 22px 18px;
+    border-radius: 22px;
   }
-  .lp-stat strong {
-    font-size: 30px;
+  .sim-readout dd {
+    font-size: 24px;
   }
   .lp-feature {
     padding: 22px;
   }
-  .lp-guarantees {
-    grid-template-columns: 1fr;
+  .lp-closing h2 {
+    font-size: 32px;
   }
-  .route-strip {
-    padding: 22px 14px;
-    gap: 10px;
-  }
-  .lp-chip {
-    display: none;
-  }
-  .lp-text-link {
+  .lp-audit-note .lp-text-link {
     margin-left: 0;
   }
   .lp-footer-base {
