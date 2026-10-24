@@ -15,6 +15,7 @@
     "devnet:agent": "pnpm --filter @mezodot/agent start",
     "devnet:e2e": "pnpm --filter @mezodot/agent devnet:e2e",
     "e2e:ui": "node scripts/e2e/ui-flows.mjs",
+    "smoke:web": "node scripts/smoke-web-build.mjs",
     "check:scripts": "pnpm --dir services/agent -s exec tsc -p ../../scripts/tsconfig.json && pnpm --dir services/agent -s exec vitest run --root ../../scripts",
     "check:abis": "bash scripts/check-abis.sh",
     "check:admin-docs": "pnpm --dir services/agent -s exec tsx --tsconfig ../../scripts/tsconfig.json ../../scripts/check-admin-docs.ts",

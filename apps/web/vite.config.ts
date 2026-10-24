@@ -26,8 +26,12 @@ export default defineConfig(({ command, mode }) => {
       chunkSizeWarningLimit: 2_500,
       rollupOptions: {
         output: {
-          // Keep wallet/web3 libraries in their own long-cached chunks.
+          // Keep wallet/web3 libraries in their own long-cached chunks. The Node globals the wallet libraries read while
+          // they load (Buffer, process) come from src/polyfills.ts, which needs a chunk of its own, listed first: left in
+          // the entry chunk it would run after every chunk the entry imports (ES modules evaluate their imports first),
+          // and the wallet chunk would throw "process is not defined" before the app could render.
           manualChunks: {
+            polyfills: [fileURLToPath(new URL('./src/polyfills.ts', import.meta.url))],
             wallet: ['@mezo-org/passport', '@rainbow-me/rainbowkit', 'wagmi', '@tanstack/react-query'],
             viem: ['viem'],
           },

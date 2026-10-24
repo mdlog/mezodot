@@ -82,6 +82,13 @@ jobs:
       - name: pnpm -r check
         run: pnpm -r check
 
+      # The production bundle, loaded in Chrome: chunking changes the order modules evaluate in, which `vite dev` never
+      # shows (a wallet chunk that ran before the Node polyfills once left every page blank).
+      - name: web production build loads
+        run: |
+          VITE_ALLOW_LOCALHOST=true pnpm --filter @mezodot/web build
+          pnpm smoke:web
+
       # scripts/: verify-deployment, revenue-report, check-admin-docs and their tests.
       - name: ops scripts
         run: pnpm check:scripts
