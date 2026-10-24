@@ -2,11 +2,12 @@ import { useMemo, useState } from 'react';
 import { Activity as ActivityIcon, ArrowDownToLine, Clock3, Filter } from 'lucide-react';
 import { useAccount } from 'wagmi';
 import { HubPending } from '../components/StatusBanners';
-import { ConnectGate, EventIcon, PageTitle, PanelTitle, SummaryStrip, TxLink } from '../components/ui';
+import { ConnectGate, EventIcon, PageTitle, Pagination, PanelTitle, SummaryStrip, TxLink } from '../components/ui';
 import { HUB, networkByName } from '../chain/env';
 import { useActivity, type ActivityItem, type ActivityKind } from '../data/activity';
 import { readError, useHubStatus } from '../data/hooks';
 import { fmt, timeAgo, units } from '../lib/format';
+import { paginate } from '../lib/paginate';
 import { useUi } from '../state/UiContext';
 
 const KINDS: ('All activity' | ActivityKind)[] = [
@@ -24,9 +25,10 @@ const KINDS: ('All activity' | ActivityKind)[] = [
   'Liquidation',
 ];
 const networkOf = (item: ActivityItem) => networkByName(item.network) ?? HUB;
+const PAGE_SIZE = 15;
 
 export function Activity() {
-  const { isConnected } = useAccount();
+  const { address, isConnected } = useAccount();
   const { showToast } = useUi();
   const query = useActivity();
   const hub = useHubStatus();
@@ -89,44 +91,8 @@ export function Activity() {
               </select>
             </div>
           </div>
-          <div className="table-wrap">
-            <table className="ledger-table">
-              <thead>
-                <tr>
-                  <th>EVENT</th>
-                  <th>AMOUNT</th>
-                  <th>NETWORK</th>
-                  <th>WHEN</th>
-                  <th>TRANSACTION</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((item) => (
-                  <tr key={item.id}>
-                    <td>
-                      <div className="event-cell">
-                        <EventIcon kind={item.kind} />
-                        <span>
-                          <b>{item.kind}</b>
-                          <small>{item.detail}</small>
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <b>
-                        {fmt(units(item.amount, item.decimals), 4)} {item.asset}
-                      </b>
-                    </td>
-                    <td>{networkOf(item).label}</td>
-                    <td>{item.timestamp ? timeAgo(item.timestamp) : '—'}</td>
-                    <td>
-                      <TxLink network={networkOf(item)} hash={item.txHash} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {/* Keyed by wallet and filter: changing either starts the ledger over on its newest events. */}
+          <Ledger key={`${address}:${filter}`} items={filtered} />
           {waitingOnHub && <HubPending what="your history" />}
           {query.isError && (
             <div className="inline-error" role="alert">
@@ -147,6 +113,55 @@ export function Activity() {
           {isLoading && <p className="muted-note">Reading events…</p>}
         </section>
       </ConnectGate>
+    </>
+  );
+}
+
+/** One wallet's events under one filter, PAGE_SIZE to a page. */
+function Ledger({ items }: { items: ActivityItem[] }) {
+  const [page, setPage] = useState(0);
+  const shown = paginate(items, page, PAGE_SIZE);
+  return (
+    <>
+      <div className="table-wrap">
+        <table className="ledger-table">
+          <thead>
+            <tr>
+              <th>EVENT</th>
+              <th>AMOUNT</th>
+              <th>NETWORK</th>
+              <th>WHEN</th>
+              <th>TRANSACTION</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.rows.map((item) => (
+              <tr key={item.id}>
+                <td>
+                  <div className="event-cell">
+                    <EventIcon kind={item.kind} />
+                    <span>
+                      <b>{item.kind}</b>
+                      <small>{item.detail}</small>
+                    </span>
+                  </div>
+                </td>
+                <td>
+                  <b>
+                    {fmt(units(item.amount, item.decimals), 4)} {item.asset}
+                  </b>
+                </td>
+                <td>{networkOf(item).label}</td>
+                <td>{item.timestamp ? timeAgo(item.timestamp) : '—'}</td>
+                <td>
+                  <TxLink network={networkOf(item)} hash={item.txHash} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Pagination page={shown} label="Activity" onPage={setPage} />
     </>
   );
 }

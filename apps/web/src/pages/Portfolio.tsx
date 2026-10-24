@@ -76,7 +76,8 @@ export function Portfolio() {
                 {SPOKES.some((s) => s.deployment) && <CrossChainPanel valued={valued} />}
               </div>
             </div>
-            <RecentActivity />
+            {/* Keyed by wallet: another wallet starts on its newest events. */}
+            <RecentActivity key={address} />
           </>
         ) : (
           <PositionPending error={positionQuery.error} onRetry={() => void positionQuery.refetch()} />
@@ -369,12 +370,10 @@ function CrossChainPanel({ valued }: { valued: ValuedPosition }) {
 
 function RecentActivity() {
   const { go } = useUi();
-  const { address } = useAccount();
   const activityQuery = useActivity();
   const activity = activityQuery.data?.items ?? [];
-  // The page belongs to the wallet it was picked for: another wallet starts on its newest events.
-  const [activityPage, setActivityPage] = useState<{ owner?: string; page: number }>({ page: 0 });
-  const shown = paginate(activity, activityPage.owner === address ? activityPage.page : 0, ACTIVITY_PAGE_SIZE);
+  const [page, setPage] = useState(0);
+  const shown = paginate(activity, page, ACTIVITY_PAGE_SIZE);
   return (
     <section className="activity-preview panel">
       <PanelTitle
@@ -405,7 +404,7 @@ function RecentActivity() {
           !activityQuery.isError &&
           (activityQuery.data ? <p className="muted-note">No activity yet.</p> : <HubPending what="your activity" />)}
       </div>
-      <Pagination page={shown} label="Activity" onPage={(page) => setActivityPage({ owner: address, page })} />
+      <Pagination page={shown} label="Activity" onPage={setPage} />
     </section>
   );
 }

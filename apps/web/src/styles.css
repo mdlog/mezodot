@@ -1316,7 +1316,8 @@ tbody tr:last-child td {
   font: 11.5px var(--mono);
   cursor: pointer;
 }
-.page-button:hover:not(:disabled) {
+/* Not on the current page: its indigo number on the indigo fill would vanish under the pointer that just clicked it. */
+.page-button:hover:not(:disabled):not(.is-current) {
   border-color: var(--indigo-mid);
   color: var(--indigo);
 }
