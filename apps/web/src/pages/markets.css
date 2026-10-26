@@ -1,0 +1,50 @@
+/* Markets page layout switch (pages/Markets.tsx): the same markets as cards or as one table. */
+.markets-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+/* A segmented control in the style of .architecture-tabs: a sunken track, the picked layout raised. */
+.view-toggle {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid #e3e1da;
+  border-radius: 6px;
+  background: #f4f3ee;
+}
+.view-toggle button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #858691;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.view-toggle button:hover {
+  color: var(--ink);
+}
+.view-toggle button[aria-pressed='true'] {
+  background: #fffefa;
+  color: var(--indigo);
+  box-shadow: 0 1px 3px #34334712;
+}
+.market-list {
+  padding: 2px 12px;
+  margin-bottom: 13px;
+}
+/* The card's .action-blocked reason, under the asset name. */
+.asset-cell .list-blocked {
+  max-width: 220px;
+  white-space: normal;
+  color: #9c4a37;
+}
+.list-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
