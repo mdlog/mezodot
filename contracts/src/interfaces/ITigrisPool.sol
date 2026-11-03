@@ -13,6 +13,22 @@ interface ITigrisPool {
     function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external;
 }
 
+/// @notice The parts of a Tigris pool that give a time-weighted price: cumulative reserves, stored at most once per
+///         30-minute period by the first swap after it, and accumulated up to the current block.
+interface ITigrisTwapPool {
+    function token0() external view returns (address);
+    function observationLength() external view returns (uint256);
+    function observations(uint256 index)
+        external
+        view
+        returns (uint256 timestamp, uint256 reserve0Cumulative, uint256 reserve1Cumulative);
+    function currentCumulativePrices()
+        external
+        view
+        returns (uint256 reserve0Cumulative, uint256 reserve1Cumulative, uint256 blockTimestamp);
+    function getReserves() external view returns (uint256 reserve0, uint256 reserve1, uint256 blockTimestampLast);
+}
+
 interface ITigrisPoolCallee {
     /// @param sender Caller of `swap`.
     /// @param amount0 Token0 the pool sent before the callback.
