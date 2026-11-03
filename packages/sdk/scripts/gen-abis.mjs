@@ -21,6 +21,7 @@ const CONTRACTS = {
   'ITigrisPool:ITigrisPool': 'tigrisPoolAbi',
   'ITigrisPool:ITigrisPoolFactory': 'tigrisPoolFactoryAbi',
   KeeperGateway: 'keeperGatewayAbi',
+  TroveRouter: 'troveRouterAbi',
   IWormhole: 'wormholeAbi',
   InterestRateModel: 'interestRateModelAbi',
   MockPyth: 'mockPythAbi',

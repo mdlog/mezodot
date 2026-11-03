@@ -11,3 +11,4 @@ export * from './reader';
 export * from './valuation';
 export * from './logs';
 export * from './gas';
+export * from './trove';

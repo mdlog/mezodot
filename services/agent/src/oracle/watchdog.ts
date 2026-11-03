@@ -35,12 +35,10 @@ export type WatchdogStatus = {
   error: string | null;
 };
 
+const LEG_NAMES: Record<number, string> = { [SOURCE_TAG.PYTH]: 'pyth', [SOURCE_TAG.SKIP]: 'skip', [SOURCE_TAG.TWAP]: 'twap' };
+
 const describeLeg = (leg: FeedLeg): string =>
-  leg.source === SOURCE_TAG.SUPRA
-    ? `supra#${Number(BigInt(leg.id))} ${leg.maxAge}s`
-    : leg.source === SOURCE_TAG.PYTH
-      ? `pyth ${leg.maxAge}s`
-      : `source${leg.source} ${leg.maxAge}s`;
+  leg.source === SOURCE_TAG.SUPRA ? `supra#${Number(BigInt(leg.id))} ${leg.maxAge}s` : `${LEG_NAMES[leg.source] ?? `source${leg.source}`} ${leg.maxAge}s`;
 
 /** Classifies every feed. `pullable(s)` says whether the relay can refresh `s` on demand. */
 export function oracleHealth(oracle: OracleState, nowSec: number, pullable: (s: PriceSymbol) => boolean): OracleHealth {

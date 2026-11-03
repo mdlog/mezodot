@@ -9,6 +9,7 @@ export { tigrisRouterAbi } from './tigrisRouterAbi';
 export { tigrisPoolAbi } from './tigrisPoolAbi';
 export { tigrisPoolFactoryAbi } from './tigrisPoolFactoryAbi';
 export { keeperGatewayAbi } from './keeperGatewayAbi';
+export { troveRouterAbi } from './troveRouterAbi';
 export { wormholeAbi } from './wormholeAbi';
 export { interestRateModelAbi } from './interestRateModelAbi';
 export { mockPythAbi } from './mockPythAbi';

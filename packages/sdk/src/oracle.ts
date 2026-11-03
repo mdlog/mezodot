@@ -6,12 +6,16 @@ import type { UsdPrices } from './valuation';
 
 /**
  * OracleRouter v2 helpers (contracts/src/hub/OracleRouter.sol). Prices come from Pyth Core, pushed on
- * Mezo by Mezo's own pusher, and from keyless Supra DORA proofs that a caller attaches to its transaction.
+ * Mezo by Mezo's own pusher, from Mezo's Skip feed and Tigris pools, and from keyless Supra DORA proofs
+ * that a caller attaches to its transaction.
  * Every update passed as `bytes[] priceUpdate` is `sourceTag (1 byte) ‖ vendor payload`.
  */
 
-/** OracleRouter source tags, as registered by contracts/script/DeployHub.s.sol. */
-export const SOURCE_TAG = { PYTH: 1, SUPRA: 2 } as const;
+/**
+ * OracleRouter source tags, as registered by contracts/script/DeployHub.s.sol (Pyth, Supra) and
+ * DeployOracleLiveness.s.sol (Mezo's Skip feed, Tigris TWAP). The last two read from chain: no update to attach.
+ */
+export const SOURCE_TAG = { PYTH: 1, SUPRA: 2, SKIP: 3, TWAP: 4 } as const;
 export type SourceTag = (typeof SOURCE_TAG)[keyof typeof SOURCE_TAG];
 
 /** Seconds a price must stay valid after a transaction is built (wallet confirmation + inclusion). */
