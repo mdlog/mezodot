@@ -46,3 +46,18 @@ export function collateralTotals(protocol: ProtocolState, prices: UsdPrices): Co
     return { collateral: c, units, valueUsd: units * (symbol ? (prices[symbol] ?? 0) : 0) };
   });
 }
+
+/** Collateral held on one chain: `spokeChainId` is the spoke's Wormhole chain id, or null on the hub. */
+export type CollateralGroup = { spokeChainId: number | null; rows: CollateralTotal[] };
+
+/** Hub collateral together, then each spoke's, in the order they first appear. */
+export function collateralByChain(rows: CollateralTotal[]): CollateralGroup[] {
+  const groups: CollateralGroup[] = [];
+  for (const row of rows) {
+    const spokeChainId = row.collateral.isRemote ? row.collateral.chainId : null;
+    const group = groups.find((g) => g.spokeChainId === spokeChainId);
+    if (group) group.rows.push(row);
+    else groups.push({ spokeChainId, rows: [row] });
+  }
+  return groups;
+}
