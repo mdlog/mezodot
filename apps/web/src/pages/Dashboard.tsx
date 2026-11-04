@@ -8,7 +8,7 @@ import { InfoBar, NotDeployed, PageTitle, PanelTitle, StatCard, SummaryStrip } f
 import { HUB, HUB_DEPLOYED, SPOKES, spokeByWormholeChain } from '../chain/env';
 import { loopVolumeUsd, useAgent, useHubStatus, useLoopStats, usePrices, useProtocol } from '../data/hooks';
 import { compactUsd, fmt, fmtApy, money, pct, timeAgo, units } from '../lib/format';
-import { collateralTotals, protocolTotals } from '../lib/tvl';
+import { collateralByChain, collateralTotals, protocolTotals, type CollateralGroup, type CollateralTotal } from '../lib/tvl';
 import { useUi } from '../state/UiContext';
 
 type Stats = { crossChainBorrowRatio: number | null; borrowers: number };
@@ -266,10 +266,10 @@ export function Dashboard() {
           </div>
         </section>
 
-        <section className="panel market-panel">
+        <section className="panel market-panel collateral-panel">
           <PanelTitle
             label="Collateral"
-            meta="Accepted on the hub and on spokes · posted by every account"
+            meta="Borrow on Mezo against any of these. Assets on other chains stay locked there."
             action={
               <button className="text-link" onClick={() => go('borrow')}>
                 Borrow against it <ArrowRight size={13} />
@@ -277,42 +277,40 @@ export function Dashboard() {
             }
           />
           <div className="table-wrap">
-            <table>
+            <table className="collateral-table">
               <thead>
                 <tr>
                   <th>ASSET</th>
-                  <th>HELD ON</th>
-                  <th>MAX LTV</th>
-                  <th>LIQUIDATION</th>
-                  <th>BONUS</th>
-                  <th>POSTED</th>
+                  <th className="collateral-num">
+                    <i className="collateral-key collateral-key--borrow" />
+                    BORROW UP TO
+                  </th>
+                  <th className="collateral-num">
+                    <i className="collateral-key collateral-key--liquidation" />
+                    LIQUIDATED AT
+                  </th>
+                  <th className="collateral-scale-cell" aria-hidden="true" />
+                  <th className="collateral-num">POSTED</th>
                 </tr>
               </thead>
-              <tbody>
-                {collateral.map(({ collateral: c, valueUsd }) => {
-                  const spoke = c.isRemote ? spokeByWormholeChain(c.chainId) : undefined;
-                  return (
-                    <tr key={c.id}>
-                      <td>
-                        <div className="asset-cell">
-                          <TokenLogo symbol={c.symbol} network={spoke?.name} />
-                          <span>
-                            <b>{c.symbol}</b>
-                            {!c.enabled && <small>Not accepted now</small>}
-                          </span>
-                        </div>
-                      </td>
-                      <td>{c.isRemote ? (spoke?.label ?? `Spoke chain ${c.chainId}`) : 'Mezo Hub'}</td>
-                      <td>{c.ltvBps / 100}%</td>
-                      <td>{c.ltBps / 100}%</td>
-                      <td>{c.bonusBps / 100}%</td>
-                      <td>{compactUsd(valueUsd)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
+              {collateralByChain(collateral).map((group) => (
+                <CollateralChain key={group.spokeChainId ?? 'hub'} group={group} />
+              ))}
+              {collateral.length > 0 && (
+                <tfoot>
+                  <tr>
+                    <td colSpan={4}>Total posted by all accounts</td>
+                    <td className="collateral-num">{compactUsd(collateral.reduce((sum, r) => sum + r.valueUsd, 0))}</td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
+          {collateral.length > 0 && (
+            <p className="collateral-note">
+              Percentages are debt as a share of the asset's value. Liquidators earn a {bonusRange(collateral)} bonus from the collateral they take.
+            </p>
+          )}
           {!protocol && <HubPending what="collateral" />}
         </section>
       </div>
@@ -322,4 +320,66 @@ export function Dashboard() {
       </InfoBar>
     </>
   );
+}
+
+/** One chain's collateral: its name, then a row per asset. */
+function CollateralChain({ group }: { group: CollateralGroup }) {
+  const onHub = group.spokeChainId === null;
+  const spoke = onHub ? undefined : spokeByWormholeChain(group.spokeChainId as number);
+  const network = onHub ? HUB.name : spoke?.name;
+  return (
+    <tbody>
+      <tr className="collateral-chain">
+        <th colSpan={5} scope="rowgroup">
+          <span>
+            {network && <ChainLogo network={network} size={16} />}
+            {onHub ? HUB.label : (spoke?.label ?? `Spoke chain ${group.spokeChainId}`)}
+          </span>
+        </th>
+      </tr>
+      {group.rows.map(({ collateral: c, valueUsd }) => (
+        <tr key={c.id} className={c.enabled ? undefined : 'collateral-row--off'}>
+          <td>
+            <div className="asset-cell">
+              <TokenLogo symbol={c.symbol} />
+              <span>
+                <b>{c.symbol}</b>
+                {!c.enabled ? <small>Not accepted now</small> : c.isShare && <small>Supplied {c.symbol.slice(1)}</small>}
+              </span>
+            </div>
+          </td>
+          <td className="collateral-num collateral-borrow">{c.ltvBps / 100}%</td>
+          <td className="collateral-num" title={`Liquidators earn a ${c.bonusBps / 100}% bonus on this asset`}>
+            {c.ltBps / 100}%
+          </td>
+          <td className="collateral-scale-cell" aria-hidden="true">
+            <CollateralScale ltvBps={c.ltvBps} ltBps={c.ltBps} />
+          </td>
+          <td className={`collateral-num collateral-posted${valueUsd < 0.005 ? ' is-empty' : ''}`}>{compactUsd(valueUsd)}</td>
+        </tr>
+      ))}
+    </tbody>
+  );
+}
+
+/** The asset's value from 0% to 100%: what can be borrowed, then where liquidation starts. Same marks as Borrow's LTV meter. */
+function CollateralScale({ ltvBps, ltBps }: { ltvBps: number; ltBps: number }) {
+  const at = (bps: number) => `${bps / 100}%`;
+  return (
+    <div className="scale-track collateral-scale">
+      <div className="scale-bands">
+        <span className="scale-band collateral-scale-borrow" style={{ left: 0, width: at(ltvBps) }} />
+        <span className="scale-band collateral-scale-gap" style={{ left: at(ltvBps), width: at(ltBps - ltvBps) }} />
+      </div>
+      <span className="scale-tick scale-tick--liquidation" style={{ left: at(ltBps) }} />
+    </div>
+  );
+}
+
+/** What liquidators earn across the assets: one figure when every asset pays the same. */
+function bonusRange(collateral: CollateralTotal[]): string {
+  const bonuses = collateral.map((r) => r.collateral.bonusBps / 100);
+  const low = Math.min(...bonuses);
+  const high = Math.max(...bonuses);
+  return low === high ? `${low}%` : `${low}% to ${high}%`;
 }

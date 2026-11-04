@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PRICE_KEYS, type ProtocolState } from '@mezodot/sdk';
 import { prices, protocol as hub } from '../test/fixtures';
-import { collateralTotals, protocolTotals } from './tvl';
+import { collateralByChain, collateralTotals, protocolTotals, type CollateralTotal } from './tvl';
 
 const E18 = 10n ** 18n;
 
@@ -48,5 +48,29 @@ describe('collateral totals', () => {
 
   it('values collateral without a price at zero', () => {
     expect(collateralTotals(hub, { MUSD: 1 }).map((r) => r.valueUsd)).toEqual([expect.closeTo(1_100, 9), 0, 0]);
+  });
+});
+
+describe('collateral by chain', () => {
+  const row = (symbol: string, isRemote: boolean, chainId: number) =>
+    ({ collateral: { symbol, isRemote, chainId }, units: 0, valueUsd: 0 }) as unknown as CollateralTotal;
+
+  it('keeps hub assets together, whatever chain id they carry, and gives each spoke its own group in first-seen order', () => {
+    const groups = collateralByChain([
+      row('pMUSD', false, 0),
+      row('BTC', false, 31611),
+      row('WETH', true, 10004),
+      row('WETH', true, 10002),
+      row('USDC', true, 10004),
+    ]);
+    expect(groups.map((g) => [g.spokeChainId, g.rows.map((r) => r.collateral.symbol)])).toEqual([
+      [null, ['pMUSD', 'BTC']],
+      [10004, ['WETH', 'USDC']],
+      [10002, ['WETH']],
+    ]);
+  });
+
+  it('has no groups without collateral', () => {
+    expect(collateralByChain([])).toEqual([]);
   });
 });

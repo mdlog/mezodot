@@ -24,6 +24,10 @@ export const GAS_FLOOR = {
   poolRedeem: 150_000n,
   /** Single-hop Tigris swap through the router. */
   dexSwap: 250_000n,
+  /** TroveRouter.openAndSupply: a Mezo trove, the pool deposit and an optional post (~790k on a fork of Mezo testnet). */
+  troveOpen: 1_000_000n,
+  /** TroveRouter.repayFromSupply or closeFromSupply (~450k on a fork of Mezo testnet). */
+  troveAdjust: 600_000n,
 } as const;
 
 export type GasFloorName = keyof typeof GAS_FLOOR;

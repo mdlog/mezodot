@@ -33,7 +33,10 @@ mkdir -p "$STATE"
 # Blocks every 2 s like Mezo (plus instant mining for transactions), so block.timestamp tracks the wall clock:
 # pull-oracle proofs are stamped "now" and Supra rejects timestamps more than 15 s ahead of the block.
 ANVIL_MINING=(--block-time 2 --mixed-mining)
-anvil --port 8545 --chain-id 31337 "${ANVIL_MINING[@]}" --silent > "$STATE/hub.log" 2>&1 & echo $! > "$STATE/hub.pid"
+# The hub prices gas like Mezo: in BTC, at ~146 wei. Anvil's default (1 gwei and up) at the devnet's $80,000 BTC would
+# cost the keeper ~$96 per liquidation and make every E2E liquidation look unprofitable to the agent.
+HUB_GAS=(--block-base-fee-per-gas 0 --disable-min-priority-fee)
+anvil --port 8545 --chain-id 31337 "${ANVIL_MINING[@]}" "${HUB_GAS[@]}" --silent > "$STATE/hub.log" 2>&1 & echo $! > "$STATE/hub.pid"
 anvil --port 8546 --chain-id 31338 "${ANVIL_MINING[@]}" --silent > "$STATE/spoke.log" 2>&1 & echo $! > "$STATE/spoke.pid"
 for rpc in "$HUB_RPC" "$SPOKE_RPC"; do
   for _ in $(seq 1 50); do cast chain-id --rpc-url "$rpc" >/dev/null 2>&1 && break; sleep 0.2; done

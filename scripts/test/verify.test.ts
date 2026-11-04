@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { parseUnits, toFunctionSelector, zeroAddress, type Abi, type AbiFunction, type Address, type Hex, type PublicClient } from 'viem';
+import { keccak256, parseUnits, toBytes, toFunctionSelector, zeroAddress, type Abi, type AbiFunction, type Address, type Hex, type PublicClient } from 'viem';
 import {
   PRICE_KEYS,
   PRICE_SYMBOLS,
@@ -12,6 +12,7 @@ import {
   spokeGatewayAbi,
   swapLeverageManagerAbi,
   toBytes32,
+  troveRouterAbi,
   vaultManagerAbi,
   wormholeAdapterAbi,
   type HubDeployment,
@@ -53,6 +54,13 @@ const BTC = A(18);
 const PYTH_SOURCE = A(19);
 const SUPRA_SOURCE = A(20);
 const IRM = A(21);
+const SKIP_SOURCE = A(40);
+const TWAP_SOURCE = A(41);
+const TROVE_ROUTER = A(42);
+const SKIP_FEED = A(43);
+const MEZO_SIGNATURES = A(44);
+const MEZO_POOL = A(45);
+const PMUSD_POOL = A(46);
 const GATEWAY = A(33);
 const SPOKE_WORMHOLE = A(34);
 const WETH = A(35);
@@ -168,6 +176,10 @@ function world() {
         },
       ]),
     ) as Record<PriceSymbol, { primary: ReturnType<typeof leg>; secondary: ReturnType<typeof leg>; maxConfBps: number; maxDivergenceBps: number }>,
+    routerSkip: zeroAddress as Address,
+    routerTwap: zeroAddress as Address,
+    twapBtcPool: HUB.tigrisPool as Address,
+    routerCollateral: 0n,
     pair: HUB.tigrisPool as Address | Error,
     factoryPool: HUB.tigrisPool,
     poolQuote: 12_000n,
@@ -224,7 +236,7 @@ function hubReads(w: World) {
       case HUB.oracleRouter:
         return {
           ...ownable,
-          sources: args[0] === 1 ? PYTH_SOURCE : SUPRA_SOURCE,
+          sources: { 1: PYTH_SOURCE, 2: SUPRA_SOURCE, 3: w.routerSkip, 4: w.routerTwap }[args[0] as number],
           feeds: w.feeds[symbolOf(args[0])],
           getPriceInfo: [true, E18, 2_000_000_000n],
         }[fn];
@@ -232,6 +244,21 @@ function hubReads(w: World) {
         return fn === 'pyth' ? HUB.pyth : undefined;
       case SUPRA_SOURCE:
         return fn === 'pull' ? HUB.supraPull : undefined;
+      case SKIP_SOURCE:
+        return fn === 'feed' ? SKIP_FEED : undefined;
+      case TWAP_SOURCE:
+        return {
+          anchor: PYTH_SOURCE,
+          btcUsd: SKIP_SOURCE,
+          btcPool: w.twapBtcPool,
+          mezoPool: MEZO_POOL,
+          musd: MUSD,
+          anchorMusd: PYTH_IDS.MUSD,
+          anchorMezo: PYTH_IDS.MEZO,
+          latest: args[0] === keccak256(toBytes('MEZO')) ? [0n, 0n, 0n] : [E18, 0n, 1_000n],
+        }[fn];
+      case TROVE_ROUTER:
+        return { signatures: MEZO_SIGNATURES, vaultManager: HUB.vaultManager, pool: HUB.pMUSD, musd: MUSD, collateralId: w.routerCollateral }[fn];
       case HUB.wormholeAdapter:
         return { ...ownable, vaultManager: HUB.vaultManager, wormhole: HUB.wormhole, localChainId: 50, consistencyLevel: 1, spokeEmitter: w.spokeEmitter }[fn];
       case HUB.wormhole:
@@ -264,7 +291,7 @@ function hubReads(w: World) {
       case HUB.swapLeverageManager:
         return { vaultManager: HUB.vaultManager, pool: HUB.pMUSD, debtAsset: MUSD, collateral: BTC, marketId: 0n, collateralId: 2n, pair: w.pair }[fn];
       case HUB.tigrisFactory:
-        return fn === 'getPool' ? w.factoryPool : undefined;
+        return fn === 'getPool' ? (args[2] === true ? PMUSD_POOL : w.factoryPool) : undefined;
       case HUB.tigrisPool:
         return { token0: MUSD, token1: BTC, stable: false, getAmountOut: w.poolQuote }[fn];
       case HUB.tigrisRouter:
@@ -301,8 +328,8 @@ function spokeReads(w: World) {
   };
 }
 
-async function verify(w: World, expectations: Expectations = expectationsFromEnv({})): Promise<Report> {
-  const hub = { network: 'devnet-hub' as const, deployment: hubDeployment, client: fakeClient(31337, w.hubCode, hubReads(w)) };
+async function verify(w: World, expectations: Expectations = expectationsFromEnv({}), deployment: HubDeployment = hubDeployment): Promise<Report> {
+  const hub = { network: 'devnet-hub' as const, deployment, client: fakeClient(31337, w.hubCode, hubReads(w)) };
   const spoke = { network: 'devnet-spoke' as const, deployment: spokeDeployment, client: fakeClient(31338, w.spokeCode, spokeReads(w)) };
   return verifyEnvironment(hub, [spoke], expectations);
 }
@@ -489,6 +516,82 @@ describe('verifyEnvironment', () => {
     // USDC has a Supra leg on-chain that the loaded environment does not configure.
     expect(failed(r, 'feed USDC Supra pair')).toBeDefined();
     expect(failed(r, 'devnet-hub.json contracts.pyth = deploy input')).toBeUndefined(); // inputs are per testnet name only
+  });
+});
+
+describe('keyless oracle legs', () => {
+  const liveness = (w: World = world()) => {
+    w.routerSkip = SKIP_SOURCE;
+    w.routerTwap = TWAP_SOURCE;
+    Object.assign(w.hubCode, { [SKIP_SOURCE]: '0x6080', [TWAP_SOURCE]: '0x6080', [TROVE_ROUTER]: codeFor(troveRouterAbi), [MEZO_SIGNATURES]: '0x6080' });
+    w.feeds.BTC.primary = leg(3, 120, pairId(0));
+    w.feeds.MUSD.secondary = leg(4, 3900, keccak256(toBytes('MUSD')));
+    w.feeds.MUSD.maxDivergenceBps = 500;
+    w.feeds.MEZO.secondary = leg(4, 3900, keccak256(toBytes('MEZO')));
+    w.feeds.MEZO.maxDivergenceBps = 2000;
+    return w;
+  };
+  const deployment: HubDeployment = {
+    ...hubDeployment,
+    contracts: {
+      ...hubDeployment.contracts,
+      skipSource: SKIP_SOURCE,
+      twapSource: TWAP_SOURCE,
+      troveRouter: TROVE_ROUTER,
+      mezoBorrowerSignatures: MEZO_SIGNATURES,
+    },
+  };
+
+  it('passes Skip as the BTC primary and the TWAP behind MUSD and MEZO', async () => {
+    const r = await verify(liveness(), expectationsFromEnv({}), deployment);
+    expect(failures(r)).toEqual([]);
+    expect(finding(r, 'feed BTC primary')?.detail).toMatch(/Skip/);
+    expect(finding(r, 'feed MUSD secondary')?.detail).toMatch(/TWAP/);
+  });
+
+  it('reports a TWAP leg that refuses to price, without failing', async () => {
+    const r = await verify(liveness(), expectationsFromEnv({}), deployment);
+    expect(finding(r, 'TWAP fallback MEZO')?.status).toBe('info');
+    expect(finding(r, 'TWAP fallback MEZO')?.detail).toMatch(/outside its band/);
+    expect(finding(r, 'TWAP fallback MUSD')?.detail).toMatch(/\$1/);
+  });
+
+  it('flags a router that does not serve the recorded sources', async () => {
+    const w = liveness();
+    w.routerSkip = A(99);
+    const r = await verify(w, expectationsFromEnv({}), deployment);
+    expect(failed(r, 'OracleRouter.sources(SKIP) = contracts.skipSource')).toBeDefined();
+  });
+
+  it('flags a TWAP source reading another BTC pool', async () => {
+    const w = liveness();
+    w.twapBtcPool = A(98);
+    const r = await verify(w, expectationsFromEnv({}), deployment);
+    expect(failed(r, 'TigrisTwapSource.btcPool() = contracts.tigrisPool')).toBeDefined();
+  });
+
+  it('flags a trove router bound to a collateral other than pMUSD', async () => {
+    const w = liveness();
+    w.routerCollateral = 1n;
+    const r = await verify(w, expectationsFromEnv({}), deployment);
+    expect(failed(r, 'TroveRouter collateral 1')).toBeDefined();
+  });
+
+  it('checks the pMUSD/MUSD pool against the factory', async () => {
+    const w = liveness();
+    w.hubCode[PMUSD_POOL] = '0x6080';
+    const good = await verify(w, expectationsFromEnv({}), { ...deployment, contracts: { ...deployment.contracts, pMusdPool: PMUSD_POOL } });
+    expect(failures(good)).toEqual([]);
+    expect(finding(good, 'TigrisFactory.getPool(pMUSD, MUSD, true) = contracts.pMusdPool')?.status).toBe('pass');
+
+    w.hubCode[A(97)] = '0x6080';
+    const bad = await verify(w, expectationsFromEnv({}), { ...deployment, contracts: { ...deployment.contracts, pMusdPool: A(97) } });
+    expect(failed(bad, 'TigrisFactory.getPool(pMUSD, MUSD, true) = contracts.pMusdPool')).toBeDefined();
+  });
+
+  it('still expects Pyth first on a deployment without the keyless sources', async () => {
+    const r = await verify(liveness());
+    expect(failed(r, 'feed BTC primary')?.detail).toMatch(/expected Pyth/);
   });
 });
 

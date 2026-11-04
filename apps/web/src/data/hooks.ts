@@ -2,7 +2,7 @@ import { useCallback, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAccount, useConfig, usePublicClient } from 'wagmi';
 import { getPublicClient } from 'wagmi/actions';
-import { BaseError, HttpRequestError, erc20Abi, type Address, type PublicClient } from 'viem';
+import { BaseError, HttpRequestError, erc20Abi, zeroAddress, type Address, type PublicClient } from 'viem';
 import {
   PRICE_SYMBOLS,
   SOURCE_TAG,
@@ -16,6 +16,7 @@ import {
   swapLeverageManagerAbi,
   usablePrices,
   valuePosition,
+  troveContracts,
   type OracleState,
   type OracleStatus,
   type ProtocolState,
@@ -26,6 +27,7 @@ import { AGENT_URL, ENV_NAME, HUB, SPOKES } from '../chain/env';
 import { explainError } from '../lib/errors';
 import { protocolTotals } from '../lib/tvl';
 import { scanIncremental } from './incremental';
+import { readTroveWallet } from './trove';
 
 /** Query keys shared with the transaction runner, which invalidates them after each write. */
 export const QK = {
@@ -38,6 +40,7 @@ export const QK = {
   activity: (a?: Address) => ['activity', a] as const,
   claims: (a?: Address) => ['claims', a] as const,
   agent: (path: string) => ['agent', path] as const,
+  trove: (a?: Address) => ['trove', a] as const,
 };
 
 export const useHubClient = () => usePublicClient({ chainId: HUB.chain.id }) as PublicClient | undefined;
@@ -262,6 +265,18 @@ export type LoopStats = {
 const sum = (values: bigint[]) => values.reduce((a, b) => a + b, 0n);
 
 /** Lifetime leverage volume from LeverageManager `Looped` and SwapLeverageManager `Opened` events. */
+/** The connected wallet's Mezo trove and the balances that can pay it down. Without a wallet: Mezo's system figures, with empty balances. */
+export function useTrove() {
+  const client = useHubClient();
+  const { address } = useAccount();
+  return useQuery({
+    queryKey: QK.trove(address),
+    enabled: Boolean(client && HUB.deployment && troveContracts(HUB.deployment)),
+    queryFn: () => readTroveWallet(client!, HUB.deployment!, address ?? zeroAddress),
+    refetchInterval: 15_000,
+  });
+}
+
 export function useLoopStats() {
   const client = useHubClient();
   return useQuery({

@@ -2,6 +2,9 @@ import {
   erc20Abi,
   formatUnits,
   isAddress,
+  keccak256,
+  parseAbi,
+  toBytes,
   toFunctionSelector,
   toFunctionSignature,
   zeroAddress,
@@ -16,6 +19,8 @@ import {
   PRICE_KEYS,
   PRICE_SYMBOLS,
   SOURCE_TAG,
+  troveRouterAbi,
+  priceSourceAbi,
   SUPRA_PAIRS,
   keeperGatewayAbi,
   leverageManagerAbi,
@@ -308,8 +313,9 @@ export const SEED_RECEIVER: Address = '0x000000000000000000000000000000000000dEa
 const MAX_UINT = 2n ** 256n - 1n;
 /** PToken's virtual share offset: an empty pool mints 10^6 shares per underlying unit (DeployHub scales caps by it). */
 const SHARE_OFFSET = 10n ** 6n;
-/** Pyth-only keys: without a Pyth API key nobody can refresh them when Mezo's pusher stops. */
+/** Keys Mezo's Pyth pusher prices: without it they rest on the Tigris TWAP fallback, when one is deployed and in band. */
 const PUSH_ONLY: PriceSymbol[] = ['MUSD', 'MEZO'];
+const TWAP_ANCHORS = { MUSD: 'anchorMusd', MEZO: 'anchorMezo' } as const;
 
 /** Everything DeployHub records; supraPull may be the zero address (no Supra source). */
 const HUB_CONTRACT_KEYS = [
@@ -339,6 +345,7 @@ const HUB_ABIS: [label: string, key: keyof HubDeployment['contracts'], abi: Abi]
   ['pMUSD', 'pMUSD', pTokenAbi],
   ['pMEZO', 'pMEZO', pTokenAbi],
   ['SwapLeverageManager', 'swapLeverageManager', swapLeverageManagerAbi],
+  ['TroveRouter', 'troveRouter', troveRouterAbi],
 ];
 
 const ownableAbi = [
@@ -348,6 +355,14 @@ const ownableAbi = [
 /** PythSource / SupraSource getters (the SDK ships only the IPriceSource interface). */
 const pythSourceAbi = [{ type: 'function', name: 'pyth', inputs: [], outputs: [{ name: '', type: 'address' }], stateMutability: 'view' }] as const;
 const supraSourceAbi = [{ type: 'function', name: 'pull', inputs: [], outputs: [{ name: '', type: 'address' }], stateMutability: 'view' }] as const;
+const twapSourceAbi = parseAbi([
+  'function anchor() view returns (address)',
+  'function btcUsd() view returns (address)',
+  'function btcPool() view returns (address)',
+  'function musd() view returns (address)',
+  'function anchorMusd() view returns (bytes32)',
+  'function anchorMezo() view returns (bytes32)',
+]);
 
 type CollateralConfig = {
   enabled: boolean;
@@ -416,6 +431,8 @@ class Verifier {
     await this.wormhole();
     await this.hubPeripherals();
     await this.swapLeverage();
+    await this.troveRouter();
+    await this.pMusdPool();
     for (const spoke of this.spokes) await this.spoke(spoke);
   }
 
@@ -875,24 +892,37 @@ class Verifier {
       }
     }
 
+    await this.keylessSources(router, pythSource);
+
     const now = Math.floor(Date.now() / 1000);
     for (const s of PRICE_SYMBOLS) {
       const key = PRICE_KEYS[s];
       const policy = this.expect.feeds[s] ?? {};
       const feed = await this.probe(`feed ${s}`, () => client.readContract({ address: router, abi: oracleRouterAbi, functionName: 'feeds', args: [key] }));
       if (!feed) continue;
+      const skipFirst = s === 'BTC' && Boolean(this.c.skipSource);
+      const primaryName = skipFirst ? 'Skip' : 'Pyth';
       const primaryOk = r.that(
         `feed ${s} primary`,
-        feed.primary.source === SOURCE_TAG.PYTH,
-        `Pyth, ${feed.primary.maxAge} s, confidence cap ${pct(feed.maxConfBps)}`,
-        feed.primary.source === 0 ? 'no feed for this key' : `source tag ${feed.primary.source}, expected Pyth`,
+        feed.primary.source === (skipFirst ? SOURCE_TAG.SKIP : SOURCE_TAG.PYTH),
+        `${primaryName}, ${feed.primary.maxAge} s, confidence cap ${pct(feed.maxConfBps)}`,
+        feed.primary.source === 0 ? 'no feed for this key' : `source tag ${feed.primary.source}, expected ${primaryName}`,
       );
       if (!primaryOk) continue;
-      r.equal(`feed ${s} Pyth id = priceFeeds.${s}`, feed.primary.id, getPath(this.hub.deployment, `priceFeeds.${s}`) ?? 'missing');
-      if (policy.maxAge !== undefined) r.equal(`feed ${s} Pyth max age`, feed.primary.maxAge, policy.maxAge);
+      if (!skipFirst) r.equal(`feed ${s} Pyth id = priceFeeds.${s}`, feed.primary.id, getPath(this.hub.deployment, `priceFeeds.${s}`) ?? 'missing');
+      if (policy.maxAge !== undefined) r.equal(`feed ${s} ${primaryName} max age`, feed.primary.maxAge, policy.maxAge);
       if (policy.maxConfBps !== undefined) r.equal(`feed ${s} confidence cap`, feed.maxConfBps, policy.maxConfBps);
 
-      if (feed.secondary.source === 0) {
+      const twapSecond = PUSH_ONLY.includes(s) && Boolean(this.c.twapSource);
+      if (twapSecond) {
+        const isTwap = r.that(
+          `feed ${s} secondary`,
+          feed.secondary.source === SOURCE_TAG.TWAP,
+          `Tigris TWAP, ${feed.secondary.maxAge} s, divergence cap ${pct(feed.maxDivergenceBps)}`,
+          `source tag ${feed.secondary.source}, expected Tigris TWAP`,
+        );
+        if (isTwap) r.equal(`feed ${s} TWAP id`, feed.secondary.id, keccak256(toBytes(s)));
+      } else if (feed.secondary.source === 0) {
         if (typeof policy.supraPair === 'number') r.fail(`feed ${s} secondary`, `missing: Supra pair ${policy.supraPair} expected`);
         else if (s === 'ETH') r.warn(`feed ${s} secondary`, 'none: Pyth ETH is not pushed on Mezo, so ETH is priced only by a Pyth pull update');
         else r.info(`feed ${s} secondary`, 'none');
@@ -919,9 +949,97 @@ class Verifier {
       if (!info) continue;
       const [ok, price, validUntil] = info;
       if (ok) r.info(`price ${s}`, `$${Number(formatUnits(price, 18)).toPrecision(6)}, valid for ${Number(validUntil) - now} s`);
-      else if (PUSH_ONLY.includes(s)) r.warn(`price ${s}`, 'unavailable: borrows and liquidations touching it revert until a Pyth push (docs/RUNBOOK.md)');
+      else if (PUSH_ONLY.includes(s))
+        r.warn(`price ${s}`, 'unavailable: borrows and liquidations touching it revert until a Pyth push or a TWAP fallback inside its band (docs/RUNBOOK.md)');
       else r.info(`price ${s}`, 'on demand: a transaction must attach a pull update');
     }
+  }
+
+  /** Mezo's Skip feed and the Tigris TWAP fallback, on deployments that record them (DeployOracleLiveness). */
+  private async keylessSources(router: Address, pythSource: Address | undefined): Promise<void> {
+    const r = this.report;
+    const { client } = this.hub;
+    const { skipSource, twapSource } = this.c;
+    if (skipSource) {
+      await this.expectRead(
+        'OracleRouter.sources(SKIP) = contracts.skipSource',
+        () => client.readContract({ address: router, abi: oracleRouterAbi, functionName: 'sources', args: [SOURCE_TAG.SKIP] }),
+        skipSource,
+      );
+    }
+    if (!twapSource) return;
+    await this.expectRead(
+      'OracleRouter.sources(TWAP) = contracts.twapSource',
+      () => client.readContract({ address: router, abi: oracleRouterAbi, functionName: 'sources', args: [SOURCE_TAG.TWAP] }),
+      twapSource,
+    );
+    const read = (functionName: 'anchor' | 'btcUsd' | 'btcPool' | 'musd' | 'anchorMusd' | 'anchorMezo') =>
+      client.readContract({ address: twapSource, abi: twapSourceAbi, functionName });
+    if (pythSource) await this.expectRead('TigrisTwapSource.anchor() = the Pyth source', () => read('anchor'), pythSource);
+    if (skipSource) await this.expectRead('TigrisTwapSource.btcUsd() = contracts.skipSource', () => read('btcUsd'), skipSource);
+    if (this.c.tigrisPool) await this.expectRead('TigrisTwapSource.btcPool() = contracts.tigrisPool', () => read('btcPool'), this.c.tigrisPool);
+    if (this.t.MUSD) await this.expectRead('TigrisTwapSource.musd() = tokens.MUSD', () => read('musd'), this.t.MUSD);
+    for (const s of ['MUSD', 'MEZO'] as const) {
+      await this.expectRead(
+        `TigrisTwapSource.${TWAP_ANCHORS[s]}() = priceFeeds.${s}`,
+        () => read(TWAP_ANCHORS[s]),
+        getPath(this.hub.deployment, `priceFeeds.${s}`) ?? 'missing',
+      );
+      const [price] = await client
+        .readContract({ address: twapSource, abi: priceSourceAbi, functionName: 'latest', args: [keccak256(toBytes(s))] })
+        .catch(() => [0n, 0n, 0n] as const);
+      r.info(
+        `TWAP fallback ${s}`,
+        price > 0n
+          ? `$${Number(formatUnits(price, 18)).toPrecision(6)}`
+          : 'no price: the pool is outside its band or too young, so this key rests on the Pyth push alone',
+      );
+    }
+  }
+
+  /** The stable pMUSD/MUSD pool on Tigris, when recorded: the factory must know it, so its router routes through it. */
+  private async pMusdPool(): Promise<void> {
+    const pool = this.c.pMusdPool;
+    const { tigrisFactory, pMUSD } = this.c;
+    const { MUSD } = this.t;
+    if (!pool || !tigrisFactory || !pMUSD || !MUSD) return;
+    const { client } = this.hub;
+    this.report.begin('pMUSD/MUSD pool');
+    await this.expectRead(
+      'TigrisFactory.getPool(pMUSD, MUSD, true) = contracts.pMusdPool',
+      () => client.readContract({ address: tigrisFactory, abi: tigrisPoolFactoryAbi, functionName: 'getPool', args: [pMUSD, MUSD, true] }),
+      pool,
+    );
+  }
+
+  /** TroveRouter holds nothing between transactions and supplies only to pMUSD. */
+  private async troveRouter(): Promise<void> {
+    const trove = this.c.troveRouter;
+    if (!trove) return;
+    const r = this.report;
+    const { client } = this.hub;
+    r.begin('TroveRouter');
+    const read = (functionName: 'signatures' | 'vaultManager' | 'pool' | 'musd' | 'collateralId') =>
+      client.readContract({ address: trove, abi: troveRouterAbi, functionName });
+    if (this.c.mezoBorrowerSignatures)
+      await this.expectRead('TroveRouter.signatures() = contracts.mezoBorrowerSignatures', () => read('signatures'), this.c.mezoBorrowerSignatures);
+    await this.expectRead('TroveRouter.vaultManager()', () => read('vaultManager'), this.c.vaultManager ?? 'missing');
+    await this.expectRead('TroveRouter.pool() = contracts.pMUSD', () => read('pool'), this.c.pMUSD ?? 'missing');
+    if (this.t.MUSD) await this.expectRead('TroveRouter.musd() = tokens.MUSD', () => read('musd'), this.t.MUSD);
+    const id = await this.probe('TroveRouter.collateralId()', () => read('collateralId'));
+    if (id !== undefined) {
+      const c = this.collaterals[Number(id)];
+      r.that(
+        `TroveRouter collateral ${id}`,
+        Boolean(c?.isShare && this.c.pMUSD && lower(c.token) === lower(this.c.pMUSD)),
+        'pMUSD shares',
+        'not the pMUSD share collateral',
+      );
+    }
+    await this.holdsNothing('TroveRouter', trove, [
+      ['MUSD', this.t.MUSD],
+      ['pMUSD', this.c.pMUSD],
+    ]);
   }
 
   private async wormhole(): Promise<void> {

@@ -1,6 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
 
-export const VIEWS = ['landing', 'dashboard', 'portfolio', 'markets', 'crosschain', 'borrow', 'loop', 'agents', 'architecture', 'activity'] as const;
+export const VIEWS = [
+  'landing',
+  'dashboard',
+  'portfolio',
+  'markets',
+  'crosschain',
+  'borrow',
+  'trove',
+  'loop',
+  'agents',
+  'architecture',
+  'proof',
+  'activity',
+] as const;
 export type View = (typeof VIEWS)[number];
 
 /** View for a location hash: `#/markets` → markets. The bare root, and anything unknown, is the landing page. */

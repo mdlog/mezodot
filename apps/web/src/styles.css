@@ -1155,6 +1155,134 @@ tbody tr:last-child td {
   transform: translate(-50%, -50%);
   transition: left 0.3s;
 }
+/* Dashboard collateral: grouped by chain, numbers right-aligned, and a scale that reuses Borrow's LTV marks. */
+.collateral-table th.collateral-num,
+.collateral-table td.collateral-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.collateral-table th.collateral-num {
+  width: 118px;
+}
+.collateral-key {
+  display: inline-block;
+  vertical-align: 1px;
+  margin-right: 6px;
+}
+.collateral-key--borrow {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--green);
+}
+.collateral-key--liquidation {
+  width: 2px;
+  height: 10px;
+  vertical-align: -1px;
+  border-radius: 1px;
+  background: #b4553f;
+}
+.collateral-table .collateral-chain th {
+  padding: 15px 7px 7px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--ink);
+  border-bottom: 1px solid #efeee9;
+}
+.collateral-table .collateral-chain span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.collateral-table .asset-cell b {
+  display: inline;
+}
+.collateral-table .asset-cell small {
+  display: inline;
+  margin: 0 0 0 7px;
+}
+.collateral-table td.collateral-borrow,
+.collateral-table td.collateral-posted {
+  color: var(--ink);
+  font-weight: 500;
+}
+.collateral-table td.collateral-posted.is-empty {
+  color: var(--muted);
+  font-weight: 400;
+}
+.collateral-table .collateral-scale-cell {
+  width: 32%;
+  padding-left: 26px;
+  padding-right: 14px;
+}
+.scale-track.collateral-scale {
+  border-radius: 3px;
+  background: #eeede8;
+}
+.collateral-scale .collateral-scale-borrow {
+  background: var(--green);
+  opacity: 0.62;
+}
+.collateral-scale .collateral-scale-gap {
+  background: var(--amber);
+  opacity: 0.3;
+}
+.collateral-row--off .collateral-scale {
+  opacity: 0.4;
+}
+.collateral-row--off td.collateral-borrow {
+  color: var(--muted);
+}
+.collateral-table tfoot td {
+  padding-top: 12px;
+  border-top: 1px solid var(--line-dark);
+  border-bottom: 0;
+  color: var(--ink);
+  font-weight: 600;
+}
+.collateral-note {
+  margin: 10px 7px 1px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+@media (max-width: 680px) {
+  .collateral-panel .panel-title {
+    flex-wrap: wrap;
+  }
+  .collateral-panel .panel-title > div {
+    flex: 1 0 100%;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .collateral-panel .panel-title .text-link {
+    padding: 0;
+  }
+  /* Zero width rather than hidden: the chain and total rows span this column. */
+  .collateral-table .collateral-scale-cell {
+    width: 0;
+    padding: 0;
+  }
+  .collateral-scale,
+  .collateral-key {
+    display: none;
+  }
+  .collateral-table th {
+    white-space: normal;
+    vertical-align: bottom;
+    font-size: 10.5px;
+    letter-spacing: 0.3px;
+  }
+  .collateral-table th.collateral-num {
+    width: 62px;
+  }
+  .collateral-table .asset-cell small {
+    display: block;
+    margin: 2px 0 0;
+  }
+}
 .activity-preview {
   padding: 14px 16px 7px;
   margin-bottom: 12px;
@@ -5184,4 +5312,90 @@ a.nav-link {
   .portfolio-panel {
     padding: 13px;
   }
+}
+
+/* --- BTC trove -------------------------------------------------------------------- */
+.trove-explain {
+  margin: 12px 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.trove-ratios {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.trove-ratios .leverage-selector {
+  flex: 0 0 140px;
+}
+.trove-ratios button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.trove-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 13px;
+}
+.trove-form .field-label {
+  margin-top: 16px;
+}
+.trove-form .borrow-preview {
+  margin-top: 16px;
+}
+.trove-form button.button {
+  margin-top: 4px;
+}
+.trove-system,
+.trove-surplus,
+.proof-section {
+  padding: 18px 20px;
+}
+.trove-system .borrow-preview,
+.trove-surplus .trove-explain {
+  margin-top: 8px;
+}
+
+/* --- On-chain proof --------------------------------------------------------------- */
+.proof-sections {
+  display: grid;
+  gap: 16px;
+}
+.proof-note {
+  margin: 8px 0 12px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.proof-txs {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.proof-txs li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+  font-size: 13px;
+}
+.proof-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.proof-links a,
+.proof-note a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }

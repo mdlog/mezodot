@@ -1,5 +1,5 @@
 // Pieces injected into the recorded pages: the app's zoom and a visible cursor (the recording has no OS cursor), the
-// intro's lower third, the terminal shown in the proof beat, and the closing card. All are designed at 1920x1080 and
+// intro's lower third, the checks beat's terminal, the explorer capture, and the closing card. All are designed at 1920x1080 and
 // live outside <body> so the app's zoom does not scale them.
 
 import { readFileSync } from 'node:fs';
@@ -35,15 +35,31 @@ export const lowerThird = ({ title, sub }) => `(() => {
   document.documentElement.append(kf, el);
 })();`;
 
-/** The proof beat's terminal: verbatim commands and output from take.json, revealed group by group, then the
- *  Sourcify page captured off camera. */
-export function terminalPage(take, shotPath) {
+/** A capture taken off camera, faded in over the page when the narration names it. Lives outside <body>, so the app's
+ *  zoom does not scale it. */
+export function shotOverlay(shotPath) {
   const shot = `data:image/png;base64,${readFileSync(shotPath).toString('base64')}`;
+  return `(async () => {
+    const el = document.createElement('div');
+    // 1% opaque from the start so Chrome has already rasterised the capture when it fades in (no blank frame).
+    el.style.cssText = 'position:fixed;inset:0;z-index:2147483640;opacity:.01;transition:opacity .4s ease;background:#f3f4f6;pointer-events:none';
+    const img = new Image();
+    img.src = '${shot}';
+    img.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block';
+    await img.decode();
+    el.appendChild(img);
+    document.documentElement.appendChild(el);
+    window.showShot = () => { el.style.opacity = '1'; };
+  })()`;
+}
+
+/** The checks beat's terminal: verbatim commands and output from take.json, revealed group by group. */
+export function terminalPage(take) {
   const groups = take.terminal
     .map(
       (g, i) =>
         `<div class="g" id="g${i + 1}"><div class="cmd"><span class="p">mezodot $</span> <span class="t" data-text="${esc(g.cmd)}"></span></div>` +
-        `<div class="out">${g.out.map((l) => `<div class="${/exact_match|passed, 0 failed/.test(l) ? 'ok' : ''}">${esc(l)}</div>`).join('')}</div></div>`,
+        `<div class="out">${g.out.map((l) => `<div class="${/passed, 0 failed/.test(l) ? 'ok' : ''}">${esc(l)}</div>`).join('')}</div></div>`,
     )
     .join('');
   return `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -55,13 +71,8 @@ export function terminalPage(take, shotPath) {
     .body{padding:22px 34px;font:24px/1.5 'DejaVu Sans Mono',monospace;color:#d6d9ef}
     .g{display:none;margin-bottom:14px}.g.on{display:block}
     .p{color:#8b7cf6}.cmd{color:#fff}.out{color:#b7bbd8;white-space:pre}.ok{color:#C9F27C}
-    /* 1% opaque from the start so Chrome has already rasterised the capture when it fades in (no blank frame). */
-    #shot{position:fixed;inset:0;opacity:.01;transition:opacity .4s ease;background:#f3f4f6}
-    #shot img{width:100%;height:100%;object-fit:contain;display:block}
-    #shot.on{opacity:1}
   </style></head><body>
     <div class="win"><div class="bar"><i></i><i></i><i></i><span>mdlog/mezodot · live checks against Mezo testnet</span></div><div class="body">${groups}</div></div>
-    <div id="shot"><img src="${shot}" alt=""></div>
     <script>
       window.reveal = async (n) => {
         const g = document.getElementById('g' + n); g.classList.add('on');
@@ -69,7 +80,6 @@ export function terminalPage(take, shotPath) {
         for (const ch of t.dataset.text) { t.textContent += ch; await new Promise((r) => setTimeout(r, 22)); }
         out.style.visibility = 'visible';
       };
-      window.showShot = () => document.getElementById('shot').classList.add('on');
     </script></body></html>`;
 }
 
@@ -94,7 +104,7 @@ export const outroPage = () => `<!doctype html><html><head><meta charset="utf-8"
   .pill.lime{border-color:rgba(201,242,124,.5);color:#C9F27C}
 </style></head><body><div class="wrap">
   <div class="lock"><div class="mark"><span></span><span></span><span></span><i></i></div><div class="name">mezodot</div></div>
-  <div class="tag">Productive MUSD and MEZO, <b>across chains.</b></div>
-  <div class="sub">Live on Mezo testnet · spokes on Base Sepolia and Ethereum Sepolia · Wormhole · Pyth · Supra · Tigris</div>
-  <div class="row"><div class="pill lime">github.com/mdlog/mezodot</div><div class="pill">Mezo Buildathon · Track 1 · DeFi</div></div>
+  <div class="tag">A money market for <b>MUSD and MEZO.</b></div>
+  <div class="sub">On Mezo testnet, not audited · spokes on Base and Ethereum Sepolia · Tigris · Skip · Pyth · Supra · Wormhole</div>
+  <div class="row"><div class="pill lime">mezodot.mdloglabs.org</div><div class="pill">github.com/mdlog/mezodot</div><div class="pill">Mezo Buildathon · Track 1 · DeFi</div></div>
 </div></body></html>`;

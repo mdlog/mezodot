@@ -85,7 +85,7 @@ export function agentBadge(agent: AgentState, keeper: string | null | undefined)
 const TOOLS = [
   ['get_markets', 'Pools, APYs, exchange rates, reserves, collateral params'],
   ['get_position', 'Cross-chain position at the prices the protocol accepts now'],
-  ['get_oracle_health', 'Per-feed sources, age and validity (Pyth push, Supra pull)'],
+  ['get_oracle_health', 'Per-feed sources, age and validity (Skip, Pyth push, Supra pull, Tigris TWAP)'],
   ['get_risk_report', 'Volatility, VaR, LTV advice, walk-forward + DSR, loop carry'],
   ['get_revenue', "Reserves, flash fees and the treasury's liquidation fees"],
   ['simulate_loop', 'Preview a 1-click MUSD loop; optional address: the account after it'],

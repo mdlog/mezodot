@@ -15,6 +15,8 @@ import {
   Wallet,
   X,
   type LucideIcon,
+  BadgeCheck,
+  Landmark,
 } from 'lucide-react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { ActionModal } from './components/ActionModal';
@@ -33,6 +35,8 @@ import { Borrow } from './pages/Borrow';
 import { Crosschain } from './pages/Crosschain';
 import { Dashboard } from './pages/Dashboard';
 import { Loop } from './pages/Loop';
+import { Proof } from './pages/Proof';
+import { Trove } from './pages/Trove';
 import { Landing } from './pages/Landing';
 import { Markets } from './pages/Markets';
 import { Portfolio } from './pages/Portfolio';
@@ -50,9 +54,11 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'activity', label: 'Activity', icon: ActivityIcon, group: 'ACCOUNT' },
   { key: 'crosschain', label: 'Cross-chain', icon: Route, group: 'CAPITAL' },
   { key: 'borrow', label: 'Borrow', icon: ArrowDownLeft, group: 'CAPITAL' },
+  { key: 'trove', label: 'BTC trove', icon: Landmark, group: 'CAPITAL' },
   { key: 'loop', label: 'Loop', icon: RefreshCw, group: 'CAPITAL' },
   { key: 'agents', label: 'Agents & risk', icon: Radio, group: 'INTELLIGENCE' },
   { key: 'architecture', label: 'Architecture', icon: Network, group: 'INTELLIGENCE' },
+  { key: 'proof', label: 'On-chain proof', icon: BadgeCheck, group: 'INTELLIGENCE' },
 ];
 
 /** App views; the landing page renders on its own, outside the app shell. */
@@ -62,9 +68,11 @@ const PAGES: Record<Exclude<View, 'landing'>, () => JSX.Element> = {
   markets: Markets,
   crosschain: Crosschain,
   borrow: Borrow,
+  trove: Trove,
   loop: Loop,
   agents: Agents,
   architecture: Architecture,
+  proof: Proof,
   activity: Activity,
 };
 

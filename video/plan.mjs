@@ -1,11 +1,12 @@
-// What the demo wallet does on camera, and what it must hold for that (with a retake's worth of margin). The
-// narration reads its numbers from here, so changing an amount changes what the voice says.
+// What the demo wallet does on camera, and what it must hold for that. The narration reads its numbers from here, so
+// changing an amount changes what the voice says.
 
 export const PLAN = {
-  supplyMusd: '2',
-  loop: { principalMusd: '2', leverage: 3 },
+  trove: { btc: '0.05', musd: '2000' },
+  borrowMezo: '20',
   btcLong: { btc: '0.0015', leverage: 2 },
-  lockWeth: '0.002',
-  /** Targets the demo wallet is topped up to from the deployer keystore. */
-  fund: { btc: '0.004', musd: '6', baseEth: '0.004' },
+  /** Already credited on the hub: the WETH this wallet locked on Base Sepolia for the Wave 1 take. Filmed, not sent. */
+  lockedWeth: '0.002',
+  /** Targets the demo wallet is topped up to. A trove needs more BTC than the deployer holds: see README.md. */
+  fund: { btc: '0.056', musd: '6' },
 };

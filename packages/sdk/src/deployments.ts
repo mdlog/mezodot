@@ -34,6 +34,20 @@ export type HubDeployment = {
     tigrisPool?: Address;
     tigrisRouter?: Address;
     tigrisFactory?: Address;
+    /** Keyless router sources (DeployOracleLiveness): Mezo's Skip BTC/USD feed and the Tigris TWAP fallback. */
+    skipSource?: Address;
+    twapSource?: Address;
+    /** BTC to a Mezo trove to pMUSD in one transaction (DeployTroveRouter), and the Mezo contracts apps read for it. */
+    troveRouter?: Address;
+    mezoBorrowerOperations?: Address;
+    mezoBorrowerSignatures?: Address;
+    mezoTroveManager?: Address;
+    mezoHintHelpers?: Address;
+    mezoSortedTroves?: Address;
+    mezoPriceFeed?: Address;
+    mezoCollSurplusPool?: Address;
+    /** Stable pMUSD/MUSD Tigris pool (DeployPMusdPool): permissionless, seeded by the team. */
+    pMusdPool?: Address;
   };
   tokens: { MUSD: Address; MEZO: Address; BTC?: Address };
   priceFeeds: { MUSD: Hex; MEZO: Hex; ETH: Hex; USDC: Hex; BTC?: Hex };

@@ -172,6 +172,29 @@ describe('oracle health', () => {
     expect(h.feeds[2].sources).toEqual(['pyth 120s', 'supra#19 120s']);
     expect(h.healthy).toBe(false);
   });
+
+  it('names the keyless legs', () => {
+    const oracle = Object.fromEntries(PRICE_SYMBOLS.map((s) => [s, status(s, {})])) as OracleState;
+    oracle.BTC = status('BTC', {
+      feed: {
+        primary: { source: SOURCE_TAG.SKIP, maxAge: 120, id: NO_LEG.id },
+        secondary: { source: SOURCE_TAG.SUPRA, maxAge: 120, id: pair(18) },
+        maxConfBps: 200,
+        maxDivergenceBps: 150,
+      },
+    });
+    oracle.MUSD = status('MUSD', {
+      feed: {
+        primary: { source: SOURCE_TAG.PYTH, maxAge: 3_900, id: PYTH_ID.MUSD },
+        secondary: { source: SOURCE_TAG.TWAP, maxAge: 3_900, id: pair(1) },
+        maxConfBps: 500,
+        maxDivergenceBps: 500,
+      },
+    });
+    const h = oracleHealth(oracle, 10_000, () => false);
+    expect(h.feeds.find((f) => f.symbol === 'BTC')?.sources).toEqual(['skip 120s', 'supra#18 120s']);
+    expect(h.feeds.find((f) => f.symbol === 'MUSD')?.sources).toEqual(['pyth 3900s', 'twap 3900s']);
+  });
 });
 
 describe('Pyth pusher plan (only with PYTH_API_KEY)', () => {
