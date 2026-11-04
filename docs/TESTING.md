@@ -18,11 +18,11 @@ Each takes a few minutes. Do as many as you like.
 | Task               | Where          | What to do                                                                                                      | Needs             |
 | ------------------ | -------------- | --------------------------------------------------------------------------------------------------------------- | ----------------- |
 | Supply             | `#/markets`    | Supply MUSD or MEZO, and watch it arrive as pMUSD or pMEZO. Withdraw some.                                      | MUSD or MEZO      |
-| Borrow against BTC | `#/portfolio`  | Post a little BTC as collateral, then borrow MEZO or MUSD on `#/borrow`. Repay it.                              | 0.001 BTC         |
+| Borrow against BTC | `#/markets`    | Post a little BTC as collateral, then borrow MEZO or MUSD on `#/borrow`. Repay it.                              | 0.001 BTC         |
 | BTC long           | `#/loop`       | Open a small BTC long, then close it.                                                                           | 0.001 BTC         |
 | MUSD loop          | `#/loop`       | Open a 2× MUSD loop, then unwind it.                                                                            | 5 MUSD            |
 | BTC trove          | `#/trove`      | Open a Mezo trove and supply its MUSD in one go, then repay and close it. Needs an EOA wallet such as MetaMask. | 0.05 BTC, 5 MUSD  |
-| Cross-chain        | `#/crosschain` | Lock WETH on Base Sepolia and borrow on Mezo against it. Delivery can take a few minutes.                       | Base Sepolia WETH |
+| Cross-chain        | `#/crosschain` | Lock WETH on Base Sepolia and borrow on Mezo against it. The credit takes about 20 minutes.                     | Base Sepolia WETH |
 
 ## What to tell us
 
