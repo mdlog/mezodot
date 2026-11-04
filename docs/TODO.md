@@ -16,8 +16,9 @@ Implemented (see README):
 
 Next:
 
-- [ ] Record the Wave 2 demo
-- [ ] Try the trove page with a real browser wallet: the testnet run signed with `pnpm exercise:trove`
+- [x] Record the Wave 2 demo ([video/README.md](../video/README.md)); not uploaded yet
+- [x] Run the trove page on testnet: filmed for the demo, signing through the pipeline's injected wallet
+- [ ] Try the trove page with a wallet extension such as MetaMask
 - [ ] Outside testers ([TESTING.md](TESTING.md))
 - [ ] MEZO price liveness: its TWAP fallback returns no price until the MEZO/MUSD pool trades near the oracle (it needs about 800 more MEZO sold into it), or coverage agreed with Mezo. MUSD's fallback works
 - [ ] Pyth key: the agent's key is entitled to no feed today (HTTP 403 for all five), so its pusher does nothing. BTC no longer needs it; ETH rests on Supra until it is fixed or dropped

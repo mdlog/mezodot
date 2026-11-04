@@ -133,7 +133,7 @@ Run from `0x496daedE9076C9349fE4E775a51C00C98b501C39` on 2026-11-04, with BTC at
 
 All the BTC came back. The net cost was 2.00003 MUSD: Mezo's 2 MUSD fee and a little interest, less what the supply earned. Gas cost about 0.0000000003 BTC.
 
-The run signed with `pnpm exercise:trove`, not through the app's page. The fork suite covers the same calls against Mezo's real contracts:
+That run signed with `pnpm exercise:trove`. The `#/trove` page then ran the same amounts for the demo video: [open](https://explorer.test.mezo.org/tx/0x20946b8673fe4d0f690aea8ddc240716579c371d33f3dbe835902cfe9c1b48eb) and [close](https://explorer.test.mezo.org/tx/0x0fe5f72ec2d07383e3149881cc01248f35d438e7ebc77cf0f30e9aad1a7b738b). The page signed through the video pipeline's injected wallet, not a wallet extension such as MetaMask. The fork suite covers the same calls against Mezo's real contracts:
 
 ```bash
 MEZO_FORK_RPC=https://rpc.test.mezo.org forge test --root contracts --match-contract ForkTrove -vv

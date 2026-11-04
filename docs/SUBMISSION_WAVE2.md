@@ -30,6 +30,6 @@ Mezodot is a money market for MUSD and MEZO on Mezo. Wave 2 acted on the Wave 1 
 
 ## Roadmap for the form
 
-- **By 12 November 2026:** outside testers, a new demo video.
+- **By 12 November 2026:** outside testers.
 - **December 2026:** static build, timelock and multisig, MEZO price fallback in service.
 - **First quarter of 2027:** external audit, then mainnet with capped markets.
