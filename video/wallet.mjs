@@ -1,10 +1,10 @@
 // The demo wallet: a fresh key the video signs with (never the owner's), its funding from the deployer keystore, the
 // one-time approvals done off camera, and the signer behind the EIP-1193 provider injected into recorded pages. The
-// key stays in this Node process; the page only asks it to send a transaction.
+// key stays in this Node process; the page only asks it to send a transaction or sign a typed message.
 //
 //   node video/wallet.mjs status     address, balances, approvals
 //   node video/wallet.mjs fund       top up from the deployer keystore (.secrets/deployer + its password file)
-//   node video/wallet.mjs prepare    operators, ERC-20 allowances, WETH on Base Sepolia
+//   node video/wallet.mjs prepare    what the BTC long and the trove close need, done off camera
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -82,10 +82,9 @@ function castSend(rpc, args) {
 
 async function fund(address) {
   const s = await status(address);
-  const want = { btc: viem.parseEther(PLAN.fund.btc), musd: viem.parseEther(PLAN.fund.musd), eth: viem.parseEther(PLAN.fund.baseEth) };
+  const want = { btc: viem.parseEther(PLAN.fund.btc), musd: viem.parseEther(PLAN.fund.musd) };
   if (s.btc < want.btc) console.log('BTC  ', castSend(RPC[31611], [address, '--value', (want.btc - s.btc).toString()]));
   if (s.musd < want.musd) console.log('MUSD ', castSend(RPC[31611], [HUB.tokens.MUSD, 'transfer(address,uint256)', address, (want.musd - s.musd).toString()]));
-  if (s.ethBase + s.wethBase < want.eth) console.log('ETH  ', castSend(RPC[84532], [address, '--value', (want.eth - s.ethBase - s.wethBase).toString()]));
 }
 
 async function prepare(account) {
@@ -94,24 +93,13 @@ async function prepare(account) {
   const { tokens, contracts } = HUB;
   const sends = [];
   const hub = walletClient(31611, account);
-  const base = walletClient(84532, account);
   const write = async (client, label, req) => {
     const hash = await client.writeContract(req);
     const receipt = await publicClient(client.chain.id).waitForTransactionReceipt({ hash });
     if (receipt.status !== 'success') throw new Error(`${label} reverted: ${hash}`);
     sends.push(`${label}: ${hash}`);
   };
-  const supply = viem.parseEther(PLAN.supplyMusd);
-  const loop = viem.parseEther(PLAN.loop.principalMusd);
   const long = viem.parseEther(PLAN.btcLong.btc);
-  const lock = viem.parseEther(PLAN.lockWeth);
-  if (!s.loopOp)
-    await write(hub, 'authorise LeverageManager', {
-      address: contracts.vaultManager,
-      abi: vault,
-      functionName: 'setOperator',
-      args: [contracts.leverageManager, true],
-    });
   if (!s.longOp)
     await write(hub, 'authorise SwapLeverageManager', {
       address: contracts.vaultManager,
@@ -119,10 +107,6 @@ async function prepare(account) {
       functionName: 'setOperator',
       args: [contracts.swapLeverageManager, true],
     });
-  if (s.aSupply < supply)
-    await write(hub, 'approve MUSD → pMUSD', { address: tokens.MUSD, abi: erc20, functionName: 'approve', args: [contracts.pMUSD, supply] });
-  if (s.aLoop < loop)
-    await write(hub, 'approve MUSD → LeverageManager', { address: tokens.MUSD, abi: erc20, functionName: 'approve', args: [contracts.leverageManager, loop] });
   if (s.aLong < long)
     await write(hub, 'approve BTC → SwapLeverageManager', {
       address: tokens.BTC,
@@ -130,15 +114,15 @@ async function prepare(account) {
       functionName: 'approve',
       args: [contracts.swapLeverageManager, long],
     });
-  if (s.wethBase < lock)
-    await write(base, 'wrap ETH → WETH (Base Sepolia)', { address: BASE.tokens.WETH, abi: erc20, functionName: 'deposit', value: lock - s.wethBase });
-  if (s.aLock < lock)
-    await write(base, 'approve WETH → SpokeGateway', {
-      address: BASE.tokens.WETH,
-      abi: erc20,
-      functionName: 'approve',
-      args: [BASE.contracts.spokeGateway, lock],
-    });
+  // Closing a trove needs two approvals first. Done here so the close beat films one transaction, not three.
+  for (const [symbol, token, amount] of [
+    ['pMUSD', contracts.pMUSD, viem.parseUnits('2100', 24)],
+    ['MUSD', tokens.MUSD, viem.parseEther('10')],
+  ]) {
+    const allowance = await publicClient(31611).readContract({ address: token, abi: erc20, functionName: 'allowance', args: [address, contracts.troveRouter] });
+    if (allowance < amount)
+      await write(hub, `approve ${symbol} → TroveRouter`, { address: token, abi: erc20, functionName: 'approve', args: [contracts.troveRouter, amount] });
+  }
   console.log(sends.length ? sends.join('\n') : 'already prepared');
 }
 
@@ -153,6 +137,11 @@ export async function exposeSigner(context, account, log) {
     });
     log.push({ chainId, hash, to: tx.to, at: Date.now() });
     return hash;
+  });
+  // Mezo's trove contracts take an EIP-712 signature checked with plain ECDSA, which this EOA can give.
+  await context.exposeBinding('__demoSignTyped', async (_source, typedJson) => {
+    const { domain, types, primaryType, message } = JSON.parse(typedJson);
+    return account.signTypedData({ domain: { ...domain, chainId: Number(domain.chainId) }, types, primaryType, message });
   });
 }
 
@@ -183,8 +172,9 @@ export const walletInit = (address) => `(() => {
         case 'wallet_addEthereumChain': return null;
         case 'wallet_requestPermissions': case 'wallet_getPermissions': return [{ parentCapability: 'eth_accounts' }];
         case 'eth_sendTransaction': return window.__demoSend(chainId, params[0]);
-        case 'personal_sign': case 'eth_sign': case 'eth_signTypedData_v4':
-          throw Object.assign(new Error('The demo wallet does not sign messages'), { code: 4200 });
+        case 'eth_signTypedData_v4': return window.__demoSignTyped(params[1]);
+        case 'personal_sign': case 'eth_sign':
+          throw Object.assign(new Error('The demo wallet does not sign plain messages'), { code: 4200 });
         default: return rpc(method, params);
       }
     },

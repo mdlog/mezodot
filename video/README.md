@@ -4,38 +4,37 @@ A narrated 1080p MP4 of the live testnet app, produced entirely by this pipeline
 no human voice. Re-shoot it whenever what is on screen changes. The narration is the clock: every on-screen action
 is anchored to a phrase in the voice's word timings, and every number the voice says is read live.
 
-Every transaction in the video is real, sent on camera from a fresh demo wallet (never the owner key). The wallet's
+Every transaction in the video is real, sent on camera from a demo wallet (never the owner key). The wallet's
 key lives in `video/.secrets/demo.json`, which is git-ignored. Recorded pages see it as an injected EIP-1193 wallet
-whose transactions are signed in this Node process, so the key never enters the browser.
+whose transactions and typed messages are signed in this Node process, so the key never enters the browser.
 
 ## Prerequisites
 
-- The web app on `http://127.0.0.1:3000` and the Mezodot agent on `127.0.0.1:8787`, both on testnet (the agent relays
-  the cross-chain message).
+- The web app on `http://127.0.0.1:3000` and the Mezodot agent on `127.0.0.1:8787`, both on testnet (the agent serves
+  the price proofs).
 - Chromium 1243 in `~/.cache/ms-playwright`, `~/.local/bin/ffmpeg`, the Inter and DejaVu Sans Mono fonts.
 - The narration venv: `python3 -m venv video/.venv && video/.venv/bin/pip install edge-tts`.
 - The deployer keystore in `.secrets/` (only for `wallet.mjs fund`).
+- `jq` and `cast`, used by `select.mjs`.
 
 ## Take
 
 ```bash
-node video/select.mjs                      # live facts → out/take.json; refuses failing tests/checks or a missing Sourcify match
-node video/wallet.mjs fund                 # top up the demo wallet from the deployer keystore (plan.mjs: fund)
-node video/wallet.mjs prepare              # operators, allowances, WETH on Base Sepolia: done off camera
-video/.venv/bin/python video/tts.py        # narration per beat + word timings; re-renders faster if over 1:58
+pm2 restart mezodot-agent                  # the agent must run the current code, or select.mjs cannot name the oracle legs
+node video/select.mjs                      # live facts → out/take.json; refuses failing tests, checks or verification
+node video/wallet.mjs prepare              # what the BTC long and the trove close need, done off camera
+video/.venv/bin/python video/tts.py        # narration per beat + word timings; re-renders faster if over budget
 node video/record.mjs --connect            # connect the demo wallet through the app's own dialog, keep the session
 node video/record.mjs --probe              # every selector and anchor resolves; sends nothing
-node video/record.mjs lock                 # first: starts Base finality (~20 min) for the credit beat
-node video/record.mjs intro supply loop btc-long position proof outro
-node video/record.mjs credit activity      # waits off camera until the lock is delivered on the hub
+node video/record.mjs intro trove-open trove-close mezo-borrow btc-long crosschain checks proof revenue outro
 python3 video/captions.py                  # burned-in captions + mezodot-demo.srt
 python3 video/build.py                     # out/mezodot-demo.mp4 (-14 LUFS) + out/youtube.md
-bash video/verify.sh                       # ≤ 2:00, 1080p30, AAC; writes out/contact.png: read it before uploading
+bash video/verify.sh                       # ≤ 2:15, 1080p30, AAC; writes out/contact.png: read it before uploading
 ```
 
-The loop and BTC-long beats wait off camera for a fresh MUSD price (Mezo pushes it about hourly), because a borrow
-reverts on a stale one. A beat whose transaction fails on camera, or that shows an error, is refused: fix and refilm
-that beat only (`node video/record.mjs <beat>`). Amounts are in `plan.mjs`; the narration reads them from there.
+**Funding.** The demo wallet needs `PLAN.fund` before a take: 0.056 BTC and 6 MUSD. A trove needs more BTC than the deployer holds, so send the BTC by hand. It comes back when the trove closes, so a retake costs about 2 MUSD. `trove-open` must be filmed before `trove-close`, and needs a wallet with no open trove.
+
+The borrow and BTC-long beats wait off camera for a fresh MUSD and MEZO price (Mezo pushes them about hourly), because a borrow reverts on a stale one. A beat whose transaction fails on camera, or that shows an error, is refused: fix and refilm that beat only (`node video/record.mjs <beat>`). Amounts are in `plan.mjs`; the narration reads them from there.
 
 ## Files
 

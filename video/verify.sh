@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks the finished take: at most 2:00, 1920x1080 at 30 fps, AAC audio, captions file present; writes a contact
+# Checks the finished take: at most 2:15, 1920x1080 at 30 fps, AAC audio, captions file present; writes a contact
 # sheet (one frame every 5 s) to read before calling the take done.
 #
 #   bash video/verify.sh
@@ -17,7 +17,7 @@ dur=$("$PROBE" -v error -show_entries format=duration -of csv=p=0 "$MP4")
 video=$("$PROBE" -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 "$MP4")
 audio=$("$PROBE" -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate -of csv=p=0 "$MP4")
 echo "duration ${dur}s | video ${video} | audio ${audio}"
-awk -v d="$dur" 'BEGIN { exit !(d <= 120.0) }' || fail "longer than 2:00"
+awk -v d="$dur" 'BEGIN { exit !(d <= 135.0) }' || fail "longer than 2:15"
 [ "$video" = "h264,1920,1080,30/1" ] || fail "video stream is $video"
 [ "$audio" = "aac,48000" ] || fail "audio stream is $audio"
 

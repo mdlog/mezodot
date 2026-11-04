@@ -25,43 +25,27 @@ export const PRONOUNCE = {
   MCP: 'M C P',
   HTTP: 'H T T P',
   Sourcify: 'Source ify',
+  TWAP: 'tee wap',
+  "pMEZO's": "P Mezo's",
+  "MEZO's": "Mezo's",
 };
 
-/** Off camera: MUSD's single price leg must stay fresh through the take, or a borrow would revert on camera. */
-async function musdPriceFresh() {
+/** Off camera: a borrow reverts on a stale price, and Mezo pushes MUSD and MEZO about hourly. */
+async function pricesFresh() {
   for (let i = 0; i < 70; i++) {
     const feeds = (await (await fetch(`${AGENT}/oracle/health`)).json()).feeds ?? [];
-    const musd = feeds.find((f) => f.symbol === 'MUSD');
-    if (musd?.status === 'ok' && musd.validForSec > 300) return;
-    console.log(`  waiting for a fresh MUSD price (${musd ? `${musd.status}, valid ${musd.validForSec}s` : 'no feed'})`);
+    const pushed = feeds.filter((f) => f.symbol === 'MUSD' || f.symbol === 'MEZO');
+    if (pushed.length === 2 && pushed.every((f) => f.status === 'ok' && f.validForSec > 300)) return;
+    console.log(`  waiting for fresh prices (${pushed.map((f) => `${f.symbol} ${f.status}, valid ${f.validForSec}s`).join('; ') || 'no feeds'})`);
     await new Promise((r) => setTimeout(r, 60_000));
   }
-  throw new Error('MUSD price stayed stale for 70 minutes');
+  throw new Error('prices stayed stale for 70 minutes');
 }
-
-/** Off camera: waits until the agent reports the filmed WETH lock's Wormhole message delivered on the hub (after
- *  Base finality). The lock's transaction comes from the timeline the lock beat wrote. */
-async function lockDelivered() {
-  const lock = JSON.parse(readFileSync(new URL('./out/timeline.json', import.meta.url), 'utf8')).find((c) => c.id === 'lock');
-  const hash = lock?.txs?.[0]?.hash;
-  if (!hash) throw new Error('film the lock beat first: no lock transaction in the timeline');
-  const started = Date.now();
-  for (;;) {
-    const list = await (await fetch(`${AGENT}/messages?limit=100`)).json();
-    const msg = (Array.isArray(list) ? list : (list.messages ?? [])).find((m) => m.txHash?.toLowerCase() === hash.toLowerCase());
-    console.log(`  lock message: ${msg ? msg.status : 'not seen yet'}, ${Math.round((Date.now() - started) / 60_000)} min`);
-    if (msg?.status === 'delivered') return;
-    if (Date.now() - started > 60 * 60_000) throw new Error('lock message not delivered within an hour');
-    await new Promise((r) => setTimeout(r, 60_000));
-  }
-}
-
-const musdCard = '.market-detail-card:has-text("MUSD")';
 
 /** @param {object} take the live facts from select.mjs */
 export function beats(take) {
-  const { contracts, deployment, sourcify } = take;
-  const loopPosition = Number(PLAN.loop.principalMusd) * PLAN.loop.leverage;
+  const { contracts, deployment, explorer, revenue, shots } = take;
+  const { trove } = PLAN;
   return [
     {
       id: 'intro',
@@ -69,44 +53,62 @@ export function beats(take) {
       route: '#/',
       ready: 'text=Capital,',
       chip: 'mezodot · landing',
-      lowerThird: { title: 'Mezodot Protocol', sub: 'Mezo Buildathon · Track 1 · DeFi' },
-      narration:
-        'Mezodot makes MUSD and MEZO productive on Mezo: an omnichain money market, live on testnet. ' +
-        'Every transaction you see here is real, signed by a fresh demo wallet.',
+      lowerThird: { title: 'Mezodot Protocol', sub: 'Mezo Buildathon · Wave 2 · Track 1 · DeFi' },
+      narration: 'Mezodot is a money market for MUSD and MEZO on Mezo, live on testnet. ' + 'Every transaction you see here is real, signed by a demo wallet.',
       actions: [{ at: 'live on testnet', do: (h) => h.hover('text=Live on Mezo Testnet') }],
       minMs: 6000,
     },
     {
-      id: 'supply',
-      chapter: 'Supply MUSD, receive pMUSD (live tx)',
-      route: '#/markets',
-      ready: 'text=Markets & vaults',
-      ready2: '.market-detail-card',
+      id: 'trove-open',
+      chapter: 'New: BTC to a Mezo trove to pMUSD (live tx)',
+      route: '#/trove',
+      ready: 'text=Open and supply',
       wallet: true,
       awaitToast: true,
-      chip: 'mezodot · /markets',
-      narration: `Supply ${PLAN.supplyMusd} MUSD, and the pool mints pMUSD: an ERC-4626 share that earns borrower interest and can be posted as collateral.`,
+      chip: 'mezodot · /trove',
+      narration:
+        `New in Wave 2: a Mezo trove in one transaction. Post ${trove.btc} BTC and mint ${trove.musd} MUSD. ` +
+        "The page previews Mezo's fee, debt and ratio. Sign Mezo's typed message, and the router opens the trove and supplies the MUSD to pMUSD.",
       actions: [
-        { at: 'Supply', do: (h) => h.click(`${musdCard} button:text-is("Supply")`) },
-        { at: `${PLAN.supplyMusd} MUSD`, do: (h) => h.fill('#modal-amount', PLAN.supplyMusd) },
-        { at: 'the pool mints', send: true, do: (h) => h.click('form button[type=submit]') },
+        { at: `Post ${trove.btc}`, do: (h) => h.fill('#trove-btc', trove.btc) },
+        { at: `mint ${trove.musd}`, do: (h) => h.fill('#trove-debt', trove.musd) },
+        { at: 'previews', do: (h) => h.hover('text=Collateral ratio') },
+        { at: "Sign Mezo's", send: true, do: (h) => h.click('button:has-text("Sign and open")') },
       ],
       minMs: 6000,
     },
     {
-      id: 'loop',
-      chapter: '1-click MUSD loop (live tx)',
-      route: '#/loop',
-      ready: 'text=Leverage desk.',
+      id: 'trove-close',
+      chapter: 'Repay or close the trove from supply (live tx)',
+      route: '#/trove',
+      ready: 'text=Your trove',
       wallet: true,
       awaitToast: true,
-      before: musdPriceFresh,
-      chip: 'mezodot · /loop',
-      narration: `Now loop it: ${PLAN.loop.principalMusd} MUSD becomes a ${loopPosition} MUSD position in one transaction, through the pool's own flash loan.`,
+      chip: 'mezodot · /trove',
+      narration:
+        'That supply can then repay the trove or close it. Closing takes a little MUSD on top, and all the BTC comes back. ' +
+        'Today pMUSD pays less than a trove costs, and the page shows both rates.',
       actions: [
-        { at: 'Now loop it', do: (h) => h.click('[role="tab"]:has-text("MUSD loop")') },
-        { at: `${PLAN.loop.principalMusd} MUSD becomes`, do: (h) => h.fill('#loop-amount', PLAN.loop.principalMusd) },
-        { at: 'in one transaction', send: true, do: (h) => h.click(`button:has-text("Open ${PLAN.loop.leverage}× loop")`) },
+        { at: 'repay the trove', do: (h) => h.hover('#trove-repay') },
+        { at: 'Closing takes', send: true, do: (h) => h.click('button:has-text("Sign and close trove")') },
+        { at: 'shows both rates', do: (h) => h.hover('text=pMUSD supply APY') },
+      ],
+      minMs: 6000,
+    },
+    {
+      id: 'mezo-borrow',
+      chapter: 'Borrow MEZO (live tx)',
+      route: '#/borrow',
+      ready: 'text=Position health',
+      wallet: true,
+      awaitToast: true,
+      before: pricesFresh,
+      chip: 'mezodot · /borrow',
+      narration: `The MEZO market is live too. Borrow ${PLAN.borrowMezo} MEZO against BTC in one transaction, under the same health factor.`,
+      actions: [
+        { at: 'The MEZO market', do: (h) => h.click('.market-switch button:has-text("MEZO")') },
+        { at: 'live too', do: (h) => h.fill('#borrow-amount', PLAN.borrowMezo) },
+        { at: `Borrow ${PLAN.borrowMezo}`, send: true, do: (h) => h.click('button:has-text("Borrow MEZO")') },
       ],
       minMs: 6000,
     },
@@ -117,102 +119,86 @@ export function beats(take) {
       ready: 'text=Configure your BTC position',
       wallet: true,
       awaitToast: true,
-      before: musdPriceFresh,
+      before: pricesFresh,
       chip: 'mezodot · /loop',
-      narration:
-        'A BTC long is one transaction too: Tigris sends the BTC first in a flash swap, then Mezodot posts it ' +
-        'and borrows exactly the MUSD that pays the pool, with no flash fee.',
+      narration: 'A BTC long is one transaction as well: a Tigris flash swap buys the BTC, and the loan pays the pool back.',
       actions: [
         { at: 'A BTC long', do: (h) => h.fill('#btc-amount', PLAN.btcLong.btc) },
-        { at: 'Tigris sends', send: true, do: (h) => h.click(`button:has-text("Open ${PLAN.btcLong.leverage}× BTC")`) },
+        { at: 'a Tigris flash swap', send: true, do: (h) => h.click(`button:has-text("Open ${PLAN.btcLong.leverage}× BTC")`) },
       ],
       minMs: 6000,
     },
     {
-      id: 'position',
-      chapter: 'One health factor',
-      route: '#/borrow',
-      ready: 'text=Position health',
-      wallet: true,
-      chip: 'mezodot · /borrow',
-      narration: 'Both positions share one health factor, priced live by Pyth and Supra.',
-      actions: [
-        { at: 'one health factor', do: (h) => h.hover('text=Position health') },
-        { at: 'priced live', do: (h) => h.hover('text=Collateral value') },
-      ],
-      minMs: 5000,
-    },
-    {
-      id: 'lock',
-      chapter: 'Lock WETH on Base Sepolia (live tx)',
-      route: '#/crosschain',
-      ready: 'text=Post cross-chain collateral',
-      wallet: true,
-      awaitToast: true,
-      chip: 'mezodot · /crosschain',
-      narration: 'Collateral can also stay on Base: lock WETH in the SpokeGateway, and a guardian-signed Wormhole message carries it to the Mezo hub.',
-      actions: [
-        { at: 'lock WETH', do: (h) => h.fill('#bridge-amount', PLAN.lockWeth) },
-        { at: 'in the SpokeGateway', send: true, do: (h) => h.click('button:has-text("Lock on")') },
-      ],
-      minMs: 6000,
-    },
-    {
-      id: 'credit',
-      chapter: 'Credited on the Mezo hub after Base finality',
+      id: 'crosschain',
+      chapter: 'Collateral on another chain',
       route: '#/crosschain',
       ready: 'text=Withdraw to a spoke',
-      ready2: `text=${PLAN.lockWeth} WETH`,
+      ready2: `text=${PLAN.lockedWeth} WETH`,
       wallet: true,
-      before: lockDelivered,
       chip: 'mezodot · /crosschain',
-      narration: 'Once Base finalises, our keeper relays the message, and the hub credits the WETH under the same health factor.',
+      narration: 'Collateral can also stay on another chain. This WETH was locked on Base Sepolia, and a Wormhole message credited it on the hub.',
       actions: [
-        { at: 'our keeper relays', do: (h) => h.hover('text=Withdraw to a spoke') },
-        { at: 'the hub credits', do: (h) => h.hover(`text=${PLAN.lockWeth} WETH`) },
-        { at: 'same health factor', do: (h) => h.hover('text=Health factor') },
+        { at: 'another chain', do: (h) => h.hover('text=Post cross-chain collateral') },
+        { at: 'This WETH', do: (h) => h.hover(`text=${PLAN.lockedWeth} WETH`) },
       ],
       minMs: 5000,
     },
     {
-      id: 'activity',
-      chapter: 'Everything on-chain',
-      route: '#/activity',
-      ready: 'text=Every move, accounted for.',
-      ready2: 'table tbody tr', // the ledger scans contract events: rows can take ~40 s
-      wallet: true,
-      chip: 'mezodot · /activity',
-      narration: 'Every step is on-chain: the activity view reads it straight from contract events on the hub and the spoke.',
+      id: 'checks',
+      chapter: 'Price legs and live checks',
+      terminal: true,
+      chip: 'live checks · terminal',
+      narration:
+        "Prices no longer rest on one source. BTC reads Mezo's Skip feed first, and a Tigris TWAP backs up MUSD. " +
+        `All ${contracts.passed} contract tests pass, and so do all ${deployment.passed} live deployment checks.`,
       actions: [
-        { at: 'Every step', do: (h) => h.hover('table tbody tr') },
-        { at: 'contract events', do: (h) => h.hover('table tbody tr:nth-child(4)') },
+        { at: 'Prices no longer', do: (h) => h.reveal(1) },
+        { at: `All ${contracts.passed}`, do: (h) => h.reveal(2) },
+        { at: 'and so do', do: (h) => h.reveal(3) },
       ],
-      minMs: 5000,
+      minMs: 7000,
     },
     {
       id: 'proof',
-      chapter: 'Tests, deployment check and verified sources',
-      terminal: true,
-      chip: 'live checks · terminal + sourcify.dev',
+      chapter: 'On-chain proof and verified sources',
+      route: '#/proof',
+      ready: 'text=See it on-chain.',
+      shot: shots.explorer,
+      chip: 'mezodot · /proof, then explorer.test.mezo.org',
       narration:
-        `Under the hood, ${contracts.passed} contract tests pass, including invariant suites, ` +
-        `the live deployment check passes all ${deployment.passed} checks, ` +
-        `and all ${sourcify.exact} contracts are exact matches on Sourcify.`,
+        "This page lists every path with its transaction: MEZO borrows, pMEZO as collateral, and the agent's own liquidation. " +
+        "We staged that one by lowering pMEZO's limits, and the agent found it unprompted. " +
+        `All ${explorer.verified} hub contracts are verified on Mezo's explorer.`,
       actions: [
-        { at: `${contracts.passed} contract tests`, do: (h) => h.reveal(1) },
-        { at: 'live deployment check', do: (h) => h.reveal(2) },
-        { at: `all ${sourcify.exact} contracts`, do: (h) => h.reveal(3) },
-        { at: 'exact matches on Sourcify', do: (h) => h.showShot() },
+        { at: 'MEZO borrows', do: (h) => h.hover('text=MEZO market') },
+        { at: 'pMEZO as collateral', do: (h) => h.hover('text=pMEZO as collateral') },
+        { at: "the agent's own", do: (h) => h.hover('text=Keeper liquidation') },
+        { at: 'We staged', do: (h) => h.hover('text=Owner lowers pMEZO limits') },
+        { at: `All ${explorer.verified} hub`, do: (h) => h.showShot() },
       ],
       minMs: 7000,
-      tailMs: 2600, // keep the Sourcify page on screen once the narration has named it
+      tailMs: 1600, // keep the explorer page on screen once the narration has named it
+    },
+    {
+      id: 'revenue',
+      chapter: 'Revenue',
+      route: '#/dashboard',
+      ready: 'text=Flash-loan fee',
+      chip: 'mezodot · /dashboard',
+      narration: `The protocol earns ${revenue.reserveFactorPct} percent of interest, ${revenue.flashFeePct} percent of flash loans, and ${revenue.liquidationFeePct} percent of liquidation bonuses.`,
+      actions: [
+        { at: 'percent of interest', offsetMs: -700, do: (h) => h.hover('text=reserve factor') },
+        { at: 'percent of flash', offsetMs: -700, do: (h) => h.hover('text=Flash-loan fee') },
+        { at: 'percent of liquidation', offsetMs: -700, do: (h) => h.hover('text=Liquidation fee') },
+      ],
+      minMs: 5000,
     },
     {
       id: 'outro',
-      chapter: 'Mezodot',
+      chapter: 'Try it',
       card: 'outro',
-      chip: 'github.com/mdlog/mezodot',
-      narration: 'Mezodot: productive MUSD and MEZO across chains, with permissionless keepers and an MCP server for AI agents. Built on Mezo.',
+      chip: 'mezodot.mdloglabs.org',
+      narration: 'Mezodot is not audited, and it needs outside testers. Try it on testnet, and tell us what breaks.',
       actions: [],
       minMs: 5000,
     },

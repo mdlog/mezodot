@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { chromium } from 'playwright-core';
 import { beats } from './beats.mjs';
 import { APP, CHROME, OUT } from './config.mjs';
-import { APP_INIT, lowerThird, outroPage, terminalPage } from './scenes.mjs';
+import { APP_INIT, lowerThird, outroPage, shotOverlay, terminalPage } from './scenes.mjs';
 import { demoAccount, exposeSigner, publicClient, walletInit } from './wallet.mjs';
 
 const TAIL_MS = 400;
@@ -188,12 +188,11 @@ async function film(browser, b) {
 
   if (b.route) await openApp(page, b);
   else if (b.terminal) {
-    await page.setContent(terminalPage(take, take.shots.sourcify), { waitUntil: 'load' });
-    // Decode the Sourcify capture now, or its first frames on screen are blank.
-    await page.evaluate(() => document.querySelector('#shot img').decode());
+    await page.setContent(terminalPage(take), { waitUntil: 'load' });
   } else if (b.card === 'outro') await page.setContent(outroPage(), { waitUntil: 'load' });
   if (b.wallet) await ensureConnected(page);
   if (b.ready2) await page.locator(b.ready2).first().waitFor({ state: 'visible', timeout: 90_000 });
+  if (b.shot) await page.evaluate(shotOverlay(b.shot));
   const h = helpers(page);
   if (b.route) await h.park();
   const text = await page.evaluate(() => document.body.innerText);

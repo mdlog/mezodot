@@ -20,7 +20,7 @@ OUT = VIDEO / "out"
 TTS = OUT / "tts"
 VOICE = "en-US-AndrewNeural"
 TAIL_S = 0.4  # a clip holds this long after its narration ends, unless its beat sets tailMs
-BUDGET_S = 118.0  # the event asks for a 2-minute video; keep a margin
+BUDGET_S = 116.0  # judges cap the video at 2:15, and the transaction beats run about 18 s past their narration
 FFPROBE = Path.home() / ".local/bin/ffprobe"
 
 

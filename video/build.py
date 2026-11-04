@@ -106,17 +106,20 @@ def main() -> None:
 
 **Title** (≤ 80 characters)
 
-Mezodot: omnichain MUSD & MEZO money market on Mezo (Buildathon demo)
+Mezodot: a money market for MUSD and MEZO on Mezo (Buildathon Wave 2 demo)
 
 **Description**
 
-Mezodot is an omnichain money market native to Mezo. Supply MUSD or MEZO for ERC-4626 pMUSD / pMEZO, borrow against BTC on Mezo or WETH / USDC that stays on Base Sepolia or Ethereum Sepolia (Wormhole-verified collateral), open a BTC long through a Tigris flash swap or a 1-click MUSD loop in one transaction. Permissionless keepers relay and liquidate; an MCP server exposes risk to AI agents. Live on Mezo testnet; not audited.
+Mezodot is a money market for MUSD and MEZO on Mezo testnet. New in Wave 2: BTC opens a Mezo trove and supplies pMUSD in one transaction, and the same supply can repay or close it. Supply MUSD or MEZO, borrow against BTC or against WETH and USDC that stay on Base or Ethereum Sepolia, and open a BTC long in one transaction through a Tigris flash swap. Not audited.
 
-Every transaction in the video is real, sent on camera from a fresh demo wallet:
+Every transaction in the video is real, sent on camera from a demo wallet:
 
 {transactions(timeline)}
 
-Shown in this take ({take['at'][:10]}): {take['contracts']['passed']} contract tests passing, the live deployment check passing {take['deployment']['passed']} checks, and {take['sourcify']['exact']}/{take['sourcify']['total']} contracts exact-matched on Sourcify.
+Shown in this take ({take['at'][:10]}): {take['contracts']['passed']} contract tests passing, the live deployment check passing {take['deployment']['passed']} checks, {take['explorer']['verified']}/{take['explorer']['total']} hub contracts verified on Mezo's explorer, and {take['sourcify']['exact']}/{take['sourcify']['total']} contracts exact matches on Sourcify. The liquidation evidence on the proof page was staged by lowering pMEZO's limits, and the page and docs/EVIDENCE.md say so.
+
+Evidence: https://github.com/mdlog/mezodot/blob/main/docs/EVIDENCE.md
+App: https://mezodot.mdloglabs.org
 
 Code: https://github.com/mdlog/mezodot
 Mezo Buildathon · Track 1 (DeFi: borrowing, lending, looping, yield)
