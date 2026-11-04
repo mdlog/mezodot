@@ -16,15 +16,16 @@ Implemented (see README):
 
 Next:
 
-- [x] Record the Wave 2 demo ([video/README.md](../video/README.md)); not uploaded yet
+- [x] Record the Wave 2 demo ([video/README.md](../video/README.md)) and upload it to YouTube as a private video
+- [ ] Make the Wave 2 demo public, then fill the video link in [SUBMISSION_WAVE2.md](SUBMISSION_WAVE2.md)
 - [x] Run the trove page on testnet: filmed for the demo, signing through the pipeline's injected wallet
 - [ ] Try the trove page with a wallet extension such as MetaMask
 - [ ] Outside testers ([TESTING.md](TESTING.md))
-- [ ] MEZO price liveness: its TWAP fallback returns no price until the MEZO/MUSD pool trades near the oracle (it needs about 800 more MEZO sold into it), or coverage agreed with Mezo. MUSD's fallback works
+- [ ] MEZO price liveness: its TWAP fallback returns no price until the MEZO/MUSD pool trades near the oracle (it needs about 730 more MEZO sold into it), or coverage agreed with Mezo. MUSD's fallback works
 - [ ] Pyth key: the agent's key is entitled to no feed today (HTTP 403 for all five), so its pusher does nothing. BTC no longer needs it; ETH rests on Supra until it is fixed or dropped
 - [ ] Owner key: move the deployer keystore out of the repository and drop its password file (DEPLOY.md, key storage); then a hardware wallet or multisig
 - [ ] Deploy scripts: write the deployment JSON only once the broadcast is mined (a dry run no longer writes it, but a broadcast still writes it during forge's local run), and record the owner and an ABI/version hash in it
-- [ ] Nightly devnet keeper E2E: red since 2026-10-20 because the devnet hub priced gas so high that every liquidation looked unprofitable. The fix is in `scripts/devnet/start.sh`; confirm the next nightly run passes
+- [x] Nightly devnet keeper E2E: red from 2026-10-20 because the devnet hub priced gas so high that every liquidation looked unprofitable. Fixed in `scripts/devnet/start.sh`; passes on main since the 2026-11-04 run
 - [ ] Oracle: close the residual price pick window on USDC's Pyth leg and the MUSD and MEZO legs (3,900 s; SECURITY.md, price pick window), e.g. a short max age for the prices liquidations read
 - [ ] External audit; timelock + multisig ownership, with a guardian role that can only tighten parameters
 - [ ] Deepen pMUSD/MUSD liquidity (40 of each today) and look at a gauge; the agent could use the pool when pMUSD has no idle cash
