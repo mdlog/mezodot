@@ -1,0 +1,1037 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Mezodot: a money market for MUSD and MEZO on Mezo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+      /* The web app's own tokens (apps/web/src/styles.css), so the deck reads as the same product. */
+      :root {
+        --paper: #ecebe5;
+        --panel: #fbfaf7;
+        --ink: #242638;
+        --ink-soft: #56596a;
+        --muted: #7c7e8a;
+        --line: #d8d6ce;
+        --indigo: #4338ca;
+        --indigo-mid: #bcb6ff;
+        --green: #47724a;
+        --amber: #96601f;
+        --mono: 'DM Mono', ui-monospace, monospace;
+      }
+      @page {
+        size: 1600px 900px;
+        margin: 0;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: 'IBM Plex Sans', sans-serif;
+        font-size: 24px;
+        line-height: 1.4;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      a {
+        color: var(--indigo);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+        text-decoration-thickness: 1px;
+      }
+      .slide {
+        position: relative;
+        width: 1600px;
+        height: 900px;
+        padding: 68px 88px 76px;
+        overflow: hidden;
+        break-after: page;
+        background: var(--paper);
+      }
+      .slide:last-child {
+        break-after: auto;
+      }
+      h1,
+      h2 {
+        margin: 0;
+        font-weight: 600;
+        letter-spacing: -0.025em;
+        line-height: 1.08;
+        text-wrap: balance;
+      }
+      h2 {
+        font-size: 54px;
+        max-width: 1320px;
+      }
+      p {
+        margin: 0;
+      }
+      .page {
+        position: absolute;
+        right: 88px;
+        bottom: 30px;
+        color: var(--muted);
+        font-size: 18px;
+      }
+      .mark {
+        position: absolute;
+        left: 88px;
+        bottom: 26px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        color: var(--muted);
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .mark svg {
+        width: 26px;
+        height: 26px;
+      }
+      .mono {
+        font-family: var(--mono);
+        font-size: 0.86em;
+      }
+
+      /* Tables carry most of the argument: ruled, no boxes, so each row reads as one sentence. */
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th {
+        padding: 0 28px 12px 0;
+        border-bottom: 2px solid var(--ink);
+        color: var(--ink-soft);
+        font-size: 20px;
+        font-weight: 500;
+        text-align: left;
+      }
+      td {
+        padding: 15px 28px 15px 0;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      tr:last-child td {
+        border-bottom: 0;
+      }
+      td:last-child,
+      th:last-child {
+        padding-right: 0;
+      }
+      td.lead {
+        font-weight: 600;
+      }
+      .roomy td {
+        padding-top: 24px;
+        padding-bottom: 24px;
+        font-size: 26px;
+      }
+      .tight td {
+        padding-top: 11px;
+        padding-bottom: 11px;
+        font-size: 22px;
+      }
+
+      /* Status is always a word as well as a colour. */
+      .st {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 9px;
+        font-weight: 500;
+      }
+      .st::before {
+        content: '';
+        flex: none;
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: currentColor;
+        transform: translateY(-1px);
+      }
+      .ok {
+        color: var(--green);
+      }
+      .wait {
+        color: var(--amber);
+      }
+      .none {
+        color: var(--muted);
+      }
+
+      /* Opening and closing slides. */
+      .inverse {
+        background: var(--indigo);
+        color: #f6f4ef;
+      }
+      .inverse a {
+        color: #fff;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        font-size: 34px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      .brand svg {
+        width: 56px;
+        height: 56px;
+      }
+      #title h1 {
+        margin-top: 92px;
+        width: 760px;
+        font-size: 84px;
+        line-height: 1.02;
+        letter-spacing: -0.035em;
+      }
+      #title .sub {
+        margin-top: 34px;
+        width: 700px;
+        font-size: 27px;
+        line-height: 1.38;
+        color: #e4e1ff;
+      }
+      #title dl {
+        position: absolute;
+        left: 88px;
+        bottom: 66px;
+        display: grid;
+        grid-template-columns: auto auto;
+        gap: 5px 26px;
+        margin: 0;
+        font-size: 22px;
+      }
+      #title dt {
+        color: var(--indigo-mid);
+      }
+      #title dd {
+        margin: 0;
+      }
+      #title img {
+        position: absolute;
+        left: 910px;
+        top: 96px;
+        width: 1040px;
+        border-radius: 14px;
+        box-shadow: 0 30px 80px rgb(20 16 90 / 45%);
+      }
+
+      /* Architecture: colour says whose contract it is. */
+      .arch {
+        position: relative;
+        height: 590px;
+        margin-top: 40px;
+      }
+      .arch svg.wires {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+      .zone {
+        position: absolute;
+        padding: 20px 22px;
+        border-radius: 14px;
+      }
+      .zone > b {
+        display: block;
+        margin-bottom: 12px;
+        font-size: 24px;
+        font-weight: 600;
+      }
+      .zone.hub {
+        background: var(--panel);
+        border: 2px solid var(--indigo);
+      }
+      .zone.other {
+        background: transparent;
+        border: 1.5px dashed #a6a49b;
+      }
+      .zone.mezo {
+        background: #e0ded6;
+      }
+      .node {
+        display: block;
+        margin-bottom: 9px;
+        padding: 8px 13px;
+        border-radius: 8px;
+        font-size: 20px;
+        line-height: 1.28;
+      }
+      .node small {
+        display: block;
+        font-size: 18px;
+        line-height: 1.28;
+      }
+      .node.own {
+        background: var(--indigo);
+        color: #f6f4ef;
+      }
+      .node.own small {
+        color: #dcd9ff;
+      }
+      .node.theirs {
+        background: var(--panel);
+        color: var(--ink);
+      }
+      .node.theirs small {
+        color: var(--ink-soft);
+      }
+      .wire-label {
+        position: absolute;
+        font-size: 19px;
+        color: var(--ink-soft);
+        line-height: 1.2;
+        text-align: center;
+      }
+      .legend {
+        position: absolute;
+        right: 0;
+        top: 488px;
+        width: 324px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 19px;
+        color: var(--ink-soft);
+      }
+      .legend span {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .legend i {
+        width: 20px;
+        height: 20px;
+        border-radius: 5px;
+      }
+
+      /* The trove, drawn to scale on one dollar axis. */
+      .scale {
+        position: relative;
+        margin-top: 44px;
+        width: 1424px;
+      }
+      .row {
+        position: relative;
+        margin-bottom: 42px;
+      }
+      .row .cap {
+        margin-bottom: 7px;
+        font-size: 22px;
+      }
+      .row .cap b {
+        font-weight: 600;
+      }
+      .bar {
+        display: flex;
+        height: 54px;
+      }
+      .seg {
+        display: flex;
+        align-items: center;
+        padding-left: 16px;
+        white-space: nowrap;
+        font-size: 21px;
+        font-weight: 500;
+      }
+      .seg.btc {
+        background: var(--ink);
+        color: #f6f4ef;
+      }
+      .seg.supply {
+        background: var(--indigo);
+        color: #f6f4ef;
+      }
+      .seg.gas {
+        background: #a6a49b;
+        padding: 0;
+      }
+      .seg.fee {
+        background: var(--amber);
+        padding: 0;
+      }
+      .aside {
+        position: absolute;
+        font-size: 20px;
+        line-height: 1.26;
+        color: var(--ink-soft);
+      }
+      .tick {
+        position: absolute;
+        top: -8px;
+        width: 2px;
+        height: 70px;
+        background: #e8a33d;
+      }
+      .tick-label {
+        position: absolute;
+        top: 30px;
+        color: #f6f4ef;
+        font-size: 19px;
+        line-height: 1.15;
+        padding-left: 11px;
+      }
+      .three {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 48px;
+        margin-top: 8px;
+        padding-top: 22px;
+        border-top: 1px solid var(--line);
+      }
+      .three b {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: 600;
+      }
+      .three p {
+        font-size: 22px;
+        line-height: 1.36;
+      }
+
+      /* Proof: list on the left, the live page on the right. */
+      .split {
+        display: grid;
+        grid-template-columns: 790px 1fr;
+        gap: 44px;
+        margin-top: 34px;
+      }
+      .proofshot {
+        position: absolute;
+        left: 900px;
+        top: 232px;
+        width: 612px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        box-shadow: 0 18px 50px rgb(36 38 56 / 16%);
+      }
+      .note {
+        margin-top: 18px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        font-size: 21px;
+        line-height: 1.38;
+        color: var(--ink-soft);
+      }
+      .note b {
+        color: var(--ink);
+        font-weight: 600;
+      }
+
+      /* Revenue: the split of a year's interest, to scale. */
+      .pie {
+        display: flex;
+        height: 58px;
+        margin-top: 12px;
+      }
+      .pie div {
+        display: flex;
+        align-items: center;
+        padding-left: 16px;
+        font-size: 21px;
+        font-weight: 500;
+        white-space: nowrap;
+      }
+
+      /* Roadmap: a real sequence, so it gets a line. */
+      .when {
+        position: relative;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .when li {
+        position: relative;
+        padding: 0 0 34px 34px;
+      }
+      .when li::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 10px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--indigo);
+      }
+      .when li::after {
+        content: '';
+        position: absolute;
+        left: 6px;
+        top: 28px;
+        bottom: -6px;
+        width: 2px;
+        background: var(--line);
+      }
+      .when li:last-child::after {
+        display: none;
+      }
+      .when b {
+        display: block;
+        font-weight: 600;
+      }
+      .when span {
+        display: block;
+        font-size: 24px;
+        line-height: 1.34;
+        color: var(--ink-soft);
+      }
+      .cols {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 70px;
+        margin-top: 36px;
+      }
+      .cols h3 {
+        margin: 0 0 14px;
+        font-size: 26px;
+        font-weight: 600;
+      }
+      .plain {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .plain li {
+        padding: 15px 0;
+        border-top: 1px solid var(--line);
+        font-size: 24px;
+        line-height: 1.34;
+      }
+      .plain li b {
+        font-weight: 600;
+      }
+
+      /* Closing. */
+      #close h2 {
+        margin-top: 74px;
+        font-size: 78px;
+        letter-spacing: -0.035em;
+      }
+      #close table {
+        margin-top: 52px;
+        width: 1180px;
+      }
+      #close td {
+        border-color: rgb(255 255 255 / 25%);
+        padding: 13px 28px 13px 0;
+      }
+      #close td:first-child {
+        width: 250px;
+        color: #dcd9ff;
+      }
+      #close .foot {
+        position: absolute;
+        left: 88px;
+        bottom: 48px;
+        width: 1200px;
+        font-size: 22px;
+        color: #e4e1ff;
+      }
+    </style>
+  </head>
+  <body>
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="logo" viewBox="0 0 136 136">
+        <rect width="136" height="136" rx="40" fill="var(--tile, #4338ca)" />
+        <g fill="var(--bars, #f6f4ef)">
+          <rect x="35" y="46" width="16" height="44" rx="8" transform="translate(43 68) skewX(-15) translate(-43 -68)" />
+          <rect x="60" y="32" width="16" height="72" rx="8" transform="translate(68 68) skewX(-15) translate(-68 -68)" />
+          <rect x="85" y="44" width="16" height="48" rx="8" transform="translate(93 68) skewX(-15) translate(-93 -68)" />
+        </g>
+      </symbol>
+    </svg>
+
+    <!-- 1 -->
+    <section class="slide inverse" id="title">
+      <div class="brand">
+        <svg style="--tile: #f6f4ef; --bars: #4338ca"><use href="#logo" /></svg>
+        mezodot
+      </div>
+      <h1>A money market for MUSD and MEZO on Mezo.</h1>
+      <p class="sub">
+        Supply to earn. Borrow against BTC, your supply, or collateral locked on other chains. Open a Mezo trove and put its MUSD to work in one transaction.
+      </p>
+      <dl>
+        <dt>Track</dt>
+        <dd>1, DeFi</dd>
+        <dt>Status</dt>
+        <dd>Live on Mezo testnet, not audited</dd>
+        <dt>Team</dt>
+        <dd>MDLOG Labs</dd>
+        <dt>Submitted</dt>
+        <dd>Wave 2, November 2026</dd>
+      </dl>
+      <img src="assets/trove.png" alt="The BTC trove page of the Mezodot app, previewing 0.05 BTC and 2,000 MUSD" />
+    </section>
+
+    <!-- 2 -->
+    <section class="slide">
+      <h2>Mezo gets BTC holders to MUSD. Then the MUSD needs somewhere to go.</h2>
+      <table class="roomy" style="margin-top: 48px">
+        <thead>
+          <tr>
+            <th style="width: 500px">If you</th>
+            <th>On Mezodot you can</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="lead">are about to mint MUSD in a trove</td>
+            <td>open the trove and supply what it mints in one transaction. Later, repay or close the trove from that supply.</td>
+          </tr>
+          <tr>
+            <td class="lead">hold MUSD or MEZO</td>
+            <td>lend it to borrowers. The receipt, pMUSD or pMEZO, keeps earning while you use it as collateral, and MUSD can be looped in one click.</td>
+          </tr>
+          <tr>
+            <td class="lead">hold BTC and want more of it</td>
+            <td>open a long in one transaction. A Tigris flash swap buys the BTC, and your loan pays the pool back.</td>
+          </tr>
+          <tr>
+            <td class="lead">hold WETH or USDC on Base or Ethereum</td>
+            <td>lock it where it is and borrow on Mezo. The asset stays on its chain, and only a message crosses.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="note" style="border: 0; font-size: 24px">Mezodot earns when these loans pay interest. Page 8 shows who pays and how much.</p>
+      <div class="mark">
+        <svg><use href="#logo" /></svg>mezodot
+      </div>
+      <div class="page">2</div>
+    </section>
+
+    <!-- 3 -->
+    <section class="slide">
+      <h2>Mezo is the hub. Other chains only lock collateral.</h2>
+      <div class="arch">
+        <div class="legend">
+          <span><i style="background: var(--indigo)"></i>Mezodot contract</span>
+          <span><i style="background: var(--panel); border: 1px solid var(--line)"></i>Mezo's own, or a partner's</span>
+        </div>
+        <svg class="wires" viewBox="0 0 1424 590" aria-hidden="true">
+          <defs>
+            <marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#56596a" />
+            </marker>
+          </defs>
+          <g fill="none" stroke="#56596a" stroke-width="2">
+            <path d="M292 150 H402" marker-start="url(#tip)" marker-end="url(#tip)" />
+            <path d="M1006 150 H1098" marker-end="url(#tip)" />
+            <path d="M700 488 V450" marker-end="url(#tip)" />
+          </g>
+        </svg>
+
+        <div class="zone other" style="left: 0; top: 40px; width: 292px; height: 296px">
+          <b>Base, Ethereum</b>
+          <span class="node own">SpokeGateway<small>Holds locked WETH and USDC</small></span>
+          <span class="node theirs">Wormhole Core<small>Carries deposits and releases</small></span>
+        </div>
+        <div class="wire-label" style="left: 298px; top: 92px; width: 100px">Wormhole</div>
+
+        <div class="zone hub" style="left: 404px; top: 0; width: 600px; height: 448px">
+          <b>Mezodot hub on Mezo</b>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px">
+            <span class="node own">pMUSD and pMEZO<small>Pools that lend and pay interest</small></span>
+            <span class="node own">VaultManager<small>Collateral, debt, liquidations</small></span>
+            <span class="node own">OracleRouter<small>Freshest usable price, cross-checked</small></span>
+            <span class="node own">TroveRouter<small>BTC to trove to pMUSD</small></span>
+            <span class="node own">SwapLeverageManager<small>BTC long through a flash swap</small></span>
+            <span class="node own">LeverageManager<small>MUSD loop on a flash loan</small></span>
+            <span class="node own">WormholeAdapter<small>Accepts each message once</small></span>
+            <span class="node own">KeeperGateway<small>Liquidates in one call</small></span>
+          </div>
+        </div>
+
+        <div class="wire-label" style="left: 1004px; top: 92px; width: 96px">Calls</div>
+        <div class="zone mezo" style="left: 1100px; top: 0; width: 324px; height: 448px">
+          <b>What it builds on</b>
+          <span class="node theirs">MUSD, MEZO, BTC<small>The assets it lends and takes</small></span>
+          <span class="node theirs">Mezo troves<small>BorrowerOperations, signatures</small></span>
+          <span class="node theirs">Tigris pools<small>Flash swaps, TWAP, pMUSD/MUSD</small></span>
+          <span class="node theirs">Skip, Pyth, Supra<small>Price sources</small></span>
+        </div>
+
+        <div class="zone other" style="left: 404px; top: 488px; width: 600px; padding: 12px 22px">
+          <b style="margin-bottom: 2px">Agent</b>
+          <span style="font-size: 20px; line-height: 1.3; display: block">
+            Relays messages, liquidates, watches prices. If it stops, things wait. The contracts check everything it sends.
+          </span>
+        </div>
+      </div>
+      <div class="mark">
+        <svg><use href="#logo" /></svg>mezodot
+      </div>
+      <div class="page">3</div>
+    </section>
+
+    <!-- 4: bars are to scale. 1424px = $3,848 (0.05 BTC at $76,962). -->
+    <section class="slide">
+      <h2>New in Wave 2: BTC opens a Mezo trove and supplies pMUSD in one transaction.</h2>
+      <div class="scale">
+        <div class="row">
+          <div class="cap"><b>You post</b> 0.05 BTC, worth $3,848 at $76,962</div>
+          <div class="bar" style="position: relative">
+            <div class="seg btc" style="width: 1424px; align-items: center">Collateral</div>
+            <div class="tick" style="left: 896px"></div>
+            <div class="tick-label" style="left: 896px; top: 7px">Liquidated below here<br />110% of debt, $2,422</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="cap"><b>The trove owes</b> 2,202 MUSD, about 175% covered</div>
+          <div class="bar">
+            <div class="seg supply" style="width: 740px">2,000 minted for you</div>
+            <div class="seg gas" style="width: 74px"></div>
+            <div class="seg fee" style="width: 3px"></div>
+          </div>
+          <div class="aside" style="left: 834px; top: 41px; width: 590px">200 gas compensation, which returns when you close, and a 2 MUSD borrowing fee.</div>
+        </div>
+        <div class="row" style="margin-bottom: 28px">
+          <div class="cap"><b>You hold</b> 2,000 MUSD of pMUSD, which earns the pool's supply rate</div>
+          <div class="bar">
+            <div class="seg supply" style="width: 740px">pMUSD</div>
+          </div>
+          <div class="aside" style="left: 760px; top: 41px; width: 664px">
+            Closing burns 2,002 MUSD plus interest. Your supply covers 2,000, so you add a little MUSD on top.
+          </div>
+        </div>
+      </div>
+      <div class="three">
+        <div>
+          <b>Where it stands</b>
+          <p>
+            <span class="st wait">Testnet run pending.</span> Deployed and verified. Open, repay and close pass on a fork of Mezo testnet. The run waits on 0.05
+            BTC from the faucet.
+          </p>
+        </div>
+        <div>
+          <b>Does it pay?</b>
+          <p>
+            Not yet. A trove costs 1% a year. pMUSD pays more than that above about 39% utilisation, and pays 0.03% at today's 7%. The page shows both rates.
+          </p>
+        </div>
+        <div>
+          <b>Mezo's rules stay in force</b>
+          <p>
+            1,800 MUSD minimum net debt, 150% system ratio to open, no closing in Recovery Mode. The page checks each limit first. EOA wallets only, because
+            Mezo checks plain ECDSA.
+          </p>
+        </div>
+      </div>
+      <div class="mark">
+        <svg><use href="#logo" /></svg>mezodot
+      </div>
+      <div class="page">4</div>
+    </section>
+
+    <!-- 5 -->
+    <section class="slide">
+      <h2>Mezodot acts on Mezo's own contracts, not just its tokens.</h2>
+      <table class="tight" style="margin-top: 34px">
+        <thead>
+          <tr>
+            <th style="width: 370px">Mezo primitive</th>
+            <th>What Mezodot does with it</th>
+            <th style="width: 280px">On testnet</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="lead">MUSD and MEZO</td>
+            <td>Pool assets: supplied and borrowed, with MUSD also looped</td>
+            <td><span class="st ok">Exercised</span></td>
+          </tr>
+          <tr>
+            <td class="lead">BTC precompile</td>
+            <td>Hub collateral, and the asset in the one-transaction long</td>
+            <td><span class="st ok">Exercised</span></td>
+          </tr>
+          <tr>
+            <td class="lead">Troves, via BorrowerOperations</td>
+            <td>Opened, repaid and closed for a borrower with their signed message</td>
+            <td><span class="st wait">Deployed, fork-tested</span></td>
+          </tr>
+          <tr>
+            <td class="lead">Tigris MUSD/BTC pool</td>
+            <td>Flash swap for BTC longs, and a TWAP that backs up MUSD's price</td>
+            <td><span class="st ok">Exercised, live</span></td>
+          </tr>
+          <tr>
+            <td class="lead">Tigris stable pool</td>
+            <td>New pMUSD/MUSD pool: an exit when the market has no idle cash</td>
+            <td><span class="st ok">Live, 40 of each</span></td>
+          </tr>
+          <tr>
+            <td class="lead">Skip BTC/USD precompile</td>
+            <td>BTC's first price source, with no key. Mezo's troves read the same feed</td>
+            <td><span class="st ok">Live since 4 Nov</span></td>
+          </tr>
+          <tr>
+            <td class="lead">Pyth push on Mezo</td>
+            <td>Prices for MUSD, MEZO and USDC, refreshed hourly by Mezo</td>
+            <td><span class="st ok">Live</span></td>
+          </tr>
+          <tr>
+            <td class="lead">Wormhole Core on Mezo</td>
+            <td>Cross-chain collateral from Base and Ethereum</td>
+            <td><span class="st ok">Exercised</span></td>
+          </tr>
+          <tr>
+            <td class="lead">Mezo Passport</td>
+            <td>Bitcoin wallets connect through Mezo smart accounts</td>
+            <td><span class="st none">In the app</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="mark">
+        <svg><use href="#logo" /></svg>mezodot
+      </div>
+      <div class="page">5</div>
+    </section>
+
+    <!-- 6 -->
+    <section class="slide">
+      <h2 style="max-width: 1240px">Each path below ran on testnet. Click one and check it.</h2>
+      <div class="split">
+        <div>
+          <table class="tight">
+            <tbody>
+              <tr>
+                <td class="lead">MUSD loop</td>
+                <td>
+                  <a class="mono" href="https://explorer.test.mezo.org/tx/0xa0db424c5a86804a1fa4742502fc1091785599adf10a9ab68c03d25eda14a6ed">0xa0db42…a6ed</a>
+                </td>
+              </tr>
+              <tr>
+                <td class="lead">BTC long through Tigris</td>
+                <td>
+                  <a class="mono" href="https://explorer.test.mezo.org/tx/0x18ac216ed3957e212160b7172e4417acdef0c23a0b5dc618038e4ad472c71d7a">0x18ac21…1d7a</a>
+                </td>
+              </tr>
+              <tr>
+                <td class="lead">Lock on Base Sepolia</td>
+                <td>
+                  <a class="mono" href="https://sepolia.basescan.org/tx/0x653957754d808d362ce2fae7404ee2ac5d06c2fd13b0eeae9f9a4a81384ac706">0x653957…c706</a>
+                </td>
+              </tr>
+              <tr>
+                <td class="lead">Borrow 450 MEZO</td>
+                <td>
+                  <a class="mono" href="https://explorer.test.mezo.org/tx/0xf89123da225c08d0262f7f0361a885904007bdb7a1bf2b48e187a55abc526e1b">0xf89123…6e1b</a>
+                </td>
+              </tr>
+              <tr>
+                <td class="lead">Borrow against pMEZO</td>
+                <td>
+                  <a class="mono" href="https://explorer.test.mezo.org/tx/0xf00004ba92cbe9a62323928bf4c48fd48f1249f2736613ae896676992780468d">0xf00004…468d</a>
+                </td>
+              </tr>
+              <tr>
+                <td class="lead">Keeper liquidation</td>
+                <td>
+                  <a class="mono" href="https://explorer.test.mezo.org/tx/0x8e4d1cc06311e39bd9ad512565ede315bdaf4ea0f7265f5e570972bed3c4c3ca">0x8e4d1c…c3ca</a>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="note">
+            <b>The full list is 31 transactions</b> at <a href="https://github.com/mdlog/mezodot/blob/main/docs/EVIDENCE.md">docs/EVIDENCE.md</a> and in the
+            app. All 15 hub contracts are verified on Mezo's explorer, and <span class="mono">pnpm verify:deployment</span> runs 294 read-only checks against
+            the live chain.
+          </p>
+          <p class="note" style="margin-top: 12px; border: 0; padding-top: 0">
+            <b>The liquidations were staged.</b> The owner lowered pMEZO's limits for about 8 minutes so a real position fell below a health factor of 1. The
+            agent found and liquidated it unprompted. Every wallet so far is ours.
+          </p>
+        </div>
+      </div>
+      <img class="proofshot" src="assets/proof.png" alt="The on-chain proof page of the Mezodot app" />
+      <div class="mark">
+        <svg><use href="#logo" /></svg>mezodot
+      </div>
+      <div class="page">6</div>
+    </section>
+
+    <!-- 7 -->
+    <section class="slide">
+      <h2>Since Wave 1: what the judges asked for, and what happened.</h2>
+      <table class="tight" style="margin-top: 32px">
+        <thead>
+          <tr>
+            <th style="width: 500px">Asked for</th>
+            <th>Done</th>
+            <th style="width: 280px">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="lead">pMEZO collateral, MEZO borrows, keeper liquidations on-chain</td>
+            <td>All three ran on testnet, with transactions on page 6</td>
+            <td><span class="st ok">Done</span></td>
+          </tr>
+          <tr>
+            <td class="lead">Troves through BorrowerOperations</td>
+            <td>TroveRouter and a page in the app</td>
+            <td><span class="st wait">Testnet run pending</span></td>
+          </tr>
+          <tr>
+            <td class="lead">pMUSD/MUSD liquidity in Mezo Pools</td>
+            <td>A stable Tigris pool, seeded with about 40 of each</td>
+            <td><span class="st ok">Done, small</span></td>
+          </tr>
+          <tr>
+            <td class="lead">Close the MUSD and MEZO price gap</td>
+            <td>Tigris TWAP behind both. MEZO's pool is too far off to use yet, so it returns no price</td>
+            <td><span class="st wait">MUSD done, MEZO waits</span></td>
+          </tr>
+          <tr>
+            <td class="lead">Spokes and the lock easy to verify</td>
+            <td>A proof page in the app, and all 15 hub contracts verified on Mezo's explorer</td>
+            <td><span class="st ok">Done</span></td>
+          </tr>
+          <tr>
+            <td class="lead">veMEZO and gauge incentives</td>
+            <td>Left out of this wave</td>
+            <td><span class="st none">Not started</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="note" style="margin-top: 8px; border: 0">
+        <b>Promised in Wave 1, moved to December:</b> timelock and multisig ownership, and a static build of the app.
+      </p>
+      <div class="mark">
+        <svg><use href="#logo" /></svg>mezodot
+      </div>
+      <div class="page">7</div>
+    </section>
+
+    <!-- 8 -->
+    <section class="slide">
+      <h2>Who pays: borrowers, flash borrowers and liquidated accounts.</h2>
+      <table style="margin-top: 34px">
+        <thead>
+          <tr>
+            <th style="width: 360px">Who</th>
+            <th>What they pay</th>
+            <th style="width: 390px">Protocol's share</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="lead">Borrowers</td>
+            <td>Interest set by pool utilisation</td>
+            <td>10% of interest, capped at 30%</td>
+          </tr>
+          <tr>
+            <td class="lead">Flash borrowers, loops</td>
+            <td>0.09% of each flash loan</td>
+            <td>All of it, into reserves</td>
+          </tr>
+          <tr>
+            <td class="lead">Liquidated accounts</td>
+            <td>A 5% to 10% bonus to the liquidator</td>
+            <td>10% of the bonus, capped at 50%</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="margin-top: 42px">
+        <p><b style="font-weight: 600">Example, $1M of MUSD borrowed at 80% utilisation:</b> 6% a year is $60,000 of interest.</p>
+        <div class="pie">
+          <div style="width: 1282px; background: var(--ink); color: #f6f4ef">$54,000 to suppliers</div>
+          <div style="width: 142px; background: var(--indigo); color: #f6f4ef; padding-left: 12px">$6,000</div>
+        </div>
+      </div>
+      <p class="note" style="border: 0; margin-top: 22px; font-size: 24px; color: var(--ink)">
+        <b>Earned so far, on testnet:</b> $0.06 in reserves and under $0.01 of treasury collateral, because these are test amounts. At launch the protocol's
+        income depends on borrowers it does not have yet.
+      </p>
+      <div class="mark">
+        <svg><use href="#logo" /></svg>mezodot
+      </div>
+      <div class="page">8</div>
+    </section>
+
+    <!-- 9 -->
+    <section class="slide">
+      <h2>What is not done, and when it should be.</h2>
+      <div class="cols">
+        <div>
+          <h3>Not done</h3>
+          <ul class="plain">
+            <li><b>No outside users yet.</b> Every wallet on page 6 is ours. Tester guide: docs/TESTING.md</li>
+            <li><b>No audit.</b> Unaudited contracts, on testnet only.</li>
+            <li><b>One owner key.</b> It can change risk limits with no delay until the timelock arrives.</li>
+            <li><b>MEZO has one live price.</b> If Mezo's push stops, MEZO borrows and liquidations revert until it returns.</li>
+            <li><b>The live demo is a dev server,</b> so a first load can be slow.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Plan</h3>
+          <ul class="when">
+            <li>
+              <b>By 12 November 2026</b>
+              <span>Trove run on testnet. Outside testers. New demo video.</span>
+            </li>
+            <li>
+              <b>December 2026</b>
+              <span>Static build. Timelock and multisig. MEZO price fallback in service.</span>
+            </li>
+            <li>
+              <b>First quarter of 2027</b>
+              <span>External audit, then mainnet with capped markets.</span>
+            </li>
+          </ul>
+          <p class="note" style="margin-top: 0; border: 0; padding-top: 0">The later dates are plans, not commitments.</p>
+        </div>
+      </div>
+      <div class="mark">
+        <svg><use href="#logo" /></svg>mezodot
+      </div>
+      <div class="page">9</div>
+    </section>
+
+    <!-- 10 -->
+    <section class="slide inverse" id="close">
+      <div class="brand">
+        <svg style="--tile: #f6f4ef; --bars: #4338ca"><use href="#logo" /></svg>
+        mezodot
+      </div>
+      <h2>Try it, and tell us what breaks.</h2>
+      <table>
+        <tbody>
+          <tr>
+            <td>App</td>
+            <td><a href="https://mezodot.mdloglabs.org">mezodot.mdloglabs.org</a></td>
+          </tr>
+          <tr>
+            <td>Proof</td>
+            <td><a href="https://mezodot.mdloglabs.org/#/proof">mezodot.mdloglabs.org/#/proof</a></td>
+          </tr>
+          <tr>
+            <td>Tester guide</td>
+            <td><a href="https://github.com/mdlog/mezodot/blob/main/docs/TESTING.md">docs/TESTING.md</a></td>
+          </tr>
+          <tr>
+            <td>Code</td>
+            <td><a href="https://github.com/mdlog/mezodot">github.com/mdlog/mezodot</a></td>
+          </tr>
+          <tr>
+            <td>Team</td>
+            <td>MDLOG Labs, <a href="https://github.com/mdlog">github.com/mdlog</a></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="foot">Testnet only. The contracts are not audited, so use a wallet with nothing of value in it.</p>
+    </section>
+  </body>
+</html>

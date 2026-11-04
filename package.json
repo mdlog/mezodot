@@ -21,6 +21,7 @@
     "check:admin-docs": "pnpm --dir services/agent -s exec tsx --tsconfig ../../scripts/tsconfig.json ../../scripts/check-admin-docs.ts",
     "exercise:trove": "pnpm --dir services/agent -s exec tsx --tsconfig ../../scripts/tsconfig.json ../../scripts/trove-exercise.ts",
     "verify:deployment": "pnpm --dir services/agent -s exec tsx --tsconfig ../../scripts/tsconfig.json ../../scripts/verify-deployment.ts",
+    "deck": "bash docs/deck/build.sh",
     "revenue:report": "pnpm --dir services/agent -s exec tsx --tsconfig ../../scripts/tsconfig.json ../../scripts/revenue-report.ts",
     "smoke:btc": "bash scripts/smoke-btc.sh"
   },
