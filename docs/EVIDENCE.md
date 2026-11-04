@@ -120,8 +120,20 @@ MEZO_FORK_RPC=https://rpc.test.mezo.org forge test --root contracts --match-cont
 | Step               | Transaction                                                          |
 | ------------------ | -------------------------------------------------------------------- |
 | Deploy TroveRouter | `0x4f7960d748e339e97e206a6652daf36b34b0f4b79694bda12a1c6e12f7281909` |
+| Top up 6 MUSD      | `0x30de1cc53ba4ee4643ff13202c3ad3b6e3580e48b5e50e25b0e9a502c8840c6f` |
+| Open and supply    | `0xac10d697bf0a68ce83b0ac8bdde4d593f2c29c17766140f2e2ca54b772e41e6c` |
+| Repay from supply  | `0x1cba402240afde79e8d254e69deb3c25437393a2dbddf31edf6b4c5e7d8e9f66` |
+| Close from supply  | `0xb89ce00d1e812157559dd57fadd4ecd438a100010f7f0d5943b3bf0bc29e74b8` |
 
-**Not yet exercised on testnet.** A Mezo trove needs at least 2,000 MUSD of debt, so about 0.04 BTC of collateral. Until a full open, repay and close runs on testnet, the evidence is the fork suite, which drives Mezo's real contracts with real signatures:
+Run from `0x496daedE9076C9349fE4E775a51C00C98b501C39` on 2026-11-04, with BTC at $77,028:
+
+- **Open:** 0.05 BTC and 2,000 MUSD opened a trove owing 2,202 MUSD (2 fee, 200 gas compensation) at 174.8%, and 2,000 MUSD went into pMUSD in the same transaction.
+- **Repay:** 50 MUSD of that supply paid down the debt, leaving 2,152.
+- **Close:** the rest of the supply and about 2 MUSD from the wallet closed the trove.
+
+All the BTC came back. The net cost was 2.00003 MUSD: Mezo's 2 MUSD fee and a little interest, less what the supply earned. Gas cost about 0.0000000003 BTC.
+
+The run signed with `pnpm exercise:trove`, not through the app's page. The fork suite covers the same calls against Mezo's real contracts:
 
 ```bash
 MEZO_FORK_RPC=https://rpc.test.mezo.org forge test --root contracts --match-contract ForkTrove -vv

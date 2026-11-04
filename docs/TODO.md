@@ -11,13 +11,13 @@ Implemented (see README):
 - [x] Autonomous keeper E2E and browser E2E
 - [x] CI on every pull request (contracts, SDK ABI drift, formatting, packages, ops scripts, admin-powers docs) and nightly testnet, fork and devnet checks
 - [x] Operations: deployment check, revenue report with collection plan, BTC smoke test; DEPLOY, RUNBOOK, REVENUE and SECURITY docs
-- [x] Exercised on testnet: pMEZO collateral, MEZO borrowing, keeper liquidation, stable pMUSD/MUSD pool ([EVIDENCE.md](EVIDENCE.md))
+- [x] Exercised on testnet: pMEZO collateral, MEZO borrowing, keeper liquidation, a Mezo trove through TroveRouter, stable pMUSD/MUSD pool ([EVIDENCE.md](EVIDENCE.md))
 - [x] Source verification: all 17 live contracts are exact matches on Sourcify, all 15 hub contracts are verified on Mezo's explorer, and both spoke gateways are verified on Blockscout (Base Sepolia, Ethereum Sepolia) (DEPLOY.md, step 4)
 
 Next:
 
 - [ ] Record the Wave 2 demo
-- [ ] A full trove open, repay and close on testnet: `TROVE_PRIVATE_KEY=0x... pnpm exercise:trove`, with about 0.05 BTC and 5 MUSD (passes on a local fork)
+- [ ] Try the trove page with a real browser wallet: the testnet run signed with `pnpm exercise:trove`
 - [ ] Outside testers ([TESTING.md](TESTING.md))
 - [ ] MEZO price liveness: its TWAP fallback returns no price until the MEZO/MUSD pool trades near the oracle (it needs about 800 more MEZO sold into it), or coverage agreed with Mezo. MUSD's fallback works
 - [ ] Pyth key: the agent's key is entitled to no feed today (HTTP 403 for all five), so its pusher does nothing. BTC no longer needs it; ETH rests on Supra until it is fixed or dropped

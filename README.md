@@ -335,7 +335,7 @@ KPIs come from the chain and the agent:
 - [x] pMEZO collateral, MEZO borrowing and a keeper liquidation exercised on testnet ([EVIDENCE.md](docs/EVIDENCE.md))
 - [x] Stable pMUSD/MUSD pool on Tigris
 - [x] All 15 hub contracts verified on Mezo's explorer
-- [ ] A full trove open, repay and close on testnet (needs about 0.05 BTC from the faucet)
+- [x] A full trove open, repay and close on testnet
 - [ ] Outside testers ([TESTING.md](docs/TESTING.md))
 
 **December 2026**

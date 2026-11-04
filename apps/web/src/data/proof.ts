@@ -84,8 +84,13 @@ export const PROOF: ProofSection[] = [
   },
   {
     title: 'TroveRouter',
-    note: 'BTC to a Mezo trove to pMUSD in one transaction. Deployed and tested against a fork of the live contracts; a full open, repay and close on testnet is still to come.',
-    txs: [mezo('Deploy TroveRouter', '0x4f7960d748e339e97e206a6652daf36b34b0f4b79694bda12a1c6e12f7281909')],
+    note: 'BTC to a Mezo trove to pMUSD in one transaction, part of the debt repaid from that supply, then the trove closed. All the BTC came back, for a net cost of about 2 MUSD.',
+    txs: [
+      mezo('Deploy TroveRouter', '0x4f7960d748e339e97e206a6652daf36b34b0f4b79694bda12a1c6e12f7281909'),
+      mezo('Open and supply: 0.05 BTC, 2,000 MUSD', '0xac10d697bf0a68ce83b0ac8bdde4d593f2c29c17766140f2e2ca54b772e41e6c'),
+      mezo('Repay 50 MUSD from supply', '0x1cba402240afde79e8d254e69deb3c25437393a2dbddf31edf6b4c5e7d8e9f66'),
+      mezo('Close from supply', '0xb89ce00d1e812157559dd57fadd4ecd438a100010f7f0d5943b3bf0bc29e74b8'),
+    ],
   },
 ];
 

@@ -675,12 +675,12 @@
       <div class="page">3</div>
     </section>
 
-    <!-- 4: bars are to scale. 1424px = $3,848 (0.05 BTC at $76,962). -->
+    <!-- 4: bars are to scale. 1424px = $3,851 (0.05 BTC at $77,028, the testnet run). -->
     <section class="slide">
       <h2>New in Wave 2: BTC opens a Mezo trove and supplies pMUSD in one transaction.</h2>
       <div class="scale">
         <div class="row">
-          <div class="cap"><b>You post</b> 0.05 BTC, worth $3,848 at $76,962</div>
+          <div class="cap"><b>You post</b> 0.05 BTC, worth $3,851 at $77,028</div>
           <div class="bar" style="position: relative">
             <div class="seg btc" style="width: 1424px; align-items: center">Collateral</div>
             <div class="tick" style="left: 896px"></div>
@@ -710,8 +710,11 @@
         <div>
           <b>Where it stands</b>
           <p>
-            <span class="st wait">Testnet run pending.</span> Deployed and verified. Open, repay and close pass on a fork of Mezo testnet. The run waits on 0.05
-            BTC from the faucet.
+            <span class="st ok">Ran on testnet.</span>
+            <a href="https://explorer.test.mezo.org/tx/0xac10d697bf0a68ce83b0ac8bdde4d593f2c29c17766140f2e2ca54b772e41e6c">Open</a>,
+            <a href="https://explorer.test.mezo.org/tx/0x1cba402240afde79e8d254e69deb3c25437393a2dbddf31edf6b4c5e7d8e9f66">repay</a> and
+            <a href="https://explorer.test.mezo.org/tx/0xb89ce00d1e812157559dd57fadd4ecd438a100010f7f0d5943b3bf0bc29e74b8">close</a> used these same amounts.
+            All the BTC came back, for a net cost of about 2 MUSD.
           </p>
         </div>
         <div>
@@ -759,7 +762,7 @@
           <tr>
             <td class="lead">Troves, via BorrowerOperations</td>
             <td>Opened, repaid and closed for a borrower with their signed message</td>
-            <td><span class="st wait">Deployed, fork-tested</span></td>
+            <td><span class="st ok">Exercised</span></td>
           </tr>
           <tr>
             <td class="lead">Tigris MUSD/BTC pool</td>
@@ -807,9 +810,9 @@
           <table class="tight">
             <tbody>
               <tr>
-                <td class="lead">MUSD loop</td>
+                <td class="lead">Trove opened and supplied</td>
                 <td>
-                  <a class="mono" href="https://explorer.test.mezo.org/tx/0xa0db424c5a86804a1fa4742502fc1091785599adf10a9ab68c03d25eda14a6ed">0xa0db42…a6ed</a>
+                  <a class="mono" href="https://explorer.test.mezo.org/tx/0xac10d697bf0a68ce83b0ac8bdde4d593f2c29c17766140f2e2ca54b772e41e6c">0xac10d6…1e6c</a>
                 </td>
               </tr>
               <tr>
@@ -845,13 +848,13 @@
             </tbody>
           </table>
           <p class="note">
-            <b>The full list is 31 transactions</b> at <a href="https://github.com/mdlog/mezodot/blob/main/docs/EVIDENCE.md">docs/EVIDENCE.md</a> and in the
+            <b>The full list is 34 transactions</b> at <a href="https://github.com/mdlog/mezodot/blob/main/docs/EVIDENCE.md">docs/EVIDENCE.md</a> and in the
             app. All 15 hub contracts are verified on Mezo's explorer, and <span class="mono">pnpm verify:deployment</span> runs 294 read-only checks against
             the live chain.
           </p>
           <p class="note" style="margin-top: 12px; border: 0; padding-top: 0">
             <b>The liquidations were staged.</b> The owner lowered pMEZO's limits for about 8 minutes so a real position fell below a health factor of 1. The
-            agent found and liquidated it unprompted. Every wallet so far is ours.
+            agent found and liquidated it unprompted. Every wallet on this list is ours.
           </p>
         </div>
       </div>
@@ -881,8 +884,8 @@
           </tr>
           <tr>
             <td class="lead">Troves through BorrowerOperations</td>
-            <td>TroveRouter and a page in the app</td>
-            <td><span class="st wait">Testnet run pending</span></td>
+            <td>TroveRouter and a page in the app. Open, repay and close ran on testnet</td>
+            <td><span class="st ok">Done</span></td>
           </tr>
           <tr>
             <td class="lead">pMUSD/MUSD liquidity in Mezo Pools</td>
@@ -968,7 +971,7 @@
         <div>
           <h3>Not done</h3>
           <ul class="plain">
-            <li><b>No outside users yet.</b> Every wallet on page 6 is ours. Tester guide: docs/TESTING.md</li>
+            <li><b>No confirmed outside users.</b> Every wallet on page 6 is ours. Tester guide: docs/TESTING.md</li>
             <li><b>No audit.</b> Unaudited contracts, on testnet only.</li>
             <li><b>One owner key.</b> It can change risk limits with no delay until the timelock arrives.</li>
             <li><b>MEZO has one live price.</b> If Mezo's push stops, MEZO borrows and liquidations revert until it returns.</li>
@@ -980,7 +983,7 @@
           <ul class="when">
             <li>
               <b>By 12 November 2026</b>
-              <span>Trove run on testnet. Outside testers. New demo video.</span>
+              <span>Outside testers. New demo video.</span>
             </li>
             <li>
               <b>December 2026</b>
