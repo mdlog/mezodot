@@ -38,7 +38,7 @@ The agent also posts every health-check change to `ALERT_WEBHOOK_URL` when it is
 **Detect.** `/oracle/health` answers 503 once a feed is `unavailable` (no usable price and nobody can refresh it; transactions revert with `PriceUnavailable(bytes32)`) or its report is stale. A feed that is `expiring` (under a fifth of its max age left: 13 minutes for MUSD and MEZO) still answers 200; it shows only in the body and in the agent log (`MUSD expiring`, then `MUSD unavailable`). For an early warning, alert on the body, not the status code:
 
 ```bash
-# Pull-backed feeds (ETH, BTC, USDC's Supra leg) expire every 120 s by design; only the single-leg push feeds
+# Pull-backed feeds (ETH, USDC's Supra leg) expire every 120 s by design; only the push feeds
 # (MUSD, MEZO) warn early when they run low.
 curl -s $AGENT/oracle/health | jq -e '(.stale | not) and all(.feeds[]; .status != "unavailable" and (.status != "expiring" or (.symbol != "MUSD" and .symbol != "MEZO")))'   # non-zero exit: act now
 ```
@@ -49,7 +49,7 @@ Directly: `cast call $OR "getPriceInfo(bytes32)(bool,uint256,uint256)" $(cast ke
 
 **Act.** Pushing a price is permissionless; no owner key is needed.
 
-- **MUSD / MEZO** (Pyth push only; Mezo's pusher normally refreshes them hourly, with ~5 minutes of slack against the 3,900 s max age). Push a fresh Pyth update yourself with a Pyth key that is _entitled to the feed_ (a 403 means it is not; the key in use today is not entitled to MUSD or MEZO, and `curl -s $AGENT/health | jq .pythPusher` lists the feeds the agent's key cannot refresh), and ask Mezo to check their pusher:
+- **MUSD / MEZO** (Pyth push; Mezo's pusher normally refreshes them hourly, with ~5 minutes of slack against the 3,900 s max age). Once the push is stale, MUSD falls back to the Tigris TWAP by itself. MEZO's fallback returns no price until its pool trades near the oracle (`pnpm verify:deployment` reports both as `TWAP fallback`). To restore the push, submit a fresh Pyth update yourself with a Pyth key that is _entitled to the feed_ (a 403 means it is not, and the key in use today is entitled to none), or ask Mezo:
 
   ```bash
   UPDATE=$(curl -fsS -H "Authorization: Bearer $PYTH_API_KEY" \
@@ -61,7 +61,7 @@ Directly: `cast call $OR "getPriceInfo(bytes32)(bool,uint256,uint256)" $(cast ke
 
   Pyth keeps only newer prices, so a push can never move a price back.
 
-- **USDC** (Pyth push at 3,900 s plus a 120 s Supra leg), **BTC** and **ETH** (120 s Pyth legs, which the agent's keyed pusher refreshes about every minute, plus 120 s Supra legs): nothing to do on-chain. Every transaction that needs the price attaches a Supra proof when the stored one would expire first (the web app and the keeper get it from the agent's `/oracle/update`). If the agent relay is down, fetch one directly; `pair_indexes`: ETH 19, USDC 89, BTC 18:
+- **BTC** reads Mezo's Skip feed, with a 120 s Supra leg behind it: nothing to do unless both stop. **USDC** (Pyth push at 3,900 s plus a 120 s Supra leg) and **ETH** (a 120 s Pyth leg that nothing refreshes today, plus a 120 s Supra leg): nothing to do on-chain. Every transaction that needs the price attaches a Supra proof through the agent's `/oracle/update` relay. To store one by hand:
 
   ```bash
   PROOF=$(curl -fsS -X POST https://rpc-testnet-dora-2.supra.com/get_proof -H 'content-type: application/json' \
@@ -70,11 +70,19 @@ Directly: `cast call $OR "getPriceInfo(bytes32)(bool,uint256,uint256)" $(cast ke
   cast send $OR "updatePrices(bytes[])" "[0x02${PROOF#0x}]" --rpc-url $MEZO_RPC --keystore $KEYSTORE
   ```
 
-- If Supra's endpoint itself is down, ETH and BTC prices come only from the agent's keyed pusher (`curl -s $AGENT/health | jq .pythPusher`); without it, ETH- and BTC-backed borrowing and liquidations wait for Supra. Nothing on-chain needs changing.
+- If Supra's endpoint itself is down, ETH-backed borrowing and liquidations wait for it. BTC keeps reading Skip, without the cross-check. Nothing on-chain needs changing.
 
 **Recover.** `getPriceInfo` returns `true` with a `validUntil` about an hour out (MUSD, MEZO, USDC; at most 120 s for ETH and BTC), and `/oracle/health` lists no feed `expiring` or `unavailable`.
 
 ## 2. Oracle divergence or a bad price
+
+**If the Tigris TWAP is the suspect** (reads of MUSD or MEZO revert with `PriceDiverged`, or a pool looks manipulated), remove the fallback for that key and leave the push alone. This takes effect at once and moves no funds:
+
+```bash
+# Example for MEZO: keep the primary leg and confidence cap, drop the secondary (source 0).
+cast send $OR "setFeed(bytes32,((uint8,uint32,bytes32),(uint8,uint32,bytes32),uint16,uint16))" $(cast keccak MEZO) \
+  "((1,3900,$MEZO_FEED),(0,0,0x0000000000000000000000000000000000000000000000000000000000000000),500,0)" --rpc-url $MEZO_RPC --keystore $KEYSTORE
+```
 
 **Detect.** Transactions revert with `PriceDiverged(bytes32)` (legs disagree beyond 1.5%: the router fails closed), or a served price is far from the market (compare with an independent reference), or liquidations hit positions that should be healthy. Both stored legs and the feed config:
 

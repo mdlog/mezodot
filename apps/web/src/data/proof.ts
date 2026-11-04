@@ -89,7 +89,7 @@ export const PROOF: ProofSection[] = [
   },
 ];
 
-/** Contracts a reader may want to inspect, by their key in the deployment record. All exact matches on Sourcify. */
+/** Contracts a reader may want to inspect, by their key in the deployment record. All verified on Mezo's explorer and exact matches on Sourcify. */
 export const PROOF_CONTRACTS: {
   label: string;
   key:

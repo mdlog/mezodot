@@ -4,13 +4,13 @@ Keeper and data service for Mezodot: relays Wormhole messages in both directions
 through `KeeperGateway`, serves signed pull-price proofs to the web app, watches the oracle and the protocol's
 owner/risk events, and exposes market data, risk analytics and keeper actions over HTTP and MCP.
 
-| Module (`AGENT_MODULES`) | Does                                                                                                    |
-| ------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `relayer`                | spoke `Deposited` → hub `KeeperGateway.relayMessage`; hub `ReleaseSent` → spoke `receiveMessage`        |
-| `liquidator`             | indexes borrowers (`Borrowed`), liquidates HF < 1, converts seized collateral back into repay inventory |
-| `oracle`                 | oracle watchdog; with `PYTH_API_KEY`, pushes Pyth updates (ETH's Pyth leg, MUSD/MEZO when Mezo lags)    |
-| `risk`                   | volatility, VaR, LTV advice, walk-forward + Deflated Sharpe (CoinGecko histories, every 30 min)         |
-| `http`                   | the HTTP API below, `/mcp`, and the protocol revenue report                                             |
+| Module (`AGENT_MODULES`) | Does                                                                                                              |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `relayer`                | spoke `Deposited` → hub `KeeperGateway.relayMessage`; hub `ReleaseSent` → spoke `receiveMessage`                  |
+| `liquidator`             | indexes borrowers (`Borrowed`), liquidates HF < 1, converts seized collateral back into repay inventory           |
+| `oracle`                 | oracle watchdog; with a `PYTH_API_KEY` entitled to the feeds, pushes Pyth updates (ETH, MUSD/MEZO when Mezo lags) |
+| `risk`                   | volatility, VaR, LTV advice, walk-forward + Deflated Sharpe (CoinGecko histories, every 30 min)                   |
+| `http`                   | the HTTP API below, `/mcp`, and the protocol revenue report                                                       |
 
 Safety never depends on the agent (contracts verify every VAA and price proof); it provides liveness.
 

@@ -174,7 +174,7 @@ describe('oracle health', () => {
   });
 
   it('names the keyless legs', () => {
-    const oracle = Object.fromEntries(PRICE_SYMBOLS.map((s) => [s, status(s)])) as OracleState;
+    const oracle = Object.fromEntries(PRICE_SYMBOLS.map((s) => [s, status(s, {})])) as OracleState;
     oracle.BTC = status('BTC', {
       feed: {
         primary: { source: SOURCE_TAG.SKIP, maxAge: 120, id: NO_LEG.id },

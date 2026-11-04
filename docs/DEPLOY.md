@@ -134,13 +134,36 @@ Then run the BTC smoke test of step 8 before announcing the deployment.
 Source verification (run for the current deployment on 2026-10-23: all 14 live contracts are exact matches on Sourcify, `https://repo.sourcify.dev/<chain id>/<address>`, and both spoke gateways are verified on Blockscout). Verify each address against the source that deployed it: the creation input recorded in `contracts/broadcast/<script>/<chain id>/run-*.json` must start with the artifact's `bytecode.object`, and the rest of that input is the constructor arguments.
 
 ```bash
-# Mezo hub (chain 31611): Sourcify
+# Mezo hub (chain 31611): Mezo's explorer, and Sourcify
+forge verify-contract --root contracts --chain 31611 --verifier blockscout --verifier-url https://api.explorer.test.mezo.org/api --watch <address> src/hub/VaultManager.sol:VaultManager
 forge verify-contract --root contracts --chain 31611 --verifier sourcify --constructor-args 0x<args> <address> src/hub/VaultManager.sol:VaultManager
 # Spokes (84532, 11155111): Blockscout, and Sourcify as above
 forge verify-contract --root contracts --chain 84532 --verifier blockscout --verifier-url https://base-sepolia.blockscout.com/api/ --constructor-args 0x<args> <address> src/spoke/SpokeGateway.sol:SpokeGateway
 ```
 
-Mezo's testnet explorer runs Blockscout v6.9.2; its API is `https://api.explorer.test.mezo.org/api/` (`https://explorer.test.mezo.org/api/` is the web app and answers 404). It answers `Fail - Unable to verify` for these contracts, which are built with `via_ir` (no via-IR contract is verified on that explorer), although Sourcify reproduces them byte for byte. The hub's sources are therefore published on Sourcify until that explorer can verify them. Etherscan on the Sepolia chains needs `--verifier etherscan --etherscan-api-key $ETHERSCAN_API_KEY` and has not been run.
+Mezo's testnet explorer runs Blockscout; its API is `https://api.explorer.test.mezo.org/api/` (`https://explorer.test.mezo.org/api/` is the web app and answers 404). It answered `Fail - Unable to verify` for these via-IR builds until at least 2026-10-23, and accepted them on 2026-11-04: all 15 hub contracts show as verified there. `SwapLeverageManager` is a partial match (the bytecode matches and only the metadata hash differs) and an exact match on Sourcify; the other 14 are full matches. If the RPC is slow, leave out `--guess-constructor-args`: the explorer works out the arguments itself. Etherscan on the Sepolia chains needs `--verifier etherscan --etherscan-api-key $ETHERSCAN_API_KEY` and has not been run.
+
+Hub contracts added after that check are also exact matches on Sourcify: `TroveRouter`, `SkipSource` and `TigrisTwapSource` (2026-11-04).
+
+### Adding to a live hub
+
+None of these needs a hub redeploy. Run each from `contracts/`, with the broadcast flags above; each records what it deploys in the deployment JSON. `pnpm verify:deployment` checks them once recorded.
+
+```bash
+# TroveRouter: BTC to a Mezo trove to pMUSD. Ownerless, holds nothing: replacing it needs no migration.
+set -a; source .env.example; set +a
+NETWORK=mezo-testnet forge script script/DeployTroveRouter.s.sol --rpc-url $MEZO_RPC --keystore $KEYSTORE --broadcast --skip-simulation --slow
+
+# Keyless legs: registers Skip (tag 3) and the Tigris TWAP (tag 4), moves BTC's primary to Skip, and puts the TWAP
+# behind MUSD and MEZO. The owner must broadcast it.
+NETWORK=mezo-testnet forge script script/DeployOracleLiveness.s.sol --rpc-url $MEZO_RPC --keystore $KEYSTORE --broadcast --skip-simulation --slow
+
+# Stable pMUSD/MUSD pool on Tigris: the broadcaster needs MUSD_AMOUNT of MUSD and the same amount, in 24-decimal
+# units, of pMUSD. A stable pool's first deposit must be equal once decimals are normalised.
+NETWORK=mezo-testnet MUSD_AMOUNT=40000000000000000000 forge script script/DeployPMusdPool.s.sol --rpc-url $MEZO_RPC --keystore $KEYSTORE --sender <address> --broadcast --skip-simulation --slow
+```
+
+`SkipSource` takes the feed's decimals as a constructor argument, because forge cannot execute the precompile.
 
 ## 5. Commit
 

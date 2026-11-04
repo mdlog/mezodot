@@ -4,10 +4,12 @@ Everything here ran on a public testnet and can be checked without trusting this
 
 Explorers: [Mezo testnet](https://explorer.test.mezo.org), [Base Sepolia](https://sepolia.basescan.org), [Ethereum Sepolia](https://sepolia.etherscan.io).
 
-To check the whole deployment yourself (235 checks, read-only):
+To check the whole deployment yourself (294 read-only checks on 2026-11-04):
 
 ```bash
-pnpm install && pnpm verify:deployment mezo-testnet
+pnpm install
+set -a; source contracts/.env.example; set +a
+pnpm verify:deployment mezo-testnet
 ```
 
 ## Source verification
@@ -20,7 +22,7 @@ All hub contracts are exact matches on Sourcify, under `https://repo.sourcify.de
 | SkipSource       | `0x66DB48e0Af5aDE6e18A502BD34eeDA922032d165` |
 | TigrisTwapSource | `0x5EB962ba29CC4430bEAcf43027fdb7870FcD2BF3` |
 
-Mezo's Blockscout answers "Unable to verify" for contracts built with solc's via-IR pipeline, which every hub contract uses, so they show as unverified there (DEPLOY.md, step 4). Both spoke gateways are also verified on Blockscout.
+All 15 hub contracts are also verified on [Mezo's explorer](https://explorer.test.mezo.org), since 2026-11-04. `SwapLeverageManager` is a partial match there (the bytecode matches and only the metadata hash differs); the other 14 are full matches (DEPLOY.md, step 4). Both spoke gateways are verified on Blockscout.
 
 ## Paths exercised
 

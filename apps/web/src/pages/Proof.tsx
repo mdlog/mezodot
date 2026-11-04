@@ -22,7 +22,7 @@ export function Proof() {
             MEZO TESTNET <i>/</i> BASE SEPOLIA <i>/</i> ETHEREUM SEPOLIA
           </>
         }
-        time="Source verified on Sourcify"
+        time="Source verified on Mezo's explorer and Sourcify"
         icon={ShieldCheck}
       />
       <div className="proof-sections">
@@ -55,7 +55,7 @@ export function Proof() {
                   <span className="proof-links">
                     <AddressLink network={HUB} address={address} />
                     <a href={sourcifyUrl(address)} target="_blank" rel="noreferrer">
-                      Source <ExternalLink size={12} />
+                      Sourcify <ExternalLink size={12} />
                     </a>
                   </span>
                 </li>
@@ -63,8 +63,8 @@ export function Proof() {
             })}
           </ul>
           <p className="proof-note">
-            Mezo&apos;s Blockscout cannot yet verify contracts built with solc&apos;s via-IR pipeline, so hub sources are checked on Sourcify. Spoke gateways
-            are verified on Blockscout too.{' '}
+            Each address opens Mezo&apos;s explorer, where the source is verified. Sourcify holds a second, independent match. Spoke gateways are verified on
+            Blockscout too.{' '}
             <a href={`${REPOSITORY}/blob/main/docs/EVIDENCE.md`} target="_blank" rel="noreferrer">
               Full evidence, with how to reproduce it <ExternalLink size={12} />
             </a>
