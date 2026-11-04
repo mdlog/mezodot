@@ -53,7 +53,7 @@ const BOXES: Partial<Record<NodeId, Box>> = {
   spoke: { x: 36, y: 300, w: 170, h: 64, title: 'SpokeGateway', sub: 'locks WETH · USDC', zone: 'spoke' },
   keeper: { x: 426, y: 170, w: 150, h: 64, title: 'KeeperGateway', sub: 'relay · liquidate', zone: 'hub' },
   vault: { x: 606, y: 170, w: 150, h: 64, title: 'VaultManager', sub: 'positions · health', zone: 'hub' },
-  oracle: { x: 786, y: 170, w: 150, h: 64, title: 'OracleRouter', sub: 'Pyth · Supra', zone: 'hub' },
+  oracle: { x: 786, y: 170, w: 150, h: 64, title: 'OracleRouter', sub: 'Skip · Pyth · Supra', zone: 'hub' },
   adapter: { x: 426, y: 300, w: 150, h: 64, title: 'WormholeAdapter', sub: 'verifies VAAs', zone: 'hub' },
   pools: { x: 606, y: 300, w: 150, h: 64, title: 'MezodotPool', sub: 'pMUSD · pMEZO', zone: 'hub' },
   // LeverageManager (MUSD loop, on the MUSD pool's flash loan) and SwapLeverageManager (BTC long, on a Tigris flash swap).
@@ -160,7 +160,7 @@ const EDGES = {
       [861, 130],
       [861, 170],
     ],
-    label: { lines: ['Pyth push · Supra proofs'], at: [770, 122] },
+    label: { lines: ['Skip · Pyth push · Supra'], at: [770, 122] },
   },
   supraAgent: {
     from: 'supra',
@@ -290,7 +290,11 @@ export const JOURNEYS: { id: string; label: string; steps: Step[] }[] = [
     id: 'borrow',
     label: 'Borrow',
     steps: [
-      { edge: 'agentOracle', text: 'Prices stay fresh: Pyth is pushed on Mezo, the agent serves Supra pull proofs.', fn: 'OracleRouter.updatePrices(updates)' },
+      {
+        edge: 'agentOracle',
+        text: 'Prices stay fresh: Skip and Pyth are on Mezo, the agent serves Supra pull proofs.',
+        fn: 'OracleRouter.updatePrices(updates)',
+      },
       {
         edge: 'walletHub',
         text: 'You borrow MUSD or MEZO, attaching a price update when one is about to expire.',

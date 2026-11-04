@@ -42,7 +42,8 @@ function contractRows(): Row[] {
     {
       name: 'OracleRouter.sol',
       role: 'Prices',
-      description: 'Pyth Core (pushed on Mezo) and keyless Supra pull proofs: per-feed max age, confidence cap and cross-vendor check.',
+      description:
+        "Mezo's Skip feed, Pyth Core (pushed on Mezo), keyless Supra pull proofs and a Tigris TWAP fallback: per-feed max age, confidence cap and cross-check.",
       location: 'Mezo Hub',
       address: c?.oracleRouter,
       network: HUB,
@@ -190,8 +191,8 @@ export function Architecture() {
           <span className="arch-note-id">HUB</span>
           <h3>One place to account.</h3>
           <p>
-            MUSD and MEZO liquidity, debt and every position live on Mezo. VaultManager values all collateral with Pyth and Supra prices and enforces one health
-            factor.
+            MUSD and MEZO liquidity, debt and every position live on Mezo. VaultManager values all collateral with Skip, Pyth and Supra prices and enforces one
+            health factor.
           </p>
         </article>
         <article className="panel arch-note">

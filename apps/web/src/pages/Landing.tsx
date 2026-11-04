@@ -151,7 +151,7 @@ const GUARANTEES: { icon: LucideIcon; title: string; body: string }[] = [
   {
     icon: Radio,
     title: 'Prices with limits',
-    body: 'Pyth prices every market on Mezo. ETH, USDC and BTC also carry a Supra pull proof as a second source. Every feed has staleness and confidence limits.',
+    body: "Mezo's Skip feed prices BTC, and Pyth prices the rest on Mezo. ETH, USDC and BTC also carry a Supra pull proof as a second source. A Tigris TWAP backs up MUSD. Every feed has staleness and confidence limits.",
   },
   {
     icon: Waves,
