@@ -94,7 +94,7 @@ function OpenForm({ wallet, sign, connected }: { wallet: TroveWallet | undefined
     input && trove
       ? openBlockers({ ...input, systemColl: trove.systemColl, systemDebt: trove.systemDebt, status: trove.status, isContract: trove.isContract })
       : [];
-  const short = Boolean(wallet && btcAmount && btcAmount > wallet.btc);
+  const short = Boolean(address && wallet && btcAmount && btcAmount > wallet.btc);
 
   const open = async () => {
     if (!address || !hub || !btcAmount || !debtAmount) return;
@@ -106,12 +106,19 @@ function OpenForm({ wallet, sign, connected }: { wallet: TroveWallet | undefined
   };
 
   return (
-    <section className="panel borrow-form-panel">
+    <section className="panel borrow-form-panel trove-form">
       <PanelTitle label="Open and supply" meta="One transaction" />
       <label className="field-label" htmlFor="trove-btc">
-        BTC COLLATERAL <span>Wallet {wallet ? btc(wallet.btc) : '—'}</span>
+        BTC COLLATERAL <span>Wallet {address && wallet ? btc(wallet.btc) : '—'}</span>
       </label>
-      <AmountInput id="trove-btc" large value={btcInput} onChange={setBtcInput} unit="BTC" onMax={() => wallet && setBtcInput(toInput(wallet.btc, 18))} />
+      <AmountInput
+        id="trove-btc"
+        large
+        value={btcInput}
+        onChange={setBtcInput}
+        unit="BTC"
+        onMax={() => address && wallet && setBtcInput(toInput(wallet.btc, 18))}
+      />
       <label className="field-label" htmlFor="trove-debt">
         MUSD TO MINT AND SUPPLY <span>Minimum {fmt(units(MIN_NET_DEBT, 18), 0)}, fee included</span>
       </label>
@@ -189,7 +196,7 @@ function ActiveTrove({ wallet, sign }: { wallet: TroveWallet; sign: TroveSigner 
   };
 
   return (
-    <section className="panel borrow-form-panel">
+    <section className="panel borrow-form-panel trove-form">
       <PanelTitle label="Your trove" meta={HUB.label} />
       <div className="borrow-preview">
         <div>

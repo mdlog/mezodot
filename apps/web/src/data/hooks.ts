@@ -2,7 +2,7 @@ import { useCallback, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAccount, useConfig, usePublicClient } from 'wagmi';
 import { getPublicClient } from 'wagmi/actions';
-import { BaseError, HttpRequestError, erc20Abi, type Address, type PublicClient } from 'viem';
+import { BaseError, HttpRequestError, erc20Abi, zeroAddress, type Address, type PublicClient } from 'viem';
 import {
   PRICE_SYMBOLS,
   SOURCE_TAG,
@@ -265,14 +265,14 @@ export type LoopStats = {
 const sum = (values: bigint[]) => values.reduce((a, b) => a + b, 0n);
 
 /** Lifetime leverage volume from LeverageManager `Looped` and SwapLeverageManager `Opened` events. */
-/** The connected wallet's Mezo trove and the balances that can pay it down. */
+/** The connected wallet's Mezo trove and the balances that can pay it down. Without a wallet: Mezo's system figures, with empty balances. */
 export function useTrove() {
   const client = useHubClient();
   const { address } = useAccount();
   return useQuery({
     queryKey: QK.trove(address),
-    enabled: Boolean(client && address && HUB.deployment && troveContracts(HUB.deployment)),
-    queryFn: () => readTroveWallet(client!, HUB.deployment!, address!),
+    enabled: Boolean(client && HUB.deployment && troveContracts(HUB.deployment)),
+    queryFn: () => readTroveWallet(client!, HUB.deployment!, address ?? zeroAddress),
     refetchInterval: 15_000,
   });
 }

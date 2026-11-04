@@ -5200,6 +5200,20 @@ a.nav-link {
   margin: 12px 0;
   font-size: 13px;
 }
+.trove-form .field-label {
+  margin-top: 16px;
+}
+.trove-form .borrow-preview {
+  margin-top: 16px;
+}
+.trove-form button.button {
+  margin-top: 4px;
+}
+.trove-system,
+.trove-surplus,
+.proof-section {
+  padding: 18px 20px;
+}
 .trove-system .borrow-preview,
 .trove-surplus .trove-explain {
   margin-top: 8px;
