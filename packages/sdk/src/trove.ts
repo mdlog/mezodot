@@ -23,6 +23,7 @@ export const troveBorrowerOperationsAbi = parseAbi([
   'function borrowingRate() view returns (uint256)',
   'function redemptionRate() view returns (uint256)',
   'function collSurplusPool() view returns (address)',
+  'function interestRateManager() view returns (address)',
   'function claimCollateral()',
 ]);
 export const troveManagerAbi = parseAbi([
@@ -39,6 +40,7 @@ const priceFeedAbi = parseAbi(['function fetchPrice() view returns (uint256)']);
 const hintHelpersAbi = parseAbi(['function getApproxHint(uint256, uint256, uint256) view returns (address, uint256, uint256)']);
 const sortedTrovesAbi = parseAbi(['function findInsertPosition(uint256, address, address) view returns (address, address)']);
 const collSurplusAbi = parseAbi(['function getCollateral(address) view returns (uint256)']);
+const interestRateAbi = parseAbi(['function interestRate() view returns (uint16)']);
 
 // --- Signatures ------------------------------------------------------------------------------------------
 
@@ -204,6 +206,8 @@ export type TroveState = {
   recoveryMode: boolean;
   borrowingRate: bigint;
   redemptionRate: bigint;
+  /** Mezo's interest on new troves, in basis points a year. */
+  interestRateBps: number;
   systemColl: bigint;
   systemDebt: bigint;
   status: number;
@@ -226,21 +230,36 @@ export async function readTrove(client: PublicClient, hub: HubDeployment, accoun
   const bo = { address: c.borrowerOperations, abi: troveBorrowerOperationsAbi } as const;
   const price = await client.readContract({ address: c.priceFeed, abi: priceFeedAbi, functionName: 'fetchPrice' });
   const surplusPool = hub.contracts.mezoCollSurplusPool ?? (await client.readContract({ ...bo, functionName: 'collSurplusPool' }));
-  const [tcr, recoveryMode, borrowingRate, redemptionRate, systemColl, systemDebt, status, position, maxBorrowingCapacity, surplus, nonce, code] =
-    await Promise.all([
-      client.readContract({ ...tm, functionName: 'getTCR', args: [price] }),
-      client.readContract({ ...tm, functionName: 'checkRecoveryMode', args: [price] }),
-      client.readContract({ ...bo, functionName: 'borrowingRate' }),
-      client.readContract({ ...bo, functionName: 'redemptionRate' }),
-      client.readContract({ ...tm, functionName: 'getEntireSystemColl' }),
-      client.readContract({ ...tm, functionName: 'getEntireSystemDebt' }),
-      client.readContract({ ...tm, functionName: 'getTroveStatus', args: [account] }),
-      client.readContract({ ...tm, functionName: 'getEntireDebtAndColl', args: [account] }),
-      client.readContract({ ...tm, functionName: 'getTroveMaxBorrowingCapacity', args: [account] }),
-      client.readContract({ address: surplusPool, abi: collSurplusAbi, functionName: 'getCollateral', args: [account] }),
-      client.readContract({ address: c.signatures, abi: signaturesAbi, functionName: 'getNonce', args: [account] }),
-      client.getCode({ address: account }),
-    ]);
+  const rateManager = await client.readContract({ ...bo, functionName: 'interestRateManager' });
+  const [
+    interestRateBps,
+    tcr,
+    recoveryMode,
+    borrowingRate,
+    redemptionRate,
+    systemColl,
+    systemDebt,
+    status,
+    position,
+    maxBorrowingCapacity,
+    surplus,
+    nonce,
+    code,
+  ] = await Promise.all([
+    client.readContract({ address: rateManager, abi: interestRateAbi, functionName: 'interestRate' }),
+    client.readContract({ ...tm, functionName: 'getTCR', args: [price] }),
+    client.readContract({ ...tm, functionName: 'checkRecoveryMode', args: [price] }),
+    client.readContract({ ...bo, functionName: 'borrowingRate' }),
+    client.readContract({ ...bo, functionName: 'redemptionRate' }),
+    client.readContract({ ...tm, functionName: 'getEntireSystemColl' }),
+    client.readContract({ ...tm, functionName: 'getEntireSystemDebt' }),
+    client.readContract({ ...tm, functionName: 'getTroveStatus', args: [account] }),
+    client.readContract({ ...tm, functionName: 'getEntireDebtAndColl', args: [account] }),
+    client.readContract({ ...tm, functionName: 'getTroveMaxBorrowingCapacity', args: [account] }),
+    client.readContract({ address: surplusPool, abi: collSurplusAbi, functionName: 'getCollateral', args: [account] }),
+    client.readContract({ address: c.signatures, abi: signaturesAbi, functionName: 'getNonce', args: [account] }),
+    client.getCode({ address: account }),
+  ]);
   const [coll, principal, interest] = position;
   const debt = principal + interest;
   return {
@@ -249,6 +268,7 @@ export async function readTrove(client: PublicClient, hub: HubDeployment, accoun
     recoveryMode,
     borrowingRate,
     redemptionRate,
+    interestRateBps: Number(interestRateBps),
     systemColl,
     systemDebt,
     status: Number(status),

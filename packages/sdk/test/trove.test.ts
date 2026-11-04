@@ -207,6 +207,8 @@ describe('chain reads', () => {
       getTroveMaxBorrowingCapacity: 7_000n * WAD,
       getCollateral: 0n,
       getNonce: 3n,
+      interestRateManager: '0x0000000000000000000000000000000000000007',
+      interestRate: 100,
     };
     const client = {
       readContract: async (c: { functionName: string }) => results[c.functionName],
@@ -219,6 +221,7 @@ describe('chain reads', () => {
     expect(t.status).toBe(TROVE_STATUS.ACTIVE);
     expect(t.isContract).toBe(false);
     expect(t.nonce).toBe(3n);
+    expect(t.interestRateBps).toBe(100);
   });
 
   it('reports a smart account from its code, and no ratio without debt', async () => {
@@ -235,6 +238,8 @@ describe('chain reads', () => {
       getTroveMaxBorrowingCapacity: 0n,
       getCollateral: WAD,
       getNonce: 0n,
+      interestRateManager: '0x0000000000000000000000000000000000000007',
+      interestRate: 100,
     };
     const client = {
       readContract: async (c: { functionName: string }) => results[c.functionName],

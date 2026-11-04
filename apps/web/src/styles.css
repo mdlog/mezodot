@@ -5185,3 +5185,59 @@ a.nav-link {
     padding: 13px;
   }
 }
+
+/* --- BTC trove -------------------------------------------------------------------- */
+.trove-explain {
+  margin: 12px 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.trove-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 13px;
+}
+.trove-system .borrow-preview,
+.trove-surplus .trove-explain {
+  margin-top: 8px;
+}
+
+/* --- On-chain proof --------------------------------------------------------------- */
+.proof-sections {
+  display: grid;
+  gap: 16px;
+}
+.proof-note {
+  margin: 8px 0 12px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.proof-txs {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.proof-txs li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+  font-size: 13px;
+}
+.proof-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.proof-links a,
+.proof-note a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}

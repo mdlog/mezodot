@@ -83,7 +83,7 @@ export function Borrow() {
             VAULTMANAGER <i>/</i> CROSS-CHAIN HEALTH FACTOR
           </>
         }
-        time="Prices: Pyth on Mezo · Supra pull for ETH/USDC/BTC"
+        time="Prices: Mezo's Skip and Pyth feeds · Supra pull for ETH/USDC"
         icon={Shield}
       />
       {!HUB_DEPLOYED && <NotDeployed />}
@@ -198,8 +198,8 @@ export function Borrow() {
           {blocked && <p className="action-blocked">{blocked}</p>}
           <PriceNotice unpriced={unpriced} relayError={relayError} unpricedDebts={unpricedDebts} />
           <div className="small-disclosure">
-            <LockKeyhole size={14} /> MUSD/MEZO prices come from Pyth, pushed on Mezo. ETH, USDC and BTC also have a Supra leg: a signed Supra proof goes along
-            with the borrow whenever their stored price would not stay fresh until it lands.
+            <LockKeyhole size={14} /> MUSD and MEZO prices come from Pyth, pushed on Mezo, with a Tigris TWAP behind them if the push stops. BTC reads
+            Mezo&apos;s Skip feed. ETH and USDC use Supra: a signed proof goes with the borrow whenever their stored price would not stay fresh until it lands.
           </div>
         </section>
 
