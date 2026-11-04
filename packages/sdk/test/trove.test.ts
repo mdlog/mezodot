@@ -6,6 +6,7 @@ import {
   MIN_NET_DEBT,
   closeFunding,
   closeTroveTypedData,
+  debtForRatio,
   findTroveHints,
   maxTroveRepay,
   openBlockers,
@@ -85,6 +86,27 @@ describe('previewOpenTrove', () => {
     // At the liquidation price the ratio is exactly the 110% minimum.
     expect((p.liquidationPrice * (WAD / 10n)) / p.totalDebt).toBeGreaterThanOrEqual((11n * WAD) / 10n - 10n);
     expect((p.liquidationPrice * (WAD / 10n)) / p.totalDebt).toBeLessThanOrEqual((11n * WAD) / 10n);
+  });
+});
+
+describe('debtForRatio', () => {
+  const input = { btc: (82n * WAD) / 1000n, price: 76_853n * WAD, borrowingRate: WAD / 1000n, recoveryMode: false };
+
+  it('fills whole MUSD that opens at or just above the ratio', () => {
+    const debtAmount = debtForRatio({ ...input, ratio: (150n * WAD) / 100n });
+    expect(debtAmount).toBe(3_997n * WAD);
+    const { icr } = previewOpenTrove({ ...input, debtAmount });
+    expect(icr).toBeGreaterThanOrEqual((150n * WAD) / 100n);
+    expect(icr).toBeLessThan((1501n * WAD) / 1000n);
+  });
+
+  it('leaves out the borrowing fee in Recovery Mode, when Mezo charges none', () => {
+    expect(debtForRatio({ ...input, recoveryMode: true, ratio: (150n * WAD) / 100n })).toBe(4_001n * WAD);
+  });
+
+  it('gives zero when the ratio would not reach Mezo minimum debt', () => {
+    expect(debtForRatio({ ...input, btc: WAD / 100n, ratio: 2n * WAD })).toBe(0n);
+    expect(debtForRatio({ ...input, btc: 0n, ratio: 2n * WAD })).toBe(0n);
   });
 });
 

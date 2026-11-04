@@ -5,6 +5,7 @@ import { formatUnits } from 'viem';
 import {
   MIN_NET_DEBT,
   closeBlockedReason,
+  debtForRatio,
   TROVE_STATUS,
   maxTroveRepay,
   openBlockers,
@@ -26,6 +27,9 @@ import { fmt, fmtApy, money, units } from '../lib/format';
 const pct = (ratio: bigint) => `${Number(formatUnits(ratio, 16)).toFixed(1)}%`;
 const musd = (v: bigint) => `${fmt(units(v, 18), 2)} MUSD`;
 const btc = (v: bigint) => `${fmt(units(v, 18), 4)} BTC`;
+
+/** Collateral ratios (percent) the MUSD amount can be filled for. */
+const FILL_RATIOS = [200n, 150n];
 
 function SystemPanel({ trove, supplyApy }: { trove: TroveState | undefined; supplyApy: number | null }) {
   return (
@@ -124,6 +128,34 @@ function OpenForm({ wallet, sign, connected }: { wallet: TroveWallet | undefined
         MUSD TO MINT AND SUPPLY <span>Minimum {fmt(units(MIN_NET_DEBT, 18), 0)}, fee included</span>
       </label>
       <AmountInput id="trove-debt" large value={debtInput} onChange={setDebtInput} unit="MUSD" />
+      <div className="trove-ratios">
+        <span>Fill for a ratio of</span>
+        <div className="leverage-selector">
+          {FILL_RATIOS.map((ratio) => {
+            const filled =
+              trove && btcAmount
+                ? debtForRatio({
+                    btc: btcAmount,
+                    price: trove.price,
+                    borrowingRate: trove.borrowingRate,
+                    recoveryMode: trove.recoveryMode,
+                    ratio: (ratio * 10n ** 18n) / 100n,
+                  })
+                : 0n;
+            return (
+              <button
+                key={ratio}
+                type="button"
+                className={filled > 0n && debtAmount === filled ? 'is-selected' : ''}
+                disabled={filled === 0n}
+                onClick={() => setDebtInput(toInput(filled, 18))}
+              >
+                {ratio.toString()}%
+              </button>
+            );
+          })}
+        </div>
+      </div>
       <div className="borrow-preview">
         <div>
           <span>Borrowing fee</span>
@@ -142,6 +174,11 @@ function OpenForm({ wallet, sign, connected }: { wallet: TroveWallet | undefined
           <b>{preview ? money(units(preview.liquidationPrice, 18)) : '—'}</b>
         </div>
       </div>
+      <p className="trove-explain">
+        {post
+          ? 'The MUSD goes straight into pMUSD, and the pMUSD is posted as collateral, so neither reaches your wallet. Withdraw it on Portfolio, then on Markets, to get MUSD.'
+          : 'The MUSD goes straight into pMUSD, so your wallet receives pMUSD, not MUSD. Withdraw it on Markets to get MUSD.'}
+      </p>
       <p className="trove-explain">
         Trove debt includes 200 MUSD of gas compensation that comes back when you close. You only receive pMUSD for the MUSD minted, so a close needs a little
         MUSD on top.
@@ -213,9 +250,15 @@ function ActiveTrove({ wallet, sign }: { wallet: TroveWallet; sign: TroveSigner 
           <b>{pct(trove.icr)}</b>
         </div>
         <div>
-          <span>pMUSD supply</span>
+          <span>pMUSD in wallet</span>
           <b>{musd(wallet.supplyAssets)}</b>
         </div>
+        {wallet.postedAssets > 0n && (
+          <div>
+            <span>Posted as collateral</span>
+            <b>{musd(wallet.postedAssets)}</b>
+          </div>
+        )}
       </div>
       <label className="field-label" htmlFor="trove-repay">
         REPAY FROM SUPPLY <span>Up to {musd(repayable)}</span>

@@ -47,6 +47,7 @@ const wallet = (patch: Partial<TroveState> = {}, rest: Partial<TroveWallet> = {}
   musd: 10n * WAD,
   shares: 0n,
   supplyAssets: 0n,
+  postedAssets: 0n,
   ...rest,
 });
 const render = () => visibleText(renderToStaticMarkup(<Trove />));
@@ -61,6 +62,16 @@ describe('trove page', () => {
     expect(text).toContain('Open and supply');
     expect(text).toContain('Sign and open');
     expect(text).toContain('Recovery Mode Off');
+  });
+
+  it('says the minted MUSD does not reach the wallet, and how to get it', () => {
+    expect(render()).toContain('The MUSD goes straight into pMUSD, so your wallet receives pMUSD, not MUSD. Withdraw it on Markets to get MUSD.');
+  });
+
+  it('offers ratios that fill the MUSD amount, once there is BTC to size them from', () => {
+    const html = renderToStaticMarkup(<Trove />);
+    expect(visibleText(html)).toContain('Fill for a ratio of 200% 150%');
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>200%<\/button>/);
   });
 
   it('explains that the wallet must be an EOA', () => {
@@ -86,6 +97,16 @@ describe('trove page', () => {
     // Debt 2,702, plus the interest margin, less the 200 gas compensation.
     expect(text).toContain('2,502.27 MUSD');
     expect(text).toContain('from your wallet');
+  });
+
+  it('shows pMUSD in the wallet and pMUSD posted as collateral apart', () => {
+    state.wallet = wallet(
+      { status: TROVE_STATUS.ACTIVE, coll: WAD / 10n, debt: 2_002n * WAD },
+      { shares: 1_400n * 10n ** 24n, supplyAssets: 1_400n * WAD, postedAssets: 1_800n * WAD },
+    );
+    const text = render();
+    expect(text).toContain('pMUSD in wallet 1,400.00 MUSD');
+    expect(text).toContain('Posted as collateral 1,800.00 MUSD');
   });
 
   it('names the shortfall when supply and wallet cannot pay for a close', () => {

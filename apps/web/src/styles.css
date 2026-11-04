@@ -5321,6 +5321,22 @@ a.nav-link {
   font-size: 13px;
   line-height: 1.5;
 }
+.trove-ratios {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.trove-ratios .leverage-selector {
+  flex: 0 0 140px;
+}
+.trove-ratios button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 .trove-check {
   display: flex;
   align-items: center;

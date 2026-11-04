@@ -115,6 +115,18 @@ export function previewOpenTrove({ btc, debtAmount, price, borrowingRate, recove
   };
 }
 
+/**
+ * MUSD to mint for a trove opening at `ratio` (WAD), in whole MUSD and rounded down, so the ratio is never below it.
+ * Zero when that would not reach Mezo's minimum debt.
+ */
+export function debtForRatio({ btc, price, borrowingRate, recoveryMode, ratio }: Omit<OpenInput, 'debtAmount'> & { ratio: bigint }): bigint {
+  const totalDebt = (btc * price) / ratio;
+  if (totalDebt <= GAS_COMPENSATION) return 0n;
+  const rate = recoveryMode ? 0n : borrowingRate;
+  const debtAmount = (((totalDebt - GAS_COMPENSATION) * WAD) / (WAD + rate) / WAD) * WAD;
+  return previewOpenTrove({ btc, debtAmount, price, borrowingRate, recoveryMode }).netDebt < MIN_NET_DEBT ? 0n : debtAmount;
+}
+
 const pct = (ratio: bigint) => `${(Number((ratio * 1000n) / WAD) / 10).toFixed(1)}%`;
 
 /** Why Mezo would refuse this open, in words for the borrower; empty when it would accept it. */
