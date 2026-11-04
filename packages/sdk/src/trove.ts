@@ -133,6 +133,18 @@ export function openBlockers(input: OpenInput & { systemColl: bigint; systemDebt
   return out;
 }
 
+/** Why Mezo would refuse to close this trove now, or null. */
+export function closeBlockedReason(t: Pick<TroveState, 'recoveryMode' | 'systemColl' | 'systemDebt' | 'coll' | 'debt' | 'price'>): string | null {
+  if (t.recoveryMode) return 'Mezo is in Recovery Mode, when troves cannot be closed. You can still repay.';
+  const debt = t.systemDebt > t.debt ? t.systemDebt - t.debt : 0n;
+  if (debt > 0n) {
+    const coll = t.systemColl > t.coll ? t.systemColl - t.coll : 0n;
+    if ((coll * t.price) / debt < CRITICAL_COLLATERAL_RATIO)
+      return 'Closing would leave the Mezo system below its 150% minimum, so Mezo would refuse it. You can still repay.';
+  }
+  return null;
+}
+
 /** Most MUSD a repayment can take: the trove must keep the minimum net debt, and only a close clears it. */
 export const maxTroveRepay = (debt: bigint): bigint => {
   const floor = GAS_COMPENSATION + MIN_NET_DEBT;

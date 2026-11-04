@@ -98,6 +98,21 @@ BTC reads Mezo's Skip precompile first, with Supra as the cross-check, so it no 
 
 The MEZO fallback does not work yet: it returns no price, because the testnet pool sits far outside its 15% band. That is the fallback refusing a bad price, as designed, so MEZO still rests on the Pyth push alone. The MUSD fallback read $0.984 against a Pyth price of $0.991 at deployment.
 
+### pMUSD/MUSD liquidity on Tigris
+
+A stable pool at `0xb262B737D93ffB63c87bb6B970049214504fcE7b`, so pMUSD can be swapped when the money market has no idle cash. It is permissionless, Mezodot has no role in it, and the team seeded it with 40 of each, so it is thin. It has no gauge.
+
+| Step                  | Transaction                                                          |
+| --------------------- | -------------------------------------------------------------------- |
+| Seed the pool         | `0x35a90a4f83043470a488c1796f488971e221435178a3852381db741466998422` |
+| Swap 1 MUSD for pMUSD | `0xf606a90e0dbdefc4a3d93b6cf4d21217b9f1b7ed10f4f3a448537a7d0811dc6b` |
+
+A fork test covers its lifecycle across the gap between pMUSD's 24 decimals and MUSD's 18:
+
+```bash
+MEZO_FORK_RPC=https://rpc.test.mezo.org forge test --root contracts --match-contract ForkPMusdPool -vv
+```
+
 ### TroveRouter
 
 | Step               | Transaction                                                          |

@@ -60,6 +60,7 @@ const TROVE_ROUTER = A(42);
 const SKIP_FEED = A(43);
 const MEZO_SIGNATURES = A(44);
 const MEZO_POOL = A(45);
+const PMUSD_POOL = A(46);
 const GATEWAY = A(33);
 const SPOKE_WORMHOLE = A(34);
 const WETH = A(35);
@@ -290,7 +291,7 @@ function hubReads(w: World) {
       case HUB.swapLeverageManager:
         return { vaultManager: HUB.vaultManager, pool: HUB.pMUSD, debtAsset: MUSD, collateral: BTC, marketId: 0n, collateralId: 2n, pair: w.pair }[fn];
       case HUB.tigrisFactory:
-        return fn === 'getPool' ? w.factoryPool : undefined;
+        return fn === 'getPool' ? (args[2] === true ? PMUSD_POOL : w.factoryPool) : undefined;
       case HUB.tigrisPool:
         return { token0: MUSD, token1: BTC, stable: false, getAmountOut: w.poolQuote }[fn];
       case HUB.tigrisRouter:
@@ -574,6 +575,18 @@ describe('keyless oracle legs', () => {
     w.routerCollateral = 1n;
     const r = await verify(w, expectationsFromEnv({}), deployment);
     expect(failed(r, 'TroveRouter collateral 1')).toBeDefined();
+  });
+
+  it('checks the pMUSD/MUSD pool against the factory', async () => {
+    const w = liveness();
+    w.hubCode[PMUSD_POOL] = '0x6080';
+    const good = await verify(w, expectationsFromEnv({}), { ...deployment, contracts: { ...deployment.contracts, pMusdPool: PMUSD_POOL } });
+    expect(failures(good)).toEqual([]);
+    expect(finding(good, 'TigrisFactory.getPool(pMUSD, MUSD, true) = contracts.pMusdPool')?.status).toBe('pass');
+
+    w.hubCode[A(97)] = '0x6080';
+    const bad = await verify(w, expectationsFromEnv({}), { ...deployment, contracts: { ...deployment.contracts, pMusdPool: A(97) } });
+    expect(failed(bad, 'TigrisFactory.getPool(pMUSD, MUSD, true) = contracts.pMusdPool')).toBeDefined();
   });
 
   it('still expects Pyth first on a deployment without the keyless sources', async () => {

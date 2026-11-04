@@ -4,6 +4,7 @@ import { useAccount, useSignTypedData } from 'wagmi';
 import { formatUnits } from 'viem';
 import {
   MIN_NET_DEBT,
+  closeBlockedReason,
   TROVE_STATUS,
   maxTroveRepay,
   openBlockers,
@@ -18,7 +19,7 @@ import { HUB, HUB_DEPLOYED } from '../chain/env';
 import { useTx } from '../chain/tx';
 import { claimTroveSurplusSteps, closeTroveSteps, openTroveSteps, repayTroveSteps, type TroveSigner } from '../chain/trove';
 import { useHubClient, useProtocol, useTrove } from '../data/hooks';
-import { closeBlocked, closePlan, type TroveWallet } from '../data/trove';
+import { closePlan, type TroveWallet } from '../data/trove';
 import { parseInput, toInput } from '../lib/amount';
 import { fmt, fmtApy, money, units } from '../lib/format';
 
@@ -182,7 +183,7 @@ function ActiveTrove({ wallet, sign }: { wallet: TroveWallet; sign: TroveSigner 
   const amount = parseInput(repayInput, 18);
   const repayInvalid = amount === null || amount === 0n || amount > repayable;
   const plan = closePlan({ debt: trove.debt, shares: wallet.shares, supplyAssets: wallet.supplyAssets, walletMusd: wallet.musd });
-  const blocked = closeBlocked(trove);
+  const blocked = closeBlockedReason(trove);
   const fresh = () => readTrove(hub!, HUB.deployment!, address!);
 
   const repay = async () => {

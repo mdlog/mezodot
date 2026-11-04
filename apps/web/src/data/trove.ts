@@ -1,5 +1,5 @@
 import { erc20Abi, type Address, type PublicClient } from 'viem';
-import { CRITICAL_COLLATERAL_RATIO, closeFunding, pTokenAbi, readTrove, type CloseFunding, type HubDeployment, type TroveState } from '@mezodot/sdk';
+import { closeFunding, pTokenAbi, readTrove, type CloseFunding, type HubDeployment, type TroveState } from '@mezodot/sdk';
 
 /** A borrower's trove with the balances that can pay it down. */
 export type TroveWallet = {
@@ -36,16 +36,4 @@ export function closePlan({ debt, shares, supplyAssets, walletMusd }: { debt: bi
   if (funding.fromSupply >= supplyAssets) return { ...funding, shares };
   const rounded = (funding.fromSupply * shares + supplyAssets - 1n) / supplyAssets;
   return { ...funding, shares: rounded < shares ? rounded : shares };
-}
-
-/** Why Mezo would refuse to close this trove now, or null. */
-export function closeBlocked(t: TroveState): string | null {
-  if (t.recoveryMode) return 'Mezo is in Recovery Mode, when troves cannot be closed. You can still repay.';
-  const debt = t.systemDebt > t.debt ? t.systemDebt - t.debt : 0n;
-  if (debt > 0n) {
-    const coll = t.systemColl > t.coll ? t.systemColl - t.coll : 0n;
-    if ((coll * t.price) / debt < CRITICAL_COLLATERAL_RATIO)
-      return 'Closing would leave the Mezo system below its 150% minimum, so Mezo would refuse it. You can still repay.';
-  }
-  return null;
 }

@@ -432,6 +432,7 @@ class Verifier {
     await this.hubPeripherals();
     await this.swapLeverage();
     await this.troveRouter();
+    await this.pMusdPool();
     for (const spoke of this.spokes) await this.spoke(spoke);
   }
 
@@ -994,6 +995,21 @@ class Verifier {
           : 'no price: the pool is outside its band or too young, so this key rests on the Pyth push alone',
       );
     }
+  }
+
+  /** The stable pMUSD/MUSD pool on Tigris, when recorded: the factory must know it, so its router routes through it. */
+  private async pMusdPool(): Promise<void> {
+    const pool = this.c.pMusdPool;
+    const { tigrisFactory, pMUSD } = this.c;
+    const { MUSD } = this.t;
+    if (!pool || !tigrisFactory || !pMUSD || !MUSD) return;
+    const { client } = this.hub;
+    this.report.begin('pMUSD/MUSD pool');
+    await this.expectRead(
+      'TigrisFactory.getPool(pMUSD, MUSD, true) = contracts.pMusdPool',
+      () => client.readContract({ address: tigrisFactory, abi: tigrisPoolFactoryAbi, functionName: 'getPool', args: [pMUSD, MUSD, true] }),
+      pool,
+    );
   }
 
   /** TroveRouter holds nothing between transactions and supplies only to pMUSD. */

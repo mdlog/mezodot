@@ -75,6 +75,14 @@ export const PROOF: ProofSection[] = [
     ],
   },
   {
+    title: 'pMUSD/MUSD liquidity on Tigris',
+    note: "A stable pool on Mezo's own DEX, so pMUSD can be swapped when the money market has no idle cash. Permissionless, and seeded by the team with 40 of each, so it is thin.",
+    txs: [
+      mezo('Seed the pool', '0x35a90a4f83043470a488c1796f488971e221435178a3852381db741466998422'),
+      mezo('Swap 1 MUSD for pMUSD', '0xf606a90e0dbdefc4a3d93b6cf4d21217b9f1b7ed10f4f3a448537a7d0811dc6b'),
+    ],
+  },
+  {
     title: 'TroveRouter',
     note: 'BTC to a Mezo trove to pMUSD in one transaction. Deployed and tested against a fork of the live contracts; a full open, repay and close on testnet is still to come.',
     txs: [mezo('Deploy TroveRouter', '0x4f7960d748e339e97e206a6652daf36b34b0f4b79694bda12a1c6e12f7281909')],

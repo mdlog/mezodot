@@ -46,6 +46,8 @@ export type HubDeployment = {
     mezoSortedTroves?: Address;
     mezoPriceFeed?: Address;
     mezoCollSurplusPool?: Address;
+    /** Stable pMUSD/MUSD Tigris pool (DeployPMusdPool): permissionless, seeded by the team. */
+    pMusdPool?: Address;
   };
   tokens: { MUSD: Address; MEZO: Address; BTC?: Address };
   priceFeeds: { MUSD: Hex; MEZO: Hex; ETH: Hex; USDC: Hex; BTC?: Hex };

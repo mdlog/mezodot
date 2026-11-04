@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { TROVE_STATUS, type TroveState } from '@mezodot/sdk';
-import { closeBlocked, closePlan } from './trove';
+import { TROVE_STATUS, closeBlockedReason as closeBlocked, type TroveState } from '@mezodot/sdk';
+import { closePlan } from './trove';
 
 const WAD = 10n ** 18n;
 const SHARE = 10n ** 24n;
