@@ -40,7 +40,8 @@ const account = privateKeyToAccount(key!);
 const network = NETWORKS['mezo-testnet'];
 const hub = getHubDeployment('mezo-testnet') ?? fail('mezo-testnet is not deployed');
 const contracts = troveContracts(hub!) ?? fail('TroveRouter is not recorded in the deployment');
-const transport = http(process.env.RPC_URL ?? network.chain.rpcUrls.default.http[0]);
+// Generous: Mezo's hint search reads many storage slots, which a local fork fetches one by one.
+const transport = http(process.env.RPC_URL ?? network.chain.rpcUrls.default.http[0], { timeout: 180_000 });
 const client = createPublicClient({ chain: network.chain, transport });
 const wallet = createWalletClient({ account, chain: network.chain, transport });
 
