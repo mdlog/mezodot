@@ -2,12 +2,15 @@
  * The web app's build-time configuration (VITE_* variables), validated in one place. vite.config.ts refuses a
  * production build that has errors, and the app shows them on a blocking screen if one slips through anyway.
  * The local defaults (an agent on 127.0.0.1, a placeholder WalletConnect id) are for `vite dev` and devnet only.
+ * VITE_WALLETCONNECT_PROJECT_ID=none builds without WalletConnect instead of a real project id.
  *
  * Kept free of SDK and browser imports so vite.config.ts can load it in Node.
  */
 
 export const LOCAL_AGENT_URL = 'http://127.0.0.1:8787';
 export const LOCAL_WALLETCONNECT_PROJECT_ID = 'mezodot-local-dev';
+/** VITE_WALLETCONNECT_PROJECT_ID value that turns WalletConnect off on purpose. */
+export const WALLETCONNECT_OFF = 'none';
 export const DEFAULT_ENV = 'testnet';
 
 /** import.meta.env, or the result of Vite's loadEnv: string values (Vite adds a few booleans). */
@@ -18,6 +21,8 @@ export type WebConfig = {
   envName: string;
   agentUrl: string;
   walletConnectProjectId: string;
+  /** A real project id is set: only then does the app offer WalletConnect-based wallets. */
+  walletConnect: boolean;
   /** RPC endpoints per network name, tried in order before the chain's public default. */
   rpcUrls: Record<string, string[]>;
   /** Replaces the Wormholescan API base of every network that has one. */
@@ -79,8 +84,12 @@ export function readWebConfig(env: RawWebEnv, opts: ConfigOptions): WebConfig {
   }
 
   const projectId = text(env.VITE_WALLETCONNECT_PROJECT_ID);
-  if (strict && (projectId === undefined || projectId === LOCAL_WALLETCONNECT_PROJECT_ID)) {
-    errors.push('VITE_WALLETCONNECT_PROJECT_ID is not set: WalletConnect and mobile wallets need a real project id (cloud.reown.com).');
+  const optedOut = projectId?.toLowerCase() === WALLETCONNECT_OFF;
+  const walletConnect = projectId !== undefined && !optedOut && projectId !== LOCAL_WALLETCONNECT_PROJECT_ID;
+  if (strict && !walletConnect && !optedOut) {
+    errors.push(
+      'VITE_WALLETCONNECT_PROJECT_ID is not set: a real project id (cloud.reown.com) for WalletConnect and mobile wallets, or "none" to build without WalletConnect.',
+    );
   }
 
   const rpcUrls: Record<string, string[]> = {};
@@ -104,5 +113,6 @@ export function readWebConfig(env: RawWebEnv, opts: ConfigOptions): WebConfig {
     else errors.push(`VITE_WORMHOLESCAN_API="${wormholescan}" is not an http(s) URL.`);
   }
 
-  return { envName, agentUrl, walletConnectProjectId: projectId ?? LOCAL_WALLETCONNECT_PROJECT_ID, rpcUrls, wormholescanApi, errors };
+  const walletConnectProjectId = walletConnect ? projectId! : LOCAL_WALLETCONNECT_PROJECT_ID;
+  return { envName, agentUrl, walletConnectProjectId, walletConnect, rpcUrls, wormholescanApi, errors };
 }

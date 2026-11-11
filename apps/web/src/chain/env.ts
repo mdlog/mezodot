@@ -38,6 +38,7 @@ export const HUB_DEPLOYED = HUB.deployment !== null;
 export const AGENT_URL = CONFIG.agentUrl;
 
 export const WALLETCONNECT_PROJECT_ID = CONFIG.walletConnectProjectId;
+export const WALLETCONNECT_ENABLED = CONFIG.walletConnect;
 
 /** RPC endpoints for `network`: VITE_RPC_URL_* overrides first, then the chain's public default. */
 export const rpcUrlsFor = (network: NetworkInfo): string[] => [...(CONFIG.rpcUrls[network.name] ?? []), ...network.chain.rpcUrls.default.http];

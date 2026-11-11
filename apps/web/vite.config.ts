@@ -6,6 +6,20 @@ import { readWebConfig } from './src/chain/config';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 
+// The dev server serves any file under the workspace root over /@fs/, so it must also refuse the deployer keystore,
+// the agent's state and the devnet. Setting `deny` replaces Vite's defaults (the first four).
+const fsDeny = ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.secrets/**', '**/.state/**', '**/.devnet/**'];
+
+/**
+ * DEV_PUBLIC_HOSTS: comma-separated hostnames that may reach `vite dev` / `vite preview`, e.g. a tunnel to a test
+ * box; without it Vite answers localhost and IP addresses only. Host the app with scripts/serve-web.ts, not these.
+ */
+const publicHosts = (mode: string): string[] =>
+  (loadEnv(mode, root, 'DEV_').DEV_PUBLIC_HOSTS ?? '')
+    .split(',')
+    .map((h) => h.trim())
+    .filter(Boolean);
+
 export default defineConfig(({ command, mode }) => {
   // A bundle is what gets hosted: refuse one that would send visitors to localhost or a placeholder project id.
   if (command === 'build') {
@@ -38,7 +52,7 @@ export default defineConfig(({ command, mode }) => {
         },
       },
     },
-    server: { host: '0.0.0.0', port: 3000, strictPort: true },
-    preview: { host: '0.0.0.0', port: 3000, strictPort: true },
+    server: { host: '0.0.0.0', port: 3000, strictPort: true, allowedHosts: publicHosts(mode), fs: { deny: fsDeny } },
+    preview: { host: '0.0.0.0', port: 3000, strictPort: true, allowedHosts: publicHosts(mode) },
   };
 });
