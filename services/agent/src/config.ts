@@ -29,6 +29,12 @@ export type AgentConfig = {
   stateReadOnly: boolean;
   httpHost: string;
   httpPort: number;
+  /** Host headers the HTTP API answers besides loopback names (HTTP_ALLOWED_HOSTS, comma-separated); empty answers any. */
+  httpAllowedHosts: string[];
+  /** Requests per minute per visitor on every route (HTTP_RATE_LIMIT_PER_MIN); 0 is off. */
+  httpRateLimitPerMin: number;
+  /** Requests per minute per visitor on /oracle/update, which fetches fresh proofs (HTTP_ORACLE_RATE_LIMIT_PER_MIN); 0 is off. */
+  httpOracleRateLimitPerMin: number;
   /** MCP write tools execute only when true; otherwise they dry-run. Over HTTP also requires mcpToken. */
   mcpAllowWrite: boolean;
   /** Bearer token required on every /mcp HTTP request when set (MCP_TOKEN). */
@@ -183,6 +189,9 @@ const baseSchema = z.object({
   STATE_DIR: text.transform((v) => v ?? '.state'),
   HTTP_HOST: text.transform((v) => v ?? '127.0.0.1'),
   HTTP_PORT: integer(8787, 0, 65_535),
+  HTTP_ALLOWED_HOSTS: text.transform((v) => csv(v).map((h) => h.toLowerCase())),
+  HTTP_RATE_LIMIT_PER_MIN: integer(600, 0, 1_000_000),
+  HTTP_ORACLE_RATE_LIMIT_PER_MIN: integer(60, 0, 1_000_000),
   MCP_ALLOW_WRITE: flag,
   MCP_TOKEN: text.refine((v) => v === undefined || v.length >= 16, 'must be at least 16 characters (leave it empty to disable)'),
   MCP_ALLOWED_HOSTS: text.transform(csv),
@@ -245,6 +254,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     stateReadOnly: false,
     httpHost: d.HTTP_HOST,
     httpPort: d.HTTP_PORT,
+    httpAllowedHosts: d.HTTP_ALLOWED_HOSTS,
+    httpRateLimitPerMin: d.HTTP_RATE_LIMIT_PER_MIN,
+    httpOracleRateLimitPerMin: d.HTTP_ORACLE_RATE_LIMIT_PER_MIN,
     mcpAllowWrite: d.MCP_ALLOW_WRITE,
     mcpToken: d.MCP_TOKEN ?? null,
     mcpAllowedHosts: d.MCP_ALLOWED_HOSTS,
@@ -278,6 +290,7 @@ export function describeConfig(c: AgentConfig) {
     oracleWatchMs: c.oracleWatchMs,
     minProfitUsd: c.minProfitUsd,
     http: `${c.httpHost}:${c.httpPort}`,
+    httpLimits: { allowedHosts: c.httpAllowedHosts, perMin: c.httpRateLimitPerMin, oraclePerMin: c.httpOracleRateLimitPerMin },
     mcp: { token: c.mcpToken ? 'set' : 'unset', allowWrite: c.mcpAllowWrite, allowedHosts: c.mcpAllowedHosts, allowedOrigins: c.mcpAllowedOrigins },
     pythPusher: c.pythApiKey && c.env !== 'devnet' ? 'on' : 'off',
     vaaSources: Object.fromEntries(Object.entries(c.vaaApis).map(([n, urls]) => [n, urls.map(urlHost)])),

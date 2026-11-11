@@ -9,12 +9,12 @@ import type { Services } from '../src/services';
 
 const LEAKY = new Error('HTTP request failed.\n\nURL: https://rpc.example/v2/SECRET_API_KEY_123\nRequest body: {"method":"eth_call"}');
 
-type Overrides = { testnet?: boolean; health?: { ok: boolean }; watchdog?: unknown; risk?: unknown };
+type Overrides = { testnet?: boolean; health?: { ok: boolean }; watchdog?: unknown; risk?: unknown; env?: Record<string, string> };
 
 /** Devnet context (no live chain needed); `testnet: true` only flips the env flag. */
 async function serve(opts: Overrides = {}, calls: unknown[] = []) {
   const { startHttp } = await import('../src/http');
-  const ctx = createContext(loadConfig({ MEZODOT_ENV: 'devnet', STATE_DIR: '/tmp/mezodot-test-state', HTTP_PORT: '0' }), () => {});
+  const ctx = createContext(loadConfig({ MEZODOT_ENV: 'devnet', STATE_DIR: '/tmp/mezodot-test-state', HTTP_PORT: '0', ...opts.env }), () => {});
   if (opts.testnet) ctx.config.env = 'testnet';
   const report = { checkedAt: 1, healthy: true, feeds: [] };
   const services = {
@@ -55,6 +55,18 @@ const rawRequest = (port: number, line: string): Promise<string> =>
     socket.on('data', (c) => (data += c.toString()));
     socket.on('end', () => resolve(data));
     socket.on('error', reject);
+  });
+
+/** GET through node:http, which (unlike fetch) lets a test set Host and the headers Cloudflare adds. */
+const get = (port: number, path: string, headers: Record<string, string> = {}): Promise<{ status: number; headers: Record<string, unknown>; body: string }> =>
+  new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, headers, agent: false }, (res) => {
+      let body = '';
+      res.on('data', (c) => (body += c));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
+    });
+    req.on('error', reject);
+    req.end();
   });
 
 /** Streams `bytes` to /mcp without a Content-Length (chunked), resolving with the status the server answers. */
@@ -274,5 +286,54 @@ describe('HTTP robustness (audit: agent)', () => {
     expect(mcpHttpEnabled(base, '127.0.0.1')).toBe(true);
     expect(mcpHttpEnabled(base, '0.0.0.0')).toBe(false);
     expect(mcpHttpEnabled(loadConfig({ MEZODOT_ENV: 'devnet', MCP_TOKEN: 'a-long-random-test-token-123' }), '0.0.0.0')).toBe(true);
+  });
+});
+
+describe('HTTP exposure limits (production readiness)', () => {
+  it('answers only the hosts in HTTP_ALLOWED_HOSTS and loopback, so a stale tunnel route to this port gets nothing', async () => {
+    const { server, port } = await serve({ env: { HTTP_ALLOWED_HOSTS: 'agent.example.org' } });
+    try {
+      for (const path of ['/health', '/oracle/update?symbols=ETH']) {
+        const other = await get(port, path, { host: 'minitia.fun' });
+        expect(other.status).toBe(403);
+        expect(JSON.parse(other.body)).toEqual({ error: 'Host not allowed' });
+      }
+      expect((await get(port, '/health', { host: 'agent.example.org' })).status).toBe(200);
+      expect((await get(port, '/health', { host: 'Agent.Example.org:443' })).status).toBe(200);
+      expect((await get(port, '/health', { host: `127.0.0.1:${port}` })).status).toBe(200);
+      expect((await get(port, '/health', { host: `localhost:${port}` })).status).toBe(200);
+      expect((await get(port, '/health', { host: `[::1]:${port}` })).status).toBe(200);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('answers any host while HTTP_ALLOWED_HOSTS is unset', async () => {
+    const { server, port } = await serve();
+    try {
+      expect((await get(port, '/health', { host: 'anything.example' })).status).toBe(200);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('rate-limits each tunnel visitor, /oracle/update on a tighter budget, and never local tooling', async () => {
+    const { server, port } = await serve({ env: { HTTP_RATE_LIMIT_PER_MIN: '3', HTTP_ORACLE_RATE_LIMIT_PER_MIN: '1' } });
+    const visitor = { 'cf-connecting-ip': '203.0.113.7' };
+    try {
+      expect((await get(port, '/oracle/update?symbols=ETH', visitor)).status).toBe(200);
+      const limited = await get(port, '/oracle/update?symbols=ETH', visitor);
+      expect(limited.status).toBe(429);
+      expect(JSON.parse(limited.body).error).toMatch(/too many requests/i);
+      expect(Number(limited.headers['retry-after'])).toBeGreaterThanOrEqual(1);
+      expect(limited.headers['access-control-allow-origin']).toBe('*'); // the web app can read the 429
+      // Both /oracle/update requests also counted against the general budget of 3.
+      expect((await get(port, '/health', visitor)).status).toBe(200);
+      expect((await get(port, '/health', visitor)).status).toBe(429);
+      expect((await get(port, '/health', { 'cf-connecting-ip': '203.0.113.8' })).status).toBe(200);
+      for (let i = 0; i < 10; i++) expect((await get(port, '/health')).status).toBe(200);
+    } finally {
+      server.close();
+    }
   });
 });

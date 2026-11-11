@@ -6,6 +6,7 @@ import { PRICE_SYMBOLS, type PriceSymbol } from '@mezodot/sdk';
 import { createMcpServer } from './mcp/server';
 import { isLoopbackHost, type AgentConfig } from './config';
 import { publicError } from './errors';
+import { FixedWindowLimiter, clientKey } from './ratelimit';
 import { toJson, type Services } from './services';
 
 /** Write tools over HTTP need both the explicit opt-in and a bearer token (fail closed). */
@@ -98,6 +99,13 @@ function parseSymbols(raw: string | null): PriceSymbol[] | null {
   return PRICE_SYMBOLS.filter((s) => asked.includes(s));
 }
 
+/** A Host header's name without the port, lowercased: "[::1]:8787" → "::1". */
+const hostName = (host: string) =>
+  host
+    .toLowerCase()
+    .replace(/:\d+$/, '')
+    .replace(/^\[(.*)\]$/, '$1');
+
 const clampInt = (raw: string | null, fallback: number, min: number, max: number) => {
   const n = Number(raw ?? fallback);
   return Number.isInteger(n) ? Math.min(max, Math.max(min, n)) : fallback;
@@ -112,6 +120,10 @@ const clampInt = (raw: string | null, fallback: number, min: number, max: number
  * loopback). Write tools over HTTP additionally require MCP_ALLOW_WRITE=true *and* a token.
  *
  * Errors never carry upstream detail: viem messages embed RPC URLs, which can contain API keys.
+ *
+ * With HTTP_ALLOWED_HOSTS set, any other Host gets 403, so a hostname routed here by mistake (a stale tunnel route)
+ * serves nothing. Each visitor gets HTTP_RATE_LIMIT_PER_MIN requests a minute, and HTTP_ORACLE_RATE_LIMIT_PER_MIN of
+ * them on /oracle/update (see clientKey for who counts as a visitor).
  */
 export function startHttp(s: Services, host = s.ctx.config.httpHost ?? '127.0.0.1') {
   const config = s.ctx.config;
@@ -120,13 +132,30 @@ export function startHttp(s: Services, host = s.ctx.config.httpHost ?? '127.0.0.
   if (config.mcpAllowWrite && !allowWrite) s.ctx.log('http', 'MCP write tools disabled over HTTP: set MCP_TOKEN (>= 16 chars)');
   if (!mcpEnabled) s.ctx.log('http', `/mcp disabled: HTTP_HOST ${host} is not loopback and MCP_TOKEN is unset`);
   let allowedHosts: string[] = [];
+  const limiter = new FixedWindowLimiter(config.httpRateLimitPerMin);
+  const oracleLimiter = new FixedWindowLimiter(config.httpOracleRateLimitPerMin);
+  // Loopback names always pass: local tools use them, and no public hostname (a tunnel route, a DNS-rebinding page)
+  // arrives with one.
+  const hostAllowed = (host: string | undefined) =>
+    config.httpAllowedHosts.length === 0 ||
+    (host !== undefined &&
+      (isLoopbackHost(hostName(host)) || config.httpAllowedHosts.includes(hostName(host)) || config.httpAllowedHosts.includes(host.toLowerCase())));
 
   const server = createServer(async (req, res) => {
+    if (!hostAllowed(req.headers.host)) return send(res, 403, { error: 'Host not allowed' }, false);
     let url: URL;
     try {
       url = new URL(req.url ?? '/', 'http://localhost');
     } catch {
       return send(res, 400, { error: 'Bad request target' }); // an uncaught throw here would kill the agent
+    }
+    const visitor = clientKey(req.socket.remoteAddress, req.headers['cf-connecting-ip']);
+    if (visitor !== null) {
+      // Every request counts against the general budget; /oracle/update against its own as well.
+      const wait = Math.max(limiter.take(visitor), url.pathname === '/oracle/update' ? oracleLimiter.take(visitor) : 0);
+      if (wait > 0) {
+        return send(res, 429, { error: 'Too many requests: retry later' }, url.pathname !== '/mcp', { 'retry-after': String(Math.ceil(wait / 1000)) });
+      }
     }
     try {
       if (url.pathname === '/mcp') {
