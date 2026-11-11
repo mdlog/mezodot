@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowDownLeft, ArrowRight, Bitcoin, Check, Shield, TriangleAlert, Waves, X } from 'lucide-react';
 import { useAccount, usePublicClient } from 'wagmi';
@@ -29,6 +29,7 @@ import { floorUnits, parseInput, toInput } from '../lib/amount';
 import { spendableWeth, wrapNeeded } from '../lib/wrap';
 import { finalityEta, formatWait } from '../lib/eta';
 import { ChainLogo, TokenLogo } from '../components/Logos';
+import { Dropdown } from '../components/Dropdown';
 import { fmt, fmtHealth, money, shortAddress, timeAgo, units } from '../lib/format';
 import { useUi, type Flight } from '../state/UiContext';
 
@@ -96,6 +97,8 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
   const client = usePublicClient({ chainId: spoke?.chain.id }) as PublicClient | undefined;
   const token = spoke?.deployment?.tokens[asset];
   const lock = useSpokeLockState(spoke, token).data;
+  const sourceLabel = useId();
+  const assetLabel = useId();
 
   if (!spoke) {
     return (
@@ -167,34 +170,31 @@ function DepositPanel({ spokes }: { spokes: SpokeInfo[] }) {
     <section className="panel bridge-config">
       <PanelTitle label="Post cross-chain collateral" meta="SpokeGateway → WormholeAdapter → VaultManager" />
       <div className="form-section">
-        <span className="field-label">SOURCE CHAIN</span>
-        <div className="chain-options">
-          {spokes.map((s) => {
-            const selected = s.name === spoke.name;
-            return (
-              <button key={s.name} className={`chain-option ${selected ? 'is-selected' : ''}`} onClick={() => setSpokeName(s.name)} aria-pressed={selected}>
-                <ChainLogo network={s.name} />
-                <span>
-                  <b>{s.label}</b>
-                  <small>Wormhole chain {s.wormholeChainId}</small>
-                </span>
-                {selected && <Check size={16} />}
-              </button>
-            );
-          })}
-        </div>
+        <span className="field-label" id={sourceLabel}>
+          SOURCE CHAIN
+        </span>
+        <Dropdown
+          labelId={sourceLabel}
+          value={spoke.name}
+          onChange={setSpokeName}
+          options={spokes.map((s) => ({ value: s.name, icon: <ChainLogo network={s.name} />, label: s.label, detail: `Wormhole chain ${s.wormholeChainId}` }))}
+        />
       </div>
       <div className="form-section">
-        <span className="field-label">COLLATERAL ASSET</span>
-        <div className="asset-select-row">
-          {(['WETH', 'USDC'] as const).map((a) => (
-            <button key={a} className={`asset-choice ${asset === a ? 'is-selected' : ''}`} onClick={() => setAsset(a)} aria-pressed={asset === a}>
-              <TokenLogo symbol={a} size={19} />
-              <b>{a}</b>
-              <span>{money(prices?.[PRICE_SYMBOL[a]] ?? 0, 2)}</span>
-            </button>
-          ))}
-        </div>
+        <span className="field-label" id={assetLabel}>
+          COLLATERAL ASSET
+        </span>
+        <Dropdown
+          labelId={assetLabel}
+          value={asset}
+          onChange={setAsset}
+          options={(['WETH', 'USDC'] as const).map((a) => ({
+            value: a,
+            icon: <TokenLogo symbol={a} size={22} />,
+            label: a,
+            meta: money(prices?.[PRICE_SYMBOL[a]] ?? 0, 2),
+          }))}
+        />
       </div>
       <div className="form-section">
         <label className="field-label" htmlFor="bridge-amount">
@@ -571,6 +571,7 @@ function WithdrawRemotePanel() {
   const [selected, setSelected] = useState<number | null>(null);
   const [amount, setAmount] = useState('');
   const pendingRef = useRef<string | null>(null);
+  const collateralLabel = useId();
   const row = remote.find((r) => r.collateral.id === selected) ?? remote[0];
 
   if (!protocol) {
@@ -658,32 +659,24 @@ function WithdrawRemotePanel() {
       ) : (
         <>
           <div className="form-section">
-            <span className="field-label">SPOKE COLLATERAL</span>
-            <div className="withdraw-options" role="group" aria-label="Spoke collateral to withdraw">
-              {remote.map((r) => {
-                const isSelected = row?.collateral.id === r.collateral.id;
+            <span className="field-label" id={collateralLabel}>
+              SPOKE COLLATERAL
+            </span>
+            <Dropdown
+              labelId={collateralLabel}
+              className="withdraw-dropdown"
+              value={row.collateral.id}
+              onChange={setSelected}
+              options={remote.map((r) => {
                 const on = spokeByWormholeChain(r.collateral.chainId);
-                return (
-                  <button
-                    key={r.collateral.id}
-                    className={`chain-option withdraw-option ${isSelected ? 'is-selected' : ''}`}
-                    onClick={() => setSelected(r.collateral.id)}
-                    aria-pressed={isSelected}
-                  >
-                    <TokenLogo symbol={r.collateral.symbol} network={on?.name} size={26} />
-                    <span>
-                      <b>
-                        {truncatedUnits(r.balance, r.collateral.decimals, 6)} {r.collateral.symbol}
-                      </b>
-                      <small>
-                        on {on?.label ?? `chain ${r.collateral.chainId}`} · {money(r.valueUsd, 2)}
-                      </small>
-                    </span>
-                    {isSelected && <Check size={16} />}
-                  </button>
-                );
+                return {
+                  value: r.collateral.id,
+                  icon: <TokenLogo symbol={r.collateral.symbol} network={on?.name} size={26} />,
+                  label: `${truncatedUnits(r.balance, r.collateral.decimals, 6)} ${r.collateral.symbol}`,
+                  detail: `on ${on?.label ?? `chain ${r.collateral.chainId}`} · ${money(r.valueUsd, 2)}`,
+                };
               })}
-            </div>
+            />
           </div>
           <div className="form-section">
             <label className="field-label" htmlFor="withdraw-remote">

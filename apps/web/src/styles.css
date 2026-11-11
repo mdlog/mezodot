@@ -1847,73 +1847,99 @@ tbody tr:last-child td {
   letter-spacing: 0;
   color: #aaaab0;
 }
-.chain-options {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+/* Dropdown (source chain, collateral asset, spoke collateral): the trigger shows the chosen row and the list under it
+   holds the same rows. Focus stays on the trigger; the list's highlight follows the arrow keys and the pointer. */
+.dropdown {
+  position: relative;
 }
-.chain-option {
-  height: 52px;
+.dropdown-trigger {
+  min-height: 52px;
   background: #fffefa;
   border: 1px solid #e5e3dc;
   border-radius: 6px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 8px;
-  text-align: left;
+  padding: 6px 10px 6px 8px;
   cursor: pointer;
+  user-select: none;
 }
-.chain-option.is-selected {
+.dropdown-trigger:hover {
+  border-color: #c9c5e8;
+}
+.dropdown-trigger.is-open {
   border-color: #8e87dc;
-  background: #f5f4ff;
   box-shadow: 0 0 0 1px #8e87dc;
 }
-.chain-option > span:nth-child(2) {
-  flex: 1;
+.dropdown-trigger:focus-visible {
+  outline: 2px solid var(--indigo);
+  outline-offset: 2px;
 }
-.chain-option b,
-.chain-option small {
+.dropdown-text {
+  flex: 1;
+  min-width: 0;
+}
+.dropdown-text b,
+.dropdown-text small {
   display: block;
 }
-.chain-option b {
+.dropdown-text b {
   font-size: 12px;
 }
-.chain-option small {
+.dropdown-text small {
   font-size: 11px;
   color: #9697a0;
   margin-top: 3px;
 }
-.chain-option > svg {
-  color: var(--indigo);
-}
-.asset-select-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 7px;
-}
-.asset-choice {
-  height: 38px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  border: 1px solid #e7e5de;
-  border-radius: 5px;
-  background: #fffefa;
-  padding: 0 8px;
-  cursor: pointer;
-}
-.asset-choice.is-selected {
-  border-color: #8e87dc;
-  background: #f6f5ff;
-}
-.asset-choice b {
-  font-size: 12px;
-}
-.asset-choice > span:last-child {
-  margin-left: auto;
+.dropdown-meta {
   color: #9697a0;
   font: 11.5px var(--mono);
+}
+.dropdown-chevron {
+  flex: none;
+  color: #9697a0;
+  transition: transform 0.15s ease;
+}
+.dropdown-trigger.is-open .dropdown-chevron {
+  transform: rotate(180deg);
+}
+.dropdown-list {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: #fffefa;
+  border: 1px solid #e5e3dc;
+  border-radius: 6px;
+  box-shadow: 0 12px 28px #2426381f;
+}
+.dropdown-list[hidden] {
+  display: none;
+}
+.dropdown-option {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.dropdown-option.is-active {
+  background: #f5f4ff;
+}
+.dropdown-check {
+  flex: none;
+  color: var(--indigo);
+}
+@media (prefers-reduced-motion: reduce) {
+  .dropdown-chevron {
+    transition: none;
+  }
 }
 .amount-input {
   height: 42px;
@@ -5028,17 +5054,8 @@ a.nav-link {
   font-size: 12.5px;
 }
 
-/* Withdraw to a spoke: the same sections as the lock panel, one card per spoke collateral. */
-.withdraw-options {
-  display: grid;
-  gap: 8px;
-}
-.withdraw-option {
-  height: auto;
-  min-height: 52px;
-  padding: 8px 10px;
-}
-.withdraw-option b {
+/* Withdraw to a spoke: the same sections as the lock panel; spoke collateral balances read in the mono face. */
+.withdraw-dropdown .dropdown-text b {
   font: 12.5px var(--mono);
 }
 .release-summary {
