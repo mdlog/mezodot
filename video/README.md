@@ -5,8 +5,10 @@ no human voice. Re-shoot it whenever what is on screen changes. The narration is
 is anchored to a phrase in the voice's word timings, and every number the voice says is read live.
 
 Every transaction in the video is real, sent on camera from a demo wallet (never the owner key). The wallet's
-key lives in `video/.secrets/demo.json`, which is git-ignored. Recorded pages see it as an injected EIP-1193 wallet
-whose transactions and typed messages are signed in this Node process, so the key never enters the browser.
+key lives outside the repository, in `~/.mezodot/wallets/video-demo.json` (`VIDEO_DEMO_WALLET` overrides). Recorded
+pages see it as an injected EIP-1193 wallet whose transactions and typed messages are signed in this Node process, so
+the key never enters the browser. A key left in the old `video/.secrets/demo.json` is refused with the command that
+moves it.
 
 ## Prerequisites
 
@@ -14,7 +16,8 @@ whose transactions and typed messages are signed in this Node process, so the ke
   the price proofs).
 - Chromium 1243 in `~/.cache/ms-playwright`, `~/.local/bin/ffmpeg`, the Inter and DejaVu Sans Mono fonts.
 - The narration venv: `python3 -m venv video/.venv && video/.venv/bin/pip install edge-tts`.
-- The deployer keystore in `.secrets/` (only for `wallet.mjs fund`).
+- The deployer keystore at `~/.mezodot/keystores/deployer` (`MEZODOT_KEYSTORE` overrides), only for `wallet.mjs fund`:
+  cast asks for its password.
 - `jq` and `cast`, used by `select.mjs`.
 
 ## Take
