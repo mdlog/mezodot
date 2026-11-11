@@ -56,6 +56,9 @@ pending transactions; the stdio MCP server therefore never sends (see MCP).
 | `SUPRA_PROOF_URL`                          | Supra DORA testnet            | pull-proof endpoint                                                                           |
 | `WORMHOLESCAN_API`, `WORMHOLE_VAA_APIS`    | Wormholescan testnet, none    | signed-VAA sources, tried in order (any `/v1/signed_vaa` API, e.g. a guardian endpoint)       |
 | `HTTP_HOST`, `HTTP_PORT`                   | 127.0.0.1, 8787               | HTTP bind address                                                                             |
+| `HTTP_ALLOWED_HOSTS`                       | none (any Host)               | Host names answered besides loopback names; any other gets 403, `/mcp` included               |
+| `HTTP_RATE_LIMIT_PER_MIN`                  | 600                           | requests per minute per visitor on every route, 429 past it (0 = off; visitor: see below)     |
+| `HTTP_ORACLE_RATE_LIMIT_PER_MIN`           | 60                            | the same for `/oracle/update`, which fetches fresh proofs on every call                       |
 | `MCP_TOKEN`                                | none                          | bearer token (≥ 16 chars) for `/mcp`; required for `/mcp` when `HTTP_HOST` is not loopback    |
 | `MCP_ALLOW_WRITE`                          | false                         | lets `trigger_liquidation`/`relay_message` execute over the agent's `/mcp` (with `MCP_TOKEN`) |
 | `MCP_ALLOWED_HOSTS`, `MCP_ALLOWED_ORIGINS` | none                          | extra Host headers / browser origins accepted on `/mcp`                                       |
@@ -65,6 +68,12 @@ pending transactions; the stdio MCP server therefore never sends (see MCP).
 
 Read-only JSON with open CORS, except `/mcp`. Errors never carry upstream text: viem errors embed RPC URLs, and
 those can carry API keys, so only a one-line summary with URLs removed is returned (and logged).
+
+With `HTTP_ALLOWED_HOSTS` set, a request for any other Host gets 403 before it is routed. Each visitor gets
+`HTTP_RATE_LIMIT_PER_MIN` requests a minute (`HTTP_ORACLE_RATE_LIMIT_PER_MIN` of them on `/oracle/update`) and then
+429 with `Retry-After`. Behind cloudflared on the same host or a private network, the visitor is the
+`CF-Connecting-IP` address (IPv6 per /64); that header is ignored from public peers, which could forge it, and a
+local or private peer without it (scripts, probes, another kind of proxy) is not limited: limit there instead.
 
 | Path                                  | Returns                                                                                           |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------- |

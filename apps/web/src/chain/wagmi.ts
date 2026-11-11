@@ -1,15 +1,15 @@
 import { getConfig, getDefaultWallets } from '@mezo-org/passport';
-import { injectedWallet, metaMaskWallet, rabbyWallet, walletConnectWallet } from '@rainbow-me/rainbowkit/wallets';
 import { fallback, http } from 'wagmi';
 import type { Chain } from 'viem';
-import { HUB, SPOKES, WALLETCONNECT_PROJECT_ID, rpcUrlsFor } from './env';
+import { HUB, SPOKES, WALLETCONNECT_ENABLED, WALLETCONNECT_PROJECT_ID, rpcUrlsFor } from './env';
+import { ethereumWallets } from './wallets';
 
 const networks = [HUB, ...SPOKES];
 const chains = networks.map((n) => n.chain) as [Chain, ...Chain[]];
 
 // Passport's default list has only Bitcoin wallets + WalletConnect; add the common EVM wallets.
 const bitcoinGroup = getDefaultWallets('testnet').filter((g) => g.groupName === 'Bitcoin');
-const wallets = [...bitcoinGroup, { groupName: 'Ethereum', wallets: [metaMaskWallet, rabbyWallet, injectedWallet, walletConnectWallet] }];
+const wallets = [...bitcoinGroup, { groupName: 'Ethereum', wallets: ethereumWallets(WALLETCONNECT_ENABLED) }];
 
 /** VITE_RPC_URL_* endpoints first, the public default last; viem falls through on errors and rate limits. */
 const transportFor = (urls: string[]) => (urls.length === 1 ? http(urls[0]) : fallback(urls.map((url) => http(url))));

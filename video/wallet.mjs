@@ -3,11 +3,16 @@
 // key stays in this Node process; the page only asks it to send a transaction or sign a typed message.
 //
 //   node video/wallet.mjs status     address, balances, approvals
-//   node video/wallet.mjs fund       top up from the deployer keystore (.secrets/deployer + its password file)
+//   node video/wallet.mjs fund       top up from the deployer keystore (cast asks for its password)
 //   node video/wallet.mjs prepare    what the BTC long and the trove close need, done off camera
+//
+// Keys live outside the repository (docs/DEPLOY.md, key storage): VIDEO_DEMO_WALLET (~/.mezodot/wallets/video-demo.json),
+// MEZODOT_KEYSTORE (~/.mezodot/keystores/deployer), and MEZODOT_KEYSTORE_PASSWORD_FILE only for a throwaway keystore.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { PLAN } from './plan.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -27,14 +32,20 @@ const CHAINS = { 31611: chain(31611, 'Mezo Testnet', 'BTC'), 84532: chain(84532,
 export const publicClient = (id) => viem.createPublicClient({ chain: CHAINS[id], transport: viem.http(RPC[id]) });
 const walletClient = (id, account) => viem.createWalletClient({ account, chain: CHAINS[id], transport: viem.http(RPC[id]) });
 
-const KEY = new URL('./.secrets/demo.json', import.meta.url).pathname;
+// Anything inside the repository is copied by backups, sync tools and editor indexers, and a dev server can serve it.
+const KEY = process.env.VIDEO_DEMO_WALLET || join(homedir(), '.mezodot', 'wallets', 'video-demo.json');
+const LEGACY_KEY = new URL('./.secrets/demo.json', import.meta.url).pathname;
+const KEYSTORE = process.env.MEZODOT_KEYSTORE || join(homedir(), '.mezodot', 'keystores', 'deployer');
 
-/** The demo account, created on first use (video/.secrets is git-ignored). */
+/** The demo account, created on first use. */
 export function demoAccount() {
   if (!existsSync(KEY)) {
-    mkdirSync(new URL('./.secrets/', import.meta.url).pathname, { recursive: true, mode: 0o700 });
+    // A new key would be an unfunded wallet the stored session does not know: move the old one instead.
+    if (existsSync(LEGACY_KEY))
+      throw new Error(`The demo key is still inside the repository; move it out first:\n  mkdir -p -m 700 ${dirname(KEY)} && mv ${LEGACY_KEY} ${KEY}`);
+    mkdirSync(dirname(KEY), { recursive: true, mode: 0o700 });
     const privateKey = generatePrivateKey();
-    writeFileSync(KEY, JSON.stringify({ address: privateKeyToAccount(privateKey).address, privateKey }), { mode: 0o600 });
+    writeFileSync(KEY, JSON.stringify({ address: privateKeyToAccount(privateKey).address, privateKey }), { mode: 0o600, flag: 'wx' });
   }
   return privateKeyToAccount(JSON.parse(readFileSync(KEY, 'utf8')).privateKey);
 }
@@ -69,13 +80,18 @@ export async function status(address) {
   return { btc, musd, ethBase, wethBase, loopOp, longOp, aSupply, aLoop, aLong, aLock };
 }
 
-/** Sends from the deployer keystore with cast; the key is decrypted by cast, never read here. */
+/**
+ * Sends from the deployer keystore with cast; the key is decrypted by cast, never read here. cast asks for the password
+ * on the terminal unless MEZODOT_KEYSTORE_PASSWORD_FILE names a file (never keep one for the owner key).
+ */
 function castSend(rpc, args) {
-  const r = spawnSync(
-    'cast',
-    ['send', '--rpc-url', rpc, '--keystore', `${ROOT}.secrets/deployer`, '--password-file', `${ROOT}.secrets/deployer.password`, ...args],
-    { cwd: ROOT, encoding: 'utf8' },
-  );
+  if (!existsSync(KEYSTORE)) throw new Error(`No deployer keystore at ${KEYSTORE} (set MEZODOT_KEYSTORE)`);
+  const passwordFile = process.env.MEZODOT_KEYSTORE_PASSWORD_FILE;
+  const r = spawnSync('cast', ['send', '--rpc-url', rpc, '--keystore', KEYSTORE, ...(passwordFile ? ['--password-file', passwordFile] : []), ...args], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    stdio: ['inherit', 'pipe', 'pipe'],
+  });
   if (r.status !== 0) throw new Error(`cast send failed: ${(r.stderr || r.stdout).trim().split('\n').pop()}`);
   return r.stdout.match(/transactionHash\s+(0x[0-9a-fA-F]{64})/)?.[1];
 }

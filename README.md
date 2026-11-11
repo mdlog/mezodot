@@ -340,7 +340,7 @@ KPIs come from the chain and the agent:
 
 **December 2026**
 
-- [ ] Serve the web app as a static build instead of a dev server
+- [x] Serve the web app as a static build instead of a dev server (done in November)
 - [ ] Timelock and multisig ownership on testnet, with a guardian role that can only tighten parameters
 - [ ] Bring the MEZO/MUSD pool in line with the oracle so MEZO's fallback can work, or agree a feed with Mezo
 

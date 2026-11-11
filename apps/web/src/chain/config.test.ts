@@ -10,6 +10,7 @@ describe('web configuration', () => {
       envName: 'testnet',
       agentUrl: LOCAL_AGENT_URL,
       walletConnectProjectId: LOCAL_WALLETCONNECT_PROJECT_ID,
+      walletConnect: false,
       rpcUrls: {},
       wormholescanApi: null,
       errors: [],
@@ -28,7 +29,19 @@ describe('web configuration', () => {
   });
 
   it('accepts a complete production configuration, without the trailing slash', () => {
-    expect(readWebConfig(good, opts(true))).toMatchObject({ agentUrl: 'https://agent.mezodot.xyz', walletConnectProjectId: '3f2c9a', errors: [] });
+    expect(readWebConfig(good, opts(true))).toMatchObject({
+      agentUrl: 'https://agent.mezodot.xyz',
+      walletConnectProjectId: '3f2c9a',
+      walletConnect: true,
+      errors: [],
+    });
+  });
+
+  it('builds without WalletConnect when the project id is "none", and says how in the error', () => {
+    const off = readWebConfig({ ...good, VITE_WALLETCONNECT_PROJECT_ID: 'none' }, opts(true));
+    expect(off).toMatchObject({ walletConnect: false, walletConnectProjectId: LOCAL_WALLETCONNECT_PROJECT_ID, errors: [] });
+    expect(readWebConfig({ ...good, VITE_WALLETCONNECT_PROJECT_ID: 'NONE' }, opts(true)).errors).toEqual([]);
+    expect(readWebConfig({}, opts(true)).errors[1]).toMatch(/or "none" to build without WalletConnect/);
   });
 
   it('lets the devnet, or an explicit local preview, use localhost', () => {

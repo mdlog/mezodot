@@ -128,6 +128,24 @@ describe('agent configuration fails closed (config-validation, config-silent-fal
     });
   });
 
+  it('reads the HTTP exposure limits, with defaults that leave normal use alone', () => {
+    const c = loadConfig({ MEZODOT_ENV: 'devnet' });
+    expect(c.httpAllowedHosts).toEqual([]);
+    expect(c.httpRateLimitPerMin).toBe(600);
+    expect(c.httpOracleRateLimitPerMin).toBe(60);
+    const set = loadConfig({
+      MEZODOT_ENV: 'devnet',
+      HTTP_ALLOWED_HOSTS: 'Agent.Example.org, b.example',
+      HTTP_RATE_LIMIT_PER_MIN: '0',
+      HTTP_ORACLE_RATE_LIMIT_PER_MIN: '5',
+    });
+    expect(set.httpAllowedHosts).toEqual(['agent.example.org', 'b.example']);
+    expect(set.httpRateLimitPerMin).toBe(0);
+    expect(set.httpOracleRateLimitPerMin).toBe(5);
+    expect(issues({ MEZODOT_ENV: 'devnet', HTTP_RATE_LIMIT_PER_MIN: '-1' })[0]).toMatch(/^HTTP_RATE_LIMIT_PER_MIN /);
+    expect(describeConfig(set).httpLimits).toEqual({ allowedHosts: ['agent.example.org', 'b.example'], perMin: 0, oraclePerMin: 5 });
+  });
+
   it('knows which hosts only this machine can reach', () => {
     expect(['127.0.0.1', '127.0.0.53', 'localhost', '::1'].map(isLoopbackHost)).toEqual([true, true, true, true]);
     expect(['0.0.0.0', '10.0.0.5', 'agent.example.com'].map(isLoopbackHost)).toEqual([false, false, false]);

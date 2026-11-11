@@ -13,3 +13,4 @@ contracts/broadcast
 .secrets
 **/.secrets
 .worktrees
+.insta-stage
