@@ -14,3 +14,11 @@ allowBuilds:
   web3: false
   web3-bzz: false
   web3-shh: false
+
+# Security floor for every Vite 6 copy, including the one vitest pulls in: 6.4.4 lets `server.fs.deny` be
+# bypassed with a query (GHSA-8g5g-mxqh-grgj), fixed in 6.4.5.
+overrides:
+  vite@6: ^6.4.5
+  # The agent's MCP SDK pulls these in (express, ajv); patched releases within the ranges those packages accept.
+  body-parser@2: ^2.4.0 # GHSA-27r3-jxmh-p828
+  fast-uri@3: ^3.1.9 # GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr and two lows
