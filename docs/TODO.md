@@ -22,10 +22,10 @@ Next:
 - [ ] Outside testers ([TESTING.md](TESTING.md))
 - [ ] MEZO price liveness: its TWAP fallback returns no price until the MEZO/MUSD pool trades near the oracle (it needs about 800 more MEZO sold into it), or coverage agreed with Mezo. MUSD's fallback works
 - [ ] Pyth key: the agent's key is entitled to no feed today (HTTP 403 for all five), so its pusher does nothing. BTC no longer needs it; ETH rests on Supra until it is fixed or dropped
-- [ ] Owner key: move the deployer keystore out of the repository and drop its password file (DEPLOY.md, key storage); then a hardware wallet or multisig
+- [ ] Owner key: the deployer keystore left the repository on 2026-11-05 (`~/.mezodot/keystores/`); drop its password file once the password is kept elsewhere (DEPLOY.md, key storage), then a hardware wallet or multisig
 - [ ] Deploy scripts: write the deployment JSON only once the broadcast is mined (a dry run no longer writes it, but a broadcast still writes it during forge's local run), and record the owner and an ABI/version hash in it
 - [ ] Nightly devnet keeper E2E: red since 2026-10-20 because the devnet hub priced gas so high that every liquidation looked unprofitable. The fix is in `scripts/devnet/start.sh`; confirm the next nightly run passes
 - [ ] Oracle: close the residual price pick window on USDC's Pyth leg and the MUSD and MEZO legs (3,900 s; SECURITY.md, price pick window), e.g. a short max age for the prices liquidations read
 - [ ] External audit; timelock + multisig ownership, with a guardian role that can only tighten parameters
 - [ ] Deepen pMUSD/MUSD liquidity (40 of each today) and look at a gauge; the agent could use the pool when pMUSD has no idle cash
-- [ ] Host the web app as a static build: the live demo is a Vite dev server, which is slow on first load
+- [x] Host the web app as a static build: `pnpm serve:web` behind the tunnel since 2026-11-05, with security headers (DEPLOY.md, web)

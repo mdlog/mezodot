@@ -183,6 +183,7 @@ docker compose up -d agent                            # HTTP + MCP on 127.0.0.1:
 - The container listens on 0.0.0.0 and compose publishes it on `127.0.0.1:8787`: put an HTTPS reverse proxy in front. The web app needs `GET /oracle/update` whenever a price would expire before its transaction lands: ETH and BTC (120 s legs) unless the agent's pusher has just refreshed them, USDC when its push is stale (Supra's endpoint rejects browser CORS). `/health` (503 when degraded), `/oracle/health`, `/revenue` and `/metrics` are for operators.
 - Configuration changes take effect only when the container is recreated: edit `services/agent/.env`, then `docker compose up -d --no-build agent` (recreates the container with the new environment without rebuilding the image; plain `up -d agent` also rebuilds from the working tree, shipping whatever code is checked out). `docker compose restart` keeps the old environment, and variables set inline on the compose command line never reach the container.
 - `/mcp` is never exposed to browsers. For remote MCP clients set `MCP_TOKEN` (≥ 16 chars) and `MCP_ALLOWED_HOSTS`; write tools also need `MCP_ALLOW_WRITE=true`.
+- Set `HTTP_ALLOWED_HOSTS` to the agent's public hostname: any other Host, such as a stale tunnel or proxy route to this port, then gets 403. Each visitor gets 600 requests a minute (`HTTP_RATE_LIMIT_PER_MIN`), 60 of them on `/oracle/update` (`HTTP_ORACLE_RATE_LIMIT_PER_MIN`), counted per `CF-Connecting-IP` behind cloudflared. Behind another kind of proxy requests are not limited by the agent: limit at the proxy ([agent README, HTTP API](../services/agent/README.md#http-api)).
 - Fund the keeper: BTC on Mezo (gas), ETH on the spokes (release relays), and MUSD/MEZO as repay inventory. Seized pMUSD/pMEZO are redeemed back into inventory, seized BTC is sold for MUSD on Tigris, and seized WETH/USDC arrive on the spoke.
 - `PYTH_API_KEY` (optional, server-side only) turns on the Pyth pusher: the 120 s Pyth legs of ETH and BTC, pushed at half their max age (about every minute), and refreshes of push feeds when Mezo's pusher lags, **but only for feeds the key is entitled to**. Pyth entitles keys feed by feed; the key in use today covers ETH and BTC, not MUSD or MEZO, so those two still depend on Mezo's hourly push alone ([SECURITY.md, limitations](SECURITY.md#known-limitations)). Without the pusher, ETH and BTC are priced only by the proofs transactions attach. Check a key before relying on it (200 = entitled, 403 = not):
 
@@ -197,10 +198,15 @@ docker compose up -d agent                            # HTTP + MCP on 127.0.0.1:
 
 ```bash
 VITE_MEZODOT_ENV=testnet VITE_AGENT_URL=https://<your-agent-host> VITE_WALLETCONNECT_PROJECT_ID=<id> pnpm --filter @mezodot/web build
-# deploy apps/web/dist to any static host
+pnpm smoke:web                                     # optional: loads the build in Chrome and fails on page errors
+WEB_ALLOWED_HOSTS=<your-web-host> pnpm serve:web   # 127.0.0.1:3000, for a tunnel or reverse proxy on this host
 ```
 
-The build bundles the deployment JSON and refuses to run without `VITE_AGENT_URL` and `VITE_WALLETCONNECT_PROJECT_ID`, or with localhost services (`apps/web/.env.example`).
+The build bundles the deployment JSON and refuses to run without `VITE_AGENT_URL` and `VITE_WALLETCONNECT_PROJECT_ID`, or with localhost services (`apps/web/.env.example`). `VITE_WALLETCONNECT_PROJECT_ID=none` builds without WalletConnect: browser-extension and Bitcoin wallets only.
+
+`pnpm serve:web` (`scripts/serve-web.ts`, no dependencies) answers GET and HEAD only, never serves dotfiles or anything outside `apps/web/dist`, caches the hashed `/assets/` files for a year and revalidates `index.html`, and sends `Content-Security-Policy: frame-ancestors 'none'`, `X-Frame-Options`, `nosniff`, `Referrer-Policy`, `Permissions-Policy` and HSTS. With `WEB_ALLOWED_HOSTS` set, any other Host gets 421. Under pm2: `WEB_ALLOWED_HOSTS=<host> pm2 start scripts/serve-web.ts --name mezodot-web --interpreter node`. On another static host, set the same headers there.
+
+Never expose `vite dev` or `vite preview` to the internet: they serve files from the whole workspace, `.env` files and keystores included unless a deny rule catches them. `DEV_PUBLIC_HOSTS` lets a test box reach them through a tunnel; the deny list in `apps/web/vite.config.ts` refuses `.env*`, `.secrets`, `.state`, `.devnet` and `.git`.
 
 ## 8. Smoke test on testnet
 

@@ -37,6 +37,5 @@ Never send a private key or seed phrase. We will never ask for one.
 
 ## Known rough edges
 
-- First load can take a while: the live demo is not a static build yet.
 - A borrow against ETH or USDC needs the agent's price relay. If it is down, the app says so.
 - Trove limits come from Mezo: at least 2,000 MUSD of debt, so about 0.04 BTC or more of collateral.

@@ -26,10 +26,10 @@ Mezodot is a money market for MUSD and MEZO on Mezo. Wave 2 acted on the Wave 1 
 
 **Who pays:** borrowers (10% of interest goes to the protocol), flash borrowers (0.09%) and liquidated accounts (10% of the liquidation bonus). Earnings so far are test amounts: $0.06.
 
-**What is not done:** no confirmed outside users yet, no audit, one owner key on testnet, and the live demo is a dev server. A trove costs 1% a year and pMUSD pays 0.03% today, so minting to supply only pays above about 39% utilisation. The Wave 1 milestones for a timelock, a multisig and static hosting moved to December. veMEZO and gauges were left out of this wave.
+**What is not done:** no confirmed outside users yet, no audit, and one owner key on testnet. A trove costs 1% a year and pMUSD pays 0.03% today, so minting to supply only pays above about 39% utilisation. The Wave 1 milestones for a timelock and a multisig moved to December; the static build went live on 5 November. veMEZO and gauges were left out of this wave.
 
 ## Roadmap for the form
 
 - **By 12 November 2026:** outside testers.
-- **December 2026:** static build, timelock and multisig, MEZO price fallback in service.
+- **December 2026:** timelock and multisig, MEZO price fallback in service.
 - **First quarter of 2027:** external audit, then mainnet with capped markets.
