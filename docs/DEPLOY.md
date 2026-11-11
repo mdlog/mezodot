@@ -208,6 +208,39 @@ The build bundles the deployment JSON and refuses to run without `VITE_AGENT_URL
 
 Never expose `vite dev` or `vite preview` to the internet: they serve files from the whole workspace, `.env` files and keystores included unless a deny rule catches them. `DEV_PUBLIC_HOSTS` lets a test box reach them through a tunnel; the deny list in `apps/web/vite.config.ts` refuses `.env*`, `.secrets`, `.state`, `.devnet` and `.git`.
 
+### On InstaCloud
+
+The repository root is linked to the InstaCloud project `mezodot` (`.insta/project.json`, written by `insta setup agent --project <id>`). Branch `main` runs two compute services, created on 2026-11-11, and the public demo's domains point at them:
+
+| Service | Domain                              | Platform URL                                                             | Port | Runs                                                                               |
+| ------- | ----------------------------------- | ------------------------------------------------------------------------ | ---- | ---------------------------------------------------------------------------------- |
+| `agent` | <https://mcp-mezodot.mdloglabs.org> | <https://prod-main-agent-be2cb9-00h581ary41.compute.instacloud-edge.com> | 8787 | The agent bundle with the keeper key, always-on, state on a 1 GB volume at `/data` |
+| `web`   | <https://mezodot.mdloglabs.org>     | <https://prod-main-web-688e14-00nhgzn4cjw.compute.instacloud-edge.com>   | 8080 | The web build and `serve-web.ts`, scale-to-zero                                    |
+
+`scripts/instacloud/stage.sh` writes each service's build context to `.insta-stage/<service>` (the agent's bundle, or the web build pointed at that agent) with the non-secret settings in `instacloud.env`, so the repository itself is never uploaded. Each host list names the platform URL and the domain:
+
+```bash
+AGENT_HOST=prod-main-agent-be2cb9-00h581ary41.compute.instacloud-edge.com,mcp-mezodot.mdloglabs.org \
+  scripts/instacloud/stage.sh agent
+insta deploy .insta-stage/agent --group agent --port 8787 --branch main
+
+AGENT_URL=https://mcp-mezodot.mdloglabs.org \
+WEB_HOST=prod-main-web-688e14-00nhgzn4cjw.compute.instacloud-edge.com,mezodot.mdloglabs.org \
+  scripts/instacloud/stage.sh web
+insta deploy .insta-stage/web --group web --port 8080 --branch main
+```
+
+- The agent there has been the keeper since 2026-11-11 (06:06 UTC), and the one on this machine is no longer started. Without `KEEPER_PRIVATE_KEY` it is read-only: it serves the web app's API (`/status`, `/risk`, `/messages`, `/oracle/update`) and sends no transaction. The move from this machine, in this order (one keeper key, one agent):
+  1. Stop the agent here and keep it out of the pm2 boot list: `pm2 delete mezodot-agent && pm2 save` (it waits for transactions in flight; `pm2 start ecosystem.config.cjs --only mezodot-agent` brings it back). Check first that `/messages` has nothing pending and `liquidator-<env>.json` holds nothing (`held`, `pending`).
+  2. Whoever holds the key runs `scripts/instacloud/agent-secret.sh KEEPER_PRIVATE_KEY`: it copies the value from `services/agent/.env` to the agent service only (`insta secrets set … --service compute/agent`, through stdin, so it stays off the screen and out of the shell history), and refuses while an agent still answers on `127.0.0.1:8787`. `insta secrets set` redeploys the service itself (CLI ≥ 0.0.78), so the agent there is the keeper as soon as it returns. `PYTH_API_KEY` (the Pyth pusher) and `MCP_TOKEN` go in the same way, and can go first: the agent is still read-only then.
+  3. `/health` on the agent shows the keeper's address instead of `null`, and the web app's Agents page says the keeper is active.
+
+  Back to this machine in the reverse order: `insta secrets unset KEEPER_PRIVATE_KEY --service compute/agent` first, then `pm2 start ecosystem.config.cjs --only mezodot-agent && pm2 save`.
+
+- `/mcp` answers only with `MCP_TOKEN` set; its Host check takes `MCP_ALLOWED_HOSTS`, which the stage sets to `AGENT_HOST`.
+- The platform sits behind Cloudflare, so the per-visitor limits count `CF-Connecting-IP`.
+- Custom domains (`insta domain attach <host> --group <service>`): `mezodot.mdloglabs.org` serves `web` and `mcp-mezodot.mdloglabs.org` serves `agent`. Each needs, in the `mdloglabs.org` zone, the two TXT records `attach` prints (`_instacloud-challenge.<name>` and `_cf-custom-hostname.<name>`) and a DNS-only CNAME to `prod-use1.instacloud-dns.com`; `insta domain check <host> --group <service>` shows what is missing. Before 2026-11-11 both names were proxied CNAMEs to this machine's tunnel (`6e97d3d1-e49f-43ef-9e85-3e984d8884d0.cfargotunnel.com`), which is the way back (with the keeper back here first, as above). A domain missing from the stages' host lists gets 403 from the agent or 421 from the web server.
+
 ## 8. Smoke test on testnet
 
 1. `curl https://<agent>/oracle/health`: MUSD, MEZO and USDC `ok`; ETH and BTC `ok` while the agent's keyed pusher runs, `on-demand` without it (transactions then attach Supra proofs); `curl https://<agent>/health` answers 200.
